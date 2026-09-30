@@ -120,6 +120,14 @@ private fun AppleLiquidLyrics(
 ) {
     val activeIndex = activeLineIndex(lines, position)
     val state = rememberLazyListState()
+    val baseKaraokeStyle = MaterialTheme.typography.headlineSmall
+    val karaokeRevealStyle = remember {
+        baseKaraokeStyle.copy(
+            fontWeight = FontWeight.Bold,
+            fontSize = 26.sp,
+            fontFamily = LyricFontFamily,
+        )
+    }
     LaunchedEffect(activeIndex, autoFollow) {
         if (autoFollow && activeIndex >= 0) state.animateScrollToItem(activeIndex)
     }
@@ -150,16 +158,16 @@ private fun AppleLiquidLyrics(
                         position = position,
                         active = active,
                         longTone = longTone,
-                        style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold, fontSize = 26.sp),
+                        style = karaokeRevealStyle,
                     )
                 } else {
-                    Text(line.content(), fontWeight = FontWeight.Bold, fontSize = 26.sp, lineHeight = 31.sp)
+                    Text(line.content(), fontWeight = FontWeight.Bold, fontSize = 26.sp, lineHeight = 31.sp, fontFamily = LyricFontFamily)
                 }
                 if (showRomanization) line.phonetic()?.takeIf(String::isNotBlank)?.let {
-                    Text(it, color = Color.White.copy(alpha = 0.72f), fontSize = 14.sp)
+                    Text(it, color = Color.White.copy(alpha = 0.72f), fontSize = 14.sp, fontFamily = LyricFontFamily)
                 }
                 if (showTranslation) line.translation()?.takeIf(String::isNotBlank)?.let {
-                    Text(it, color = Color.White.copy(alpha = 0.72f), fontSize = 15.sp)
+                    Text(it, color = Color.White.copy(alpha = 0.72f), fontSize = 15.sp, fontFamily = LyricFontFamily)
                 }
             }
         }
@@ -186,8 +194,8 @@ private fun EvaLiquidLyrics(
             drawLine(green.copy(alpha = 0.55f), start = androidx.compose.ui.geometry.Offset(0f, size.height * .33f), end = androidx.compose.ui.geometry.Offset(size.width, size.height * .33f), strokeWidth = 1.dp.toPx())
             drawLine(green.copy(alpha = 0.35f), start = androidx.compose.ui.geometry.Offset(size.width * .16f, 0f), end = androidx.compose.ui.geometry.Offset(size.width * .16f, size.height), strokeWidth = 1.dp.toPx())
         }
-        Text("EVA // LYRIC SYSTEM", color = Color(0xFF8BFFB0), fontSize = 11.sp, modifier = Modifier.align(Alignment.TopStart))
-        previous?.let { Text(it.content(), color = Color.White.copy(.25f), fontSize = 16.sp, maxLines = 2, modifier = Modifier.align(Alignment.TopEnd).fillMaxWidth(.65f), textAlign = TextAlign.End) }
+        Text("EVA // LYRIC SYSTEM", color = Color(0xFF8BFFB0), fontSize = 11.sp, fontFamily = LyricFontFamily, modifier = Modifier.align(Alignment.TopStart))
+        previous?.let { Text(it.content(), color = Color.White.copy(.25f), fontSize = 16.sp, maxLines = 2, fontFamily = LyricFontFamily, modifier = Modifier.align(Alignment.TopEnd).fillMaxWidth(.65f), textAlign = TextAlign.End) }
         active?.let { line ->
             Column(
                 Modifier.align(Alignment.CenterStart).fillMaxWidth().combinedClickable(
@@ -196,12 +204,12 @@ private fun EvaLiquidLyrics(
                 ),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Text(line.content(), color = Color(0xFF8BFFB0), fontSize = 34.sp, lineHeight = 39.sp, fontWeight = FontWeight.Black)
-                if (showRomanization) line.phonetic()?.let { Text(it.uppercase(), color = Color(0xFFFFB1D6), fontSize = 13.sp) }
-                if (showTranslation) line.translation()?.let { Text(it, color = Color.White.copy(.7f), fontSize = 15.sp) }
+                Text(line.content(), color = Color(0xFF8BFFB0), fontSize = 34.sp, lineHeight = 39.sp, fontWeight = FontWeight.Black, fontFamily = LyricFontFamily)
+                if (showRomanization) line.phonetic()?.let { Text(it.uppercase(), color = Color(0xFFFFB1D6), fontSize = 13.sp, fontFamily = LyricFontFamily) }
+                if (showTranslation) line.translation()?.let { Text(it, color = Color.White.copy(.7f), fontSize = 15.sp, fontFamily = LyricFontFamily) }
             }
         }
-        next?.let { Text("NEXT  ${it.content()}", color = Color.White.copy(.45f), fontSize = 15.sp, maxLines = 2, modifier = Modifier.align(Alignment.BottomEnd).fillMaxWidth(.74f), textAlign = TextAlign.End) }
+        next?.let { Text("NEXT  ${it.content()}", color = Color.White.copy(.45f), fontSize = 15.sp, maxLines = 2, fontFamily = LyricFontFamily, modifier = Modifier.align(Alignment.BottomEnd).fillMaxWidth(.74f), textAlign = TextAlign.End) }
     }
 }
 
@@ -230,7 +238,7 @@ private fun TextPvLiquidLyrics(
                 drawCircle(Color.White.copy(alpha = .08f + (index % 4) * .03f), radius = (5 + index % 5).dp.toPx(), center = androidx.compose.ui.geometry.Offset(x, y))
             }
         }
-        Text("TEXT PV  /  %02d".format((index + 1).coerceAtLeast(0)), fontSize = 11.sp, color = Color.White.copy(.6f), modifier = Modifier.align(Alignment.TopEnd))
+        Text("TEXT PV  /  %02d".format((index + 1).coerceAtLeast(0)), fontSize = 11.sp, color = Color.White.copy(.6f), fontFamily = LyricFontFamily, modifier = Modifier.align(Alignment.TopEnd))
         line?.let {
             GlassSurface(
                 modifier = Modifier.align(Alignment.Center).fillMaxWidth().combinedClickable(
@@ -240,13 +248,13 @@ private fun TextPvLiquidLyrics(
                 shape = ContinuousRoundedRectangle(30.dp),
             ) {
                 Column(Modifier.padding(horizontal = 22.dp, vertical = 28.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(it.content(), fontSize = 33.sp, lineHeight = 39.sp, fontWeight = FontWeight.Black)
-                    if (showRomanization) it.phonetic()?.let { text -> Text(text, color = Color(0xFFFFD4E2), fontSize = 14.sp) }
-                    if (showTranslation) it.translation()?.let { text -> Text(text, color = Color.White.copy(.72f), fontSize = 15.sp) }
+                    Text(it.content(), fontSize = 33.sp, lineHeight = 39.sp, fontWeight = FontWeight.Black, fontFamily = LyricFontFamily)
+                    if (showRomanization) it.phonetic()?.let { text -> Text(text, color = Color(0xFFFFD4E2), fontSize = 14.sp, fontFamily = LyricFontFamily) }
+                    if (showTranslation) it.translation()?.let { text -> Text(text, color = Color.White.copy(.72f), fontSize = 15.sp, fontFamily = LyricFontFamily) }
                 }
             }
         }
-        Text("◆  ◇  ◆", color = Color.White.copy(.45f), letterSpacing = 7.sp, modifier = Modifier.align(Alignment.BottomStart))
+        Text("◆  ◇  ◆", color = Color.White.copy(.45f), letterSpacing = 7.sp, fontFamily = LyricFontFamily, modifier = Modifier.align(Alignment.BottomStart))
     }
 }
 
@@ -289,13 +297,13 @@ private fun SkylineLiquidLyrics(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text(it.content(), textAlign = TextAlign.Center, fontSize = 30.sp, lineHeight = 36.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                if (showRomanization) it.phonetic()?.let { text -> Text(text, color = Color(0xFF87E8FF), fontSize = 14.sp, textAlign = TextAlign.Center) }
-                if (showTranslation) it.translation()?.let { text -> Text(text, color = Color.White.copy(.68f), fontSize = 15.sp, textAlign = TextAlign.Center) }
+                Text(it.content(), textAlign = TextAlign.Center, fontSize = 30.sp, lineHeight = 36.sp, fontWeight = FontWeight.Bold, color = Color.White, fontFamily = LyricFontFamily)
+                if (showRomanization) it.phonetic()?.let { text -> Text(text, color = Color(0xFF87E8FF), fontSize = 14.sp, textAlign = TextAlign.Center, fontFamily = LyricFontFamily) }
+                if (showTranslation) it.translation()?.let { text -> Text(text, color = Color.White.copy(.68f), fontSize = 15.sp, textAlign = TextAlign.Center, fontFamily = LyricFontFamily) }
             }
         }
         lines.getOrNull(index + 1)?.let {
-            Text(it.content(), color = Color.White.copy(.28f), fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.align(Alignment.BottomCenter).padding(32.dp))
+            Text(it.content(), color = Color.White.copy(.28f), fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, fontFamily = LyricFontFamily, modifier = Modifier.align(Alignment.BottomCenter).padding(32.dp))
         }
     }
 }

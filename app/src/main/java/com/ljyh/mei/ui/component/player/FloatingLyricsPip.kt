@@ -43,6 +43,7 @@ import com.ljyh.mei.constants.FloatingLyricsFontScaleKey
 import com.ljyh.mei.constants.FloatingLyricsNextLineKey
 import com.ljyh.mei.constants.FloatingLyricsTranslationKey
 import com.ljyh.mei.playback.MusicService
+import com.ljyh.mei.ui.component.player.component.LyricFontFamily
 import com.ljyh.mei.playback.PlayerConnection
 import com.ljyh.mei.ui.glass.GlassCard
 import com.ljyh.mei.utils.rememberPreference
@@ -143,6 +144,7 @@ fun FloatingLyricsPipScreen(
                         textAlign = TextAlign.Center,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
+                        fontFamily = LyricFontFamily,
                     )
                 }
                 activeLine?.translationText()
@@ -155,6 +157,7 @@ fun FloatingLyricsPipScreen(
                             textAlign = TextAlign.Center,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
+                            fontFamily = LyricFontFamily,
                         )
                     }
                 nextLine?.primaryText()
@@ -168,6 +171,7 @@ fun FloatingLyricsPipScreen(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.padding(top = 2.dp),
+                            fontFamily = LyricFontFamily,
                         )
                     }
             }

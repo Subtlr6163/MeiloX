@@ -40,6 +40,45 @@ MeiloX 是一个基于 [Mei](https://github.com/ljyh223/Mei) 改造的第三方�
 
 功能仍在持续调整中，实际可用范围会随版本和网易云音乐接口状态变化。
 
+---
+
+## 本分支修改记录
+
+本分支在原版基础上做了以下定制修改，均为个人使用向调整，未改动原项目的功能逻辑与数据结构。
+
+### 1. 全局字体更换为三星 One UI 字体（Samsung Sharp Sans）
+
+- **新增字体资源**：`app/src/main/res/font/samsung_sharp_sans_regular.ttf`、`samsung_sharp_sans_bold.ttf`，来源为三星官方仓库 [SamsungInternet/OneUI-Web](https://github.com/SamsungInternet/OneUI-Web)；
+- **新增共享字体定义**：`LyricFont.kt`（顶层 `LyricFontFamily`，含 Regular + Bold 两个字重），所有歌词/歌名位置统一引用；
+- **全局主题字体**：`Theme.kt` 中 `SfProFamily` 的定义由 `sf_pro.ttf` 改为三星字体，所有 `MaterialTheme.typography.*` 样式全局生效；
+- **iOS 风格组件字体**：`GlassTokens.kt` 中 `IosTypography.fontFamily` 同步改为三星字体；
+- **歌词界面**：全屏歌词（`LyricScreen.kt`）、悬浮画中画歌词（`FloatingLyricsPip.kt`）、Liquid 歌词特效（`LiquidLyricsViews.kt`，含列表 / EVA / TEXT PV / Skyline 四种视图）全部使用三星字体；
+- **歌名文字**：播放页歌名与歌手副标题（`Title.kt`）、歌单/歌曲列表行歌名（`TrackItem.kt`）使用三星字体；
+- **图标例外**：`SfSymbol.kt` 的 SF Symbols **图标字形**保留 `sf_pro` 不变——图标字体替换会导致图标显示为方块；
+- **中文渲染**：三星字体仅含拉丁字形，中文等非拉丁字符由系统按 fallback 链自动选择字体，这与三星 One UI 在中文设备上的真实渲染行为一致。
+
+### 2. 性能优化
+
+- **构建改为 Release 模式**：开启 R8 代码压缩、资源收缩与 Baseline Profile 编译，APK 体积从 Debug 版约 64MB 降至约 20MB，运行流畅度与上游发布版一致；
+- **Release 签名**：`app/build.gradle.kts` 中为 release 构建启用 debug 签名（`signingConfig = signingConfigs.getByName("debug")`），产物可直接安装；
+- **歌词样式缓存**：`LyricScreen.kt` / `LiquidLyricsViews.kt` 中原本每次重组都会新建的 `LocalTextStyle.current.copy(...)` / `MaterialTheme.typography.*.copy(...)` 改为 `remember` 缓存，仅在字号/字重等参数变化时重建，减少逐帧对象分配。
+
+### 修改文件清单
+
+| 文件 | 修改内容 |
+|---|---|
+| `app/src/main/java/com/ljyh/mei/ui/theme/Theme.kt` | 全局默认字体改为 Samsung Sharp Sans |
+| `app/src/main/java/com/ljyh/mei/ui/glass/GlassTokens.kt` | `IosTypography.fontFamily` 改为三星字体 |
+| `app/src/main/java/com/ljyh/mei/ui/component/player/component/LyricFont.kt` | 新增：共享字体定义 `LyricFontFamily` |
+| `app/src/main/java/com/ljyh/mei/ui/component/player/component/LyricScreen.kt` | 全屏歌词三行样式使用三星字体 + remember 缓存 |
+| `app/src/main/java/com/ljyh/mei/ui/component/player/FloatingLyricsPip.kt` | 悬浮画中画歌词使用三星字体 |
+| `app/src/main/java/com/ljyh/mei/ui/component/player/component/LiquidLyricsViews.kt` | 四种 Liquid 歌词视图使用三星字体 + 样式缓存 |
+| `app/src/main/java/com/ljyh/mei/ui/component/player/component/applemusic/Title.kt` | 播放页歌名/副标题使用三星字体 |
+| `app/src/main/java/com/ljyh/mei/ui/component/item/TrackItem.kt` | 歌单/歌曲列表行歌名使用三星字体 |
+| `app/src/main/res/font/samsung_sharp_sans_regular.ttf` | 新增：三星 Regular 字体 |
+| `app/src/main/res/font/samsung_sharp_sans_bold.ttf` | 新增：三星 Bold 字体 |
+| `app/build.gradle.kts` | Release 构建启用 debug 签名以便直接安装 |
+
 ## 歌词共享
 
 已接入 [Lyricon Provider](https://tomakino.github.io/lyricon/zh-cn/developer/provider/) 和 [SuperLyricApi](https://github.com/HChenX/SuperLyricApi) SDK，用于共享歌词、逐字时间、翻译及播放状态。

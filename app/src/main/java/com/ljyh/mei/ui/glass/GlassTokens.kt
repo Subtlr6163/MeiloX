@@ -43,7 +43,10 @@ internal val GlassColors.segmentedControlBackground: Color
 
 /** Exact iOS/iPadOS 27 typography tokens exposed by the referenced Figma library. */
 object IosTypography {
-    val fontFamily = FontFamily(Font(R.font.sf_pro, FontWeight.Normal))
+    val fontFamily = FontFamily(
+        Font(R.font.samsung_sharp_sans_regular, FontWeight.Normal),
+        Font(R.font.samsung_sharp_sans_bold, FontWeight.Bold),
+    )
     val largeTitle = TextStyle(
         fontFamily = fontFamily,
         fontWeight = FontWeight.Bold,

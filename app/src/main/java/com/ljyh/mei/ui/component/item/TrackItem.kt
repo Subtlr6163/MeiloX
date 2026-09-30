@@ -38,6 +38,7 @@ import com.kyant.capsule.ContinuousRoundedRectangle
 import com.ljyh.mei.constants.CommonImageRadius
 import com.ljyh.mei.constants.TrackThumbnailSize
 import com.ljyh.mei.data.model.MediaMetadata
+import com.ljyh.mei.ui.component.player.component.LyricFontFamily
 import com.ljyh.mei.ui.component.playlist.PlayingImageView
 import com.ljyh.mei.utils.TimeUtils.formatDuration
 import com.ljyh.mei.utils.smallImage
@@ -101,7 +102,8 @@ fun Track(
                     text = track.title,
                     style = MaterialTheme.typography.titleMedium.copy(
                         fontWeight = if (isPlaying) FontWeight.Bold else FontWeight.Medium,
-                        fontSize = if (isTablet) 15.sp else 16.sp
+                        fontSize = if (isTablet) 15.sp else 16.sp,
+                        fontFamily = LyricFontFamily,
                     ),
                     color = if (isPlaying) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,

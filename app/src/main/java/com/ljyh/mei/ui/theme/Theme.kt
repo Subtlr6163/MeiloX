@@ -23,7 +23,10 @@ import androidx.compose.ui.unit.sp
 import com.kyant.capsule.ContinuousRoundedRectangle
 import com.ljyh.mei.R
 
-private val SfProFamily = FontFamily(Font(R.font.sf_pro, FontWeight.Normal))
+private val SfProFamily = FontFamily(
+    Font(R.font.samsung_sharp_sans_regular, FontWeight.Normal),
+    Font(R.font.samsung_sharp_sans_bold, FontWeight.Bold),
+)
 
 private val AppShapes = Shapes(
     extraSmall = ContinuousRoundedRectangle(2.dp),

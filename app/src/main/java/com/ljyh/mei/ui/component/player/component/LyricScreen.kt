@@ -53,6 +53,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextMotion
 import androidx.compose.ui.unit.dp
@@ -82,6 +83,10 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/**
+ * 歌词字体见同包下的顶层 [LyricFontFamily]（Samsung Sharp Sans）。
+ */
+
 @OptIn(UnstableApi::class)
 @Composable
 fun LyricScreen(
@@ -104,6 +109,10 @@ fun LyricScreen(
         LyricTextSize.Size18
     )
     val (accompanimentLyricTextBold, _) = rememberPreference(AccompanimentLyricTextBoldKey, true)
+
+    // 歌词样式基座：在 @Composable 上下文读取一次，供 remember 缓存派生样式，
+    // 避免每帧重组时重复读取 LocalTextStyle 并新建 TextStyle 对象。
+    val baseTextStyle = LocalTextStyle.current
 
     LaunchedEffect(controlsVisible) {
         if (controlsVisible) {
@@ -291,16 +300,27 @@ fun LyricScreen(
                                     blendMode = BlendMode.Plus
                                     compositingStrategy = CompositingStrategy.Offscreen
                                 },
-                            normalLineTextStyle = LocalTextStyle.current.copy(
-                                fontSize = normalLyricTextSize.text.sp,
-                                fontWeight = if (normalLyricTextBold) FontWeight.Bold else FontWeight.Normal,
-                                textMotion = TextMotion.Animated,
-                            ),
-                            accompanimentLineTextStyle = LocalTextStyle.current.copy(
-                                fontSize = accompanimentLyricTextSize.text.sp,
-                                fontWeight = if (accompanimentLyricTextBold) FontWeight.Bold else FontWeight.Normal,
-                                textMotion = TextMotion.Animated,
-                            ),
+                            normalLineTextStyle = remember(normalLyricTextSize, normalLyricTextBold, baseTextStyle) {
+                                baseTextStyle.copy(
+                                    fontFamily = LyricFontFamily,
+                                    fontSize = normalLyricTextSize.text.sp,
+                                    fontWeight = if (normalLyricTextBold) FontWeight.Bold else FontWeight.Normal,
+                                    textMotion = TextMotion.Animated,
+                                )
+                            },
+                            accompanimentLineTextStyle = remember(accompanimentLyricTextSize, accompanimentLyricTextBold, baseTextStyle) {
+                                baseTextStyle.copy(
+                                    fontFamily = LyricFontFamily,
+                                    fontSize = accompanimentLyricTextSize.text.sp,
+                                    fontWeight = if (accompanimentLyricTextBold) FontWeight.Bold else FontWeight.Normal,
+                                    textMotion = TextMotion.Animated,
+                                )
+                            },
+                            phoneticTextStyle = remember(baseTextStyle) {
+                                baseTextStyle.copy(
+                                    fontFamily = LyricFontFamily,
+                                )
+                            },
                             offset = 48.dp,
                             keepAliveZone = keepAliveZone,
                         )
