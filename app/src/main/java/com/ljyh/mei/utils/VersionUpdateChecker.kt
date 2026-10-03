@@ -22,8 +22,8 @@ sealed interface VersionUpdateResult {
 /** Checks the canonical GitHub tag list without blocking the Compose thread. */
 object VersionUpdateChecker {
     private const val TagsEndpoint =
-        "https://api.github.com/repos/NEORUAA/MeiloX/tags?per_page=100"
-    private const val RepositoryUrl = "https://github.com/NEORUAA/MeiloX"
+        "https://api.github.com/repos/Subtlr6163/MeiloX/tags?per_page=100"
+    private const val RepositoryUrl = "https://github.com/Subtlr6163/MeiloX"
     private const val ConnectTimeoutMillis = 8_000
     private const val ReadTimeoutMillis = 8_000
 
