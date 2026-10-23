@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -22,6 +24,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -29,7 +36,9 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -44,6 +53,9 @@ import com.ljyh.mei.data.model.melox.SearchDiscovery
 import com.ljyh.mei.data.model.melox.SearchDiscoveryPlaylist
 import com.ljyh.mei.data.repository.MeloXRepository
 import com.ljyh.mei.ui.glass.GlassButton
+import com.ljyh.mei.ui.glass.GlassSurfaceStyle
+import com.ljyh.mei.ui.glass.IosGroupedList
+import com.ljyh.mei.ui.glass.IosListRow
 import com.ljyh.mei.ui.glass.IosPinnedListPage
 import com.ljyh.mei.ui.glass.IosTypography
 import com.ljyh.mei.ui.glass.LocalGlassColors
@@ -124,6 +136,11 @@ fun SearchLandingScreen(viewModel: SearchDiscoveryViewModel = hiltViewModel()) {
     val podcastsEnabled by rememberPreference(PodcastsEnabledKey, true)
     val categories = searchCategories.filterNot { it.opensPodcasts && !podcastsEnabled }
     val colors = LocalGlassColors.current
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val historyJson by rememberPreference(SearchHistoryKey, "")
+    val history = remember(historyJson) { decodeSearchHistory(historyJson) }
+    var showAllHistory by rememberSaveable { mutableStateOf(false) }
 
     IosPinnedListPage(
         title = stringResource(R.string.app_tab_search),
@@ -132,6 +149,23 @@ fun SearchLandingScreen(viewModel: SearchDiscoveryViewModel = hiltViewModel()) {
         largeTitleHorizontalPadding = 16.dp,
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
+            if (history.isNotEmpty()) {
+                item(key = "search-history") {
+                    SearchHistorySection(
+                        history = if (showAllHistory) history else history.take(5),
+                        canExpand = history.size > 5 && !showAllHistory,
+                        onExpand = { showAllHistory = true },
+                        onSearch = { query ->
+                            Screen.SearchResult.navigate(navController) {
+                                addPath(Uri.encode(query))
+                                addPath("1")
+                            }
+                        },
+                        onRemove = { query -> scope.launch { context.removeSearchHistory(query) } },
+                        onClear = { scope.launch { context.clearSearchHistory() } },
+                    )
+                }
+            }
             item(key = "popular-title") {
                 Text(
                     text = stringResource(R.string.search_popular_recommendations),
@@ -225,6 +259,49 @@ fun SearchLandingScreen(viewModel: SearchDiscoveryViewModel = hiltViewModel()) {
                     if (row.size == 1) Spacer(Modifier.weight(1f))
                 }
             }
+    }
+}
+
+@Composable
+internal fun SearchHistorySection(
+    history: List<String>,
+    canExpand: Boolean,
+    onExpand: () -> Unit,
+    onSearch: (String) -> Unit,
+    onRemove: (String) -> Unit,
+    onClear: () -> Unit,
+) {
+    val colors = LocalGlassColors.current
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(stringResource(R.string.search_history_title), Modifier.weight(1f),
+                style = IosTypography.title2, fontWeight = FontWeight.Bold, color = colors.content)
+            GlassButton(onClick = onClear, style = GlassSurfaceStyle.Navigation) {
+                Text(stringResource(R.string.search_history_clear))
+            }
+        }
+        IosGroupedList(Modifier.padding(top = 8.dp)) {
+            history.forEachIndexed { index, query ->
+                IosListRow(
+                    title = query, systemName = "clock", showTopSeparator = index > 0,
+                    onClick = { onSearch(query) },
+                    trailing = {
+                        Box(
+                            modifier = Modifier
+                                .offset(x = 8.dp)
+                                .size(44.dp)
+                                .clickable(role = Role.Button, onClick = { onRemove(query) }),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            SfIcon(SfSymbol.Close, stringResource(R.string.search_history_remove, query), size = 14.dp)
+                        }
+                    },
+                )
+            }
+            if (canExpand) IosListRow(
+                title = stringResource(R.string.search_history_show_all), onClick = onExpand,
+            )
+        }
     }
 }
 

@@ -2,7 +2,7 @@ package com.ljyh.mei.ui.screen.playlist
 
 import com.ljyh.mei.constants.MusicQuality
 
-import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
@@ -26,6 +27,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.boundsInWindow
@@ -45,7 +47,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.paging.compose.LazyPagingItems
+import com.kyant.backdrop.backdrops.rememberCanvasBackdrop
 import com.kyant.shapes.Capsule
+import com.ljyh.mei.constants.DetailPageHorizontalPadding
 import com.ljyh.mei.constants.PlaylistTrackTableHeaderKey
 import com.ljyh.mei.constants.PlaylistCoverStyle
 import com.ljyh.mei.constants.PlaylistCoverStyleKey
@@ -53,11 +57,13 @@ import com.ljyh.mei.data.model.MediaMetadata
 import com.ljyh.mei.data.model.room.Like
 import com.ljyh.mei.ui.component.player.OverlayState
 import com.ljyh.mei.ui.component.playlist.rememberCoverBackground
+import com.ljyh.mei.ui.component.playlist.rememberFavoriteTrackIds
 import com.ljyh.mei.ui.glass.GlassButton
 import com.ljyh.mei.ui.glass.GlassSurface
 import com.ljyh.mei.ui.glass.IosPinnedListPage
 import com.ljyh.mei.ui.glass.IosTypography
 import com.ljyh.mei.ui.glass.LocalGlassColors
+import com.ljyh.mei.ui.glass.LocalGlassBackdrop
 import com.ljyh.mei.ui.glass.LocalGlassDimensions
 import com.ljyh.mei.ui.glass.LocalGroupedListBackgroundAlpha
 import com.ljyh.mei.ui.glass.SheetGroupedListBackgroundAlpha
@@ -65,6 +71,7 @@ import com.ljyh.mei.ui.glass.SfIcon
 import com.ljyh.mei.ui.glass.SfSymbol
 import com.ljyh.mei.ui.component.utils.rememberDeviceInfo
 import com.ljyh.mei.ui.local.LocalPlayerAwareWindowInsets
+import com.ljyh.mei.ui.local.LocalPlayerConnection
 import com.ljyh.mei.ui.model.UiPlaylist
 import com.ljyh.mei.ui.screen.playlist.component.PlaylistActionOverlay
 import com.ljyh.mei.ui.screen.playlist.component.PlaylistHeader
@@ -72,6 +79,10 @@ import com.ljyh.mei.ui.screen.playlist.component.PlaylistShimmer
 import com.ljyh.mei.ui.screen.playlist.component.playlistTrackItems
 import com.ljyh.mei.utils.rememberPreference
 import com.ljyh.mei.utils.rememberEnumPreference
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.snapshotFlow
 
 @Composable
 fun CommonSongListScreen(
@@ -103,9 +114,20 @@ fun CommonSongListScreen(
     headerMetadata: String? = null,
     footer: (androidx.compose.foundation.lazy.LazyListScope.() -> Unit)? = null,
     useCoverBackground: Boolean = false,
+    showTrackArtwork: Boolean = true,
+    hasLoadedContent: Boolean = true,
+    trackNumbers: Map<Long, Int> = emptyMap(),
 ) {
+    val playerConnection = LocalPlayerConnection.current
+    val currentTrackId = playerConnection?.mediaMetadata?.collectAsState()?.value?.id?.toString()
+    val isPlaying = playerConnection?.isPlaying?.collectAsState()?.value == true
+    val favoriteTrackIds = rememberFavoriteTrackIds(
+        tracks = pagingItems?.itemSnapshotList?.items ?: uiData.tracks,
+        enabled = useCoverBackground,
+    )
     var detailMenuOpen by remember { mutableStateOf(false) }
     val detailMenuTriggerAlpha = remember { androidx.compose.runtime.mutableFloatStateOf(1f) }
+    val detailMenuSeparation = remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
     val triggerFadePaint = remember { androidx.compose.ui.graphics.Paint() }
 
     var detailMenuAnchor by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
@@ -117,6 +139,13 @@ fun CommonSongListScreen(
     var currentOverlay by remember { mutableStateOf<OverlayState>(OverlayState.None) }
     val playlistTrackTableHeader by rememberPreference(PlaylistTrackTableHeaderKey, false)
     val searchFocusRequester = remember { FocusRequester() }
+    val searchTransition = remember { Animatable(if (isPlaylistSearchActive) 1f else 0f) }
+    val searchProgress = searchTransition.value.coerceIn(0f, 1f)
+    // Keep icon slots fixed while the liquid neck separates, then grow the input to the left.
+    val searchSeparation = (searchProgress / 0.7f).coerceIn(0f, 1f)
+    val searchExpansionStart = 0.7f * com.ljyh.mei.ui.glass.ToolbarDetachProgress
+    val searchExpansion = ((searchProgress - searchExpansionStart) / (1f - searchExpansionStart)).coerceIn(0f, 1f)
+        .let { it * it * (3f - 2f * it) }
     val focusManager = LocalFocusManager.current
     val coverStyle by rememberEnumPreference(PlaylistCoverStyleKey, PlaylistCoverStyle.Cover)
     val backgroundCover = if (useCoverBackground) {
@@ -131,13 +160,28 @@ fun CommonSongListScreen(
         getOrExtractColor = viewModel::getOrExtractColor,
         ownerKey = viewModel,
     )
+    val headerBackdropBrush = rememberUpdatedState(coverBackground.brush)
+    val headerBackdrop = if (useCoverBackground) {
+        // Observe the animation during sampling so its changes invalidate the glass layer.
+        rememberCanvasBackdrop { drawRect(brush = headerBackdropBrush.value) }
+    } else null
     val listBackgroundAlpha = if (useCoverBackground) {
         SheetGroupedListBackgroundAlpha
     } else LocalGroupedListBackgroundAlpha.current
+    val layoutState = rememberSongListLayoutState(listState, isContentReady = !isLoading && hasLoadedContent)
 
-    LaunchedEffect(isPlaylistSearchActive) {
-        if (isPlaylistSearchActive && onPlaylistSearchQueryChange != null) {
-            searchFocusRequester.requestFocus()
+    LaunchedEffect(isPlaylistSearchActive, onPlaylistSearchQueryChange != null) {
+        coroutineScope {
+            launch {
+                searchTransition.animateTo(
+                    if (isPlaylistSearchActive) 1f else 0f,
+                    spring(dampingRatio = 0.82f, stiffness = 160f),
+                )
+            }
+            if (isPlaylistSearchActive && onPlaylistSearchQueryChange != null) {
+                snapshotFlow { searchTransition.value }.first { it >= 0.85f }
+                searchFocusRequester.requestFocus()
+            }
         }
     }
 
@@ -152,17 +196,19 @@ fun CommonSongListScreen(
     ) {
         Box(Modifier.fillMaxSize()) {
             IosPinnedListPage(
-                title = if (isPlaylistSearchActive) "" else uiData.title,
+                title = if (isPlaylistSearchActive || searchProgress > 0.05f) "" else uiData.title,
                 subtitle = uiData.creatorName.takeIf {
-                    !isPlaylistSearchActive && it.isNotBlank()
+                    !isPlaylistSearchActive && searchProgress <= 0.05f && it.isNotBlank()
                 },
                 showsLargeTitle = false,
-                listState = listState,
+                listState = layoutState,
                 backgroundColor = coverBackground.color,
                 backgroundBrush = coverBackground.brush.takeIf { useCoverBackground },
                 bottomPadding = if (selectionMode) 84.dp else bottomPadding,
+                horizontalContentPadding = if (useCoverBackground) DetailPageHorizontalPadding else 16.dp,
                 verticalArrangement = Arrangement.spacedBy(0.dp),
                 onNavigateBack = if (selectionMode) onSelectionDone else onBack,
+                actionsSeparationProgress = searchSeparation,
                 actions = {
                     if (onPlaylistSearchQueryChange != null) {
                         BoxWithConstraints(Modifier.weight(1f, fill = false)) {
@@ -170,20 +216,8 @@ fun CommonSongListScreen(
                             val buttonSize = LocalGlassDimensions.current.iconButtonSize
                             val expandedWidth = (maxWidth - buttonSize - 8.dp)
                                 .coerceAtLeast(buttonSize)
-                            val animatedWidth by animateDpAsState(
-                                targetValue = if (isPlaylistSearchActive) expandedWidth else buttonSize,
-                                animationSpec = spring(
-                                    dampingRatio = 0.78f,
-                                    stiffness = if (isPlaylistSearchActive) 240f else 400f,
-                                ),
-                                label = "PlaylistSearchWidth",
-                            )
-
-                            val searchContentAlpha by androidx.compose.animation.core.animateFloatAsState(
-                                targetValue = if (isPlaylistSearchActive) 1f else 0f,
-                                animationSpec = androidx.compose.animation.core.tween(if (isPlaylistSearchActive) 120 else 200),
-                                label = "PlaylistSearchContentAlpha",
-                            )
+                            val animatedWidth = buttonSize + (expandedWidth - buttonSize) * searchExpansion
+                            val searchContentAlpha = ((searchExpansion - 0.12f) / 0.65f).coerceIn(0f, 1f)
                             GlassSurface(
                                 modifier = Modifier
                                     .width(animatedWidth.coerceIn(buttonSize, maxWidth.coerceAtLeast(buttonSize)))
@@ -252,7 +286,7 @@ fun CommonSongListScreen(
                                         contentAlignment = Alignment.Center,
                                     ) {
                                         androidx.compose.animation.Crossfade(
-                                            targetState = isPlaylistSearchActive,
+                                            targetState = searchExpansion > 0.15f,
                                             animationSpec = androidx.compose.animation.core.tween(120),
                                             label = "PlaylistSearchIcon",
                                         ) { active ->
@@ -274,6 +308,7 @@ fun CommonSongListScreen(
                     } else if (detailMenu != null) {
                         com.ljyh.mei.ui.glass.GlassIconButton(
                             onClick = { detailMenuOpen = true },
+                            groupSurfaceSeparation = { detailMenuSeparation.floatValue },
                             modifier = Modifier.onGloballyPositioned { detailMenuAnchor = it.boundsInWindow() }
                                 .drawWithContent {
                                     val alpha = detailMenuTriggerAlpha.floatValue
@@ -293,29 +328,39 @@ fun CommonSongListScreen(
                 if (isLoading) {
                     item(key = "playlist-loading") {
                         Box(Modifier.fillMaxWidth().height(620.dp)) {
-                            PlaylistShimmer()
+                            PlaylistShimmer(flatDetailStyle = useCoverBackground)
                         }
                     }
                 } else {
                     item(key = "playlist-hero") {
-                        PlaylistHeader(
-                            title = uiData.title,
-                            metadata = headerMetadata,
-                            cover = uiData.cover,
-                            coverList = uiData.coverList,
-                            creator = uiData.creatorName,
-                            onPlayAll = onPlayAll,
-                            onShufflePlay = onShufflePlay,
-                            onDownload = onDownload,
-                            actionIcon = headerActionIcon,
-                            actionLabel = headerActionLabel,
-                            count = uiData.count,
-                            playCount = uiData.playCount ?: -1L,
-                            subscribeCount = uiData.subscriberCount,
-                            isSubscribed = isSubscribed,
-                            isSubscriptionPending = headerActionPending,
-                            onSubscribed = { onHeaderAction() },
-                        )
+                        val headerContent: @Composable () -> Unit = {
+                            PlaylistHeader(
+                                title = uiData.title,
+                                metadata = headerMetadata,
+                                cover = uiData.cover,
+                                coverList = uiData.coverList,
+                                creator = uiData.creatorName,
+                                onPlayAll = onPlayAll,
+                                onShufflePlay = onShufflePlay,
+                                onDownload = onDownload,
+                                actionIcon = headerActionIcon,
+                                actionLabel = headerActionLabel,
+                                count = uiData.count,
+                                playCount = uiData.playCount ?: -1L,
+                                subscribeCount = uiData.subscriberCount,
+                                isSubscribed = isSubscribed,
+                                isSubscriptionPending = headerActionPending,
+                                onSubscribed = { onHeaderAction() },
+                                detailAction = useCoverBackground,
+                            )
+                        }
+                        if (headerBackdrop != null) {
+                            CompositionLocalProvider(LocalGlassBackdrop provides headerBackdrop) {
+                                headerContent()
+                            }
+                        } else {
+                            headerContent()
+                        }
                     }
                     playlistTrackItems(
                         pagingItems = pagingItems,
@@ -325,6 +370,12 @@ fun CommonSongListScreen(
                         onTrackClick = onTrackClick,
                         selectionMode = selectionMode,
                         selectedTrackIds = selectedTrackIds,
+                        flatDetailStyle = useCoverBackground,
+                        showArtwork = showTrackArtwork,
+                        currentTrackId = currentTrackId,
+                        isPlaying = isPlaying,
+                        favoriteTrackIds = favoriteTrackIds,
+                        trackNumbers = trackNumbers,
                         onMoreClick = { track, anchor -> currentOverlay = OverlayState.TrackActionMenu(track, anchor) },
                         emptyMessage = playlistSearchQuery.takeIf { it.isNotBlank() }
                             ?.let { "未找到匹配的歌曲" },
@@ -341,6 +392,10 @@ fun CommonSongListScreen(
                     collapsedDescription = androidx.compose.ui.res.stringResource(com.ljyh.mei.R.string.menu_collapsed),
                     onDismiss = { detailMenuOpen = false; detailMenuTriggerAlpha.floatValue = 1f },
                     onTriggerAlphaChanged = { detailMenuTriggerAlpha.floatValue = it },
+                    onTriggerSeparationChanged = if (onPlaylistSearchQueryChange != null) {
+                        { detailMenuSeparation.floatValue = it }
+                    } else null,
+                    triggerSeparationEnabled = searchSeparation < com.ljyh.mei.ui.glass.ToolbarDetachProgress,
                 )
             }
             PlaylistActionOverlay(
@@ -355,6 +410,13 @@ fun CommonSongListScreen(
             )
         }
     }
+}
+
+@Composable
+internal fun rememberSongListLayoutState(contentState: LazyListState, isContentReady: Boolean): LazyListState {
+    // Measuring a single placeholder with restored content state would clamp its saved position.
+    val loadingState = remember { LazyListState() }
+    return if (isContentReady) contentState else loadingState
 }
 
 /** Small reusable iOS action used by callers that still expose a text action. */

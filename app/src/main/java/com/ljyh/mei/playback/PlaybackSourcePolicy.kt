@@ -1,6 +1,8 @@
 package com.ljyh.mei.playback
 
 import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.common.util.StuckPlayerException
 import com.ljyh.mei.constants.MusicQuality
 import java.util.Locale
 
@@ -9,6 +11,10 @@ private const val PLAYBACK_CACHE_KEY_VERSION = "meilox-media-v3"
 /** Normalizes quality values from preferences, API responses, and enum names. */
 internal fun normalizePlaybackQuality(quality: String): String =
     quality.trim().lowercase(Locale.ROOT).ifBlank { MusicQuality.EXHIGH.text }
+
+/** Only advertised player levels are supported; unknown server formats need a fallback. */
+internal fun isSupportedPlaybackQuality(quality: String?): Boolean =
+    !quality.isNullOrBlank() && MusicQuality.entries.any { it.text == normalizePlaybackQuality(quality) }
 
 /** Uses the server-reported level when available, otherwise the attempted level. */
 internal fun effectivePlaybackQuality(sourceQuality: String?, attemptedQuality: String): String =
@@ -91,6 +97,16 @@ internal fun playbackCacheKeyPrefix(mediaId: String, quality: String): String =
 internal fun playbackCacheKeyPrefix(mediaId: String): String =
     "$PLAYBACK_CACHE_KEY_VERSION:${mediaId.trim()}:"
 
+/** Reads a supported level from this song's current cache-key format without trusting its alias. */
+internal fun cachedPlaybackQuality(mediaId: String, cacheKey: String): String? {
+    val prefix = playbackCacheKeyPrefix(mediaId)
+    if (!cacheKey.startsWith(prefix)) return null
+    val source = cacheKey.removePrefix(prefix)
+    val quality = source.substringBefore(':', missingDelimiterValue = "")
+    if (source.substringAfter(':', missingDelimiterValue = "").isBlank()) return null
+    return quality.takeIf(::isSupportedPlaybackQuality)?.let(::normalizePlaybackQuality)
+}
+
 /**
  * Builds a disk cache key for the exact server-returned source.
  *
@@ -110,6 +126,24 @@ internal fun playbackCacheKey(
 internal fun shouldRefreshPlaybackSource(errorCode: Int): Boolean =
     errorCode == PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE
 
+/** Recovers only Media3's confirmed loading or playback stalls, not generic runtime failures. */
+internal fun shouldRecoverStalledPlayback(errorCode: Int, cause: Throwable?): Boolean {
+    if (errorCode != PlaybackException.ERROR_CODE_TIMEOUT &&
+        errorCode != PlaybackException.ERROR_CODE_FAILED_RUNTIME_CHECK
+    ) return false
+    val stuck = generateSequence(cause) { it.cause }
+        .take(16)
+        .filterIsInstance<StuckPlayerException>()
+        .firstOrNull()
+        ?: return false
+    return when (stuck.stuckType) {
+        StuckPlayerException.STUCK_BUFFERING_NOT_LOADING,
+        StuckPlayerException.STUCK_BUFFERING_NO_PROGRESS,
+        StuckPlayerException.STUCK_PLAYING_NO_PROGRESS -> true
+        else -> false
+    }
+}
+
 /** Retries a different full source when the device cannot decode or render these bytes. */
 internal fun shouldTryLowerPlaybackQuality(errorCode: Int): Boolean = when (errorCode) {
     PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
@@ -122,4 +156,69 @@ internal fun shouldTryLowerPlaybackQuality(errorCode: Int): Boolean = when (erro
     PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED,
     PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED -> true
     else -> false
+}
+
+/** Keeps automatic source failures bounded until playback has actually made sustained progress. */
+internal class PlaybackFailureTracker(
+    private val maximumFailures: Int = 5,
+    private val healthyPlaybackDurationMs: Long = 2_000L,
+) {
+    var consecutiveFailures: Int = 0
+        private set
+    private var progressEntryId: String? = null
+    private var progressStartedAtMs = 0L
+    private var previousPositionMs = 0L
+    private var automaticSkipEntryId: String? = null
+    private var currentEntryId: String? = null
+
+    fun recordFailure(): Boolean {
+        resetProgress()
+        consecutiveFailures++
+        return consecutiveFailures >= maximumFailures
+    }
+
+    fun reset() {
+        consecutiveFailures = 0
+        automaticSkipEntryId = null
+        resetProgress()
+    }
+
+    fun expectAutomaticSkip(entryId: String) {
+        automaticSkipEntryId = entryId
+    }
+
+    fun onMediaItemTransition(entryId: String?, reason: Int) {
+        val entryChanged = entryId != currentEntryId
+        currentEntryId = entryId
+        val isAutomaticSkip = reason == Player.MEDIA_ITEM_TRANSITION_REASON_SEEK &&
+            automaticSkipEntryId != null && automaticSkipEntryId == entryId
+        // Metadata hydration can replace the current MediaItem without changing its identity.
+        if (entryChanged || reason == Player.MEDIA_ITEM_TRANSITION_REASON_SEEK) {
+            automaticSkipEntryId = null
+        }
+        resetProgress()
+        if ((reason == Player.MEDIA_ITEM_TRANSITION_REASON_SEEK && !isAutomaticSkip) ||
+            (reason == Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED && entryChanged)
+        ) {
+            reset()
+        }
+    }
+
+    fun resetProgress() {
+        progressEntryId = null
+    }
+
+    fun recordProgress(entryId: String?, positionMs: Long, realtimeMs: Long, isPlaying: Boolean) {
+        if (!isPlaying || entryId == null || consecutiveFailures == 0) {
+            resetProgress()
+            return
+        }
+        if (progressEntryId != entryId || positionMs <= previousPositionMs) {
+            progressEntryId = entryId
+            progressStartedAtMs = realtimeMs
+        } else if (realtimeMs - progressStartedAtMs >= healthyPlaybackDurationMs) {
+            reset()
+        }
+        previousPositionMs = positionMs
+    }
 }

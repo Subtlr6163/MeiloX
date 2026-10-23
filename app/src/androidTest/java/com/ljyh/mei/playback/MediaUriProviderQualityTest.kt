@@ -1,7 +1,9 @@
 package com.ljyh.mei.playback
 
 import android.net.Uri
+import androidx.core.content.FileProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.ljyh.mei.constants.MusicQuality
@@ -9,12 +11,16 @@ import com.ljyh.mei.data.model.SongUrl
 import com.ljyh.mei.data.model.Tracks
 import com.ljyh.mei.data.model.api.GetSongUrlV1
 import com.ljyh.mei.data.model.room.Song
+import com.ljyh.mei.data.model.room.SourceType
 import com.ljyh.mei.data.network.api.ApiService
 import com.ljyh.mei.di.dao.SongDao
 import com.ljyh.mei.di.repository.SongRepository
 import java.io.IOException
 import java.lang.reflect.Proxy
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.Collections
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.intrinsics.COROUTINE_SUSPENDED
@@ -28,6 +34,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.supervisorScope
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -94,6 +101,108 @@ class MediaUriProviderQualityTest {
         assertEquals("master-source", resolved.sourceIdentity)
         assertEquals(resolved, provider.resolvedMediaSource("1"))
         assertEquals(listOf(resolved), observed)
+    }
+
+    @Test
+    fun unknownReportedLevelsFallBackWithoutPublishingOrCachingThem() = runBlocking {
+        for ((unsupportedLevel, actualFallback) in listOf("vivid" to "jyeffect", "future-surround" to "lossless")) {
+            val calls = mutableListOf<String>()
+            val provider = provider(catalog = "{}") { request ->
+                calls += request.level
+                when (request.level) {
+                    "dolby", "sky" -> source(unsupportedLevel, "unsupported-source")
+                    "jyeffect" -> source(actualFallback, "supported-source")
+                    else -> error("The supported fallback must retain the song")
+                }
+            }
+            val observed = mutableListOf<ResolvedMediaSource>()
+            provider.onSourceResolved = { _, source -> observed += source }
+
+            val resolved = provider.resolveMediaSource("1", "dolby")
+
+            assertEquals(listOf("dolby", "sky", "jyeffect"), calls)
+            assertEquals(actualFallback, resolved.actualQuality)
+            assertEquals("supported-source", resolved.sourceIdentity)
+            assertEquals(playbackCacheKey("1", actualFallback, "supported-source", 12345), resolved.cacheKey)
+            assertEquals(listOf(resolved), observed)
+            assertEquals(resolved, provider.resolveMediaSource("1", "dolby"))
+            assertEquals(listOf("dolby", "sky", "jyeffect"), calls)
+
+            assertEquals(resolved, provider.resolveMediaSource("1", "sky"))
+            assertEquals(listOf("dolby", "sky", "jyeffect", "sky"), calls)
+            assertTrue(observed.all { it.actualQuality == actualFallback })
+        }
+    }
+
+    @Test
+    fun unsupportedFullSourcesCannotBecomeAliasesOrAvailableQualities() = runBlocking {
+        val calls = Collections.synchronizedList(mutableListOf<String>())
+        var supported = false
+        val provider = provider(catalog = """{"sk":{"size":12345},"dl":{"size":23456}}""") { request ->
+            calls += request.level
+            if (supported) source(request.level, "${request.level}-source")
+            else source("vivid", "unsupported-source")
+        }
+        val observed = mutableListOf<ResolvedMediaSource>()
+        provider.onSourceResolved = { _, source -> observed += source }
+
+        try {
+            provider.resolveMediaSource("1", "dolby")
+            fail("An unsupported full source must not end quality fallback")
+        } catch (_: SourceNotFoundException) {
+            // Every attempted quality returned the same unsupported format.
+        }
+        assertEquals(playbackQualityFallbacks("dolby"), calls)
+        assertEquals(null, provider.resolvedMediaSource("1"))
+        assertTrue(observed.isEmpty())
+        assertTrue(provider.getAvailableMusicQualities("1", supportDolby = true).isEmpty())
+        assertTrue(provider.getAvailableDownloadQualities("1").isEmpty())
+
+        supported = true
+        calls.clear()
+        val resolved = provider.resolveMediaSource("1", "dolby")
+
+        assertEquals(listOf("dolby"), calls)
+        assertEquals("dolby", resolved.actualQuality)
+        assertEquals("dolby-source", resolved.sourceIdentity)
+        assertEquals(listOf(resolved), observed)
+    }
+
+    @Test
+    fun knownAndMissingReportedLevelsPreserveRequestedPlayback() = runBlocking {
+        for (requestedQuality in listOf("dolby", "jymaster")) {
+            for (reportedQuality in listOf(requestedQuality.uppercase(), " ")) {
+                val calls = mutableListOf<String>()
+                val provider = provider(catalog = "{}") { request ->
+                    calls += request.level
+                    source(reportedQuality, "supported-source")
+                }
+
+                val resolved = provider.resolveMediaSource("1", requestedQuality)
+
+                assertEquals(listOf(requestedQuality), calls)
+                assertEquals(requestedQuality, resolved.actualQuality)
+                assertEquals("supported-source", resolved.sourceIdentity)
+            }
+        }
+    }
+
+    @Test
+    fun unknownOrMislabeledDiskSourcesAreNotRememberedAsPlayable() = runBlocking {
+        val provider = provider(catalog = "{}") { error("No URL request is expected") }
+        val observed = mutableListOf<ResolvedMediaSource>()
+        provider.onSourceResolved = { _, source -> observed += source }
+        val unsupportedKey = playbackCacheKey("1", "vivid", "unsupported-source", 12345)
+        val mismatchedKey = playbackCacheKey("1", "lossless", "mislabeled-source", 12345)
+
+        provider.rememberCachedSource("1", "vivid", unsupportedKey, Uri.parse("https://example.test/vivid"))
+        provider.rememberCachedSource("1", "dolby", mismatchedKey, Uri.parse("https://example.test/mislabeled"))
+
+        assertTrue(provider.isRejectedCachedSource("1", unsupportedKey))
+        assertFalse(provider.isRejectedCachedSource("1", mismatchedKey))
+        assertEquals(null, provider.resolvedMediaSource("1"))
+        assertTrue(observed.isEmpty())
+        assertTrue(provider.getAvailableMusicQualities("1", supportDolby = true).isEmpty())
     }
 
     @Test
@@ -232,7 +341,10 @@ class MediaUriProviderQualityTest {
         )
         val playing = provider.resolvedMediaSource("2")
 
-        assertTrue(provider.getAvailableMusicQualities("1", supportDolby = false).isEmpty())
+        assertEquals(
+            listOf(MusicQuality.STANDARD, MusicQuality.LOSSLESS, MusicQuality.JYMASTER),
+            provider.getAvailableMusicQualities("1", supportDolby = false),
+        )
         assertEquals(
             listOf(MusicQuality.STANDARD, MusicQuality.LOSSLESS, MusicQuality.JYMASTER, MusicQuality.DOLBY),
             provider.getAvailableDownloadQualities("1"),
@@ -334,9 +446,99 @@ class MediaUriProviderQualityTest {
         assertEquals(2, calls.get())
     }
 
+    @Test
+    fun downloadedFileAndContentSourcesPublishRealFormatAndCanSwitchOnlineAndBack() = runBlocking {
+        for (useContentUri in listOf(false, true)) withLocalWave(useContentUri) { uri ->
+            val song = Song(
+                id = "1", title = "Downloaded audio", artist = emptyList(), album = "", cover = "", duration = 100,
+                path = uri.toString(), sourceType = SourceType.DOWNLOAD,
+            )
+            val provider = provider(
+                catalog = """{"l":{"br":128000},"jm":{"size":12345}}""", localSong = song,
+            ) { request -> source(request.level, "${request.level}-online") }
+            val observed = mutableListOf<ResolvedMediaSource>()
+            provider.onSourceResolved = { _, resolved -> observed += resolved }
+
+            val local = provider.resolveMediaSource("1", "jymaster")
+            assertEquals(uri, local.uri)
+            assertEquals(null, local.cacheKey)
+            assertTrue("A local file must not inherit the requested online level", local.actualQuality.isBlank())
+            assertNotNull(local.localPlaybackInfo)
+            assertEquals("audio/raw", local.localPlaybackInfo?.mimeType)
+            assertEquals(44_100, local.localPlaybackInfo?.sampleRate)
+            assertEquals(local, provider.resolvedMediaSource("1"))
+            assertEquals(listOf(local), observed)
+
+            assertEquals(listOf(MusicQuality.STANDARD, MusicQuality.JYMASTER), provider.getAvailableMusicQualities("1", true))
+            assertEquals("Probing online choices must retain the local playing source", listOf(local), observed)
+            provider.preferOnlineSource("1")
+            val online = provider.resolveMediaSource("1", "jymaster")
+            assertEquals("https", online.uri.scheme)
+            assertEquals("jymaster", online.actualQuality)
+            assertNotNull(online.cacheKey)
+            assertEquals(null, online.localPlaybackInfo)
+            assertEquals(local.localPlaybackInfo, provider.getLocalPlaybackInfo("1"))
+
+            provider.preferLocalSource("1")
+            assertEquals(local, provider.resolveMediaSource("1", "jymaster"))
+            provider.preferOnlineSource("1")
+            provider.clearQualityState()
+            assertEquals("Account reset must return to the intact local copy", local, provider.resolveMediaSource("1", "jymaster"))
+        }
+    }
+
+    @Test
+    fun importedLocalSourceNeverQueriesAnUnrelatedOnlineSongWithTheSameNumericId() = runBlocking {
+        for (hasOnlineRecord in listOf(false, true)) withLocalWave(useContentUri = true) { uri ->
+            val onlineCalls = AtomicInteger()
+            val song = Song(
+                id = "local_1", title = "Imported audio", artist = emptyList(), album = "", cover = "", duration = 100,
+                path = uri.toString(), sourceType = SourceType.LOCAL,
+            )
+            val provider = provider(
+                catalog = """{"jm":{"size":12345}}""", localSong = song,
+                extraSongs = if (hasOnlineRecord) listOf(song.copy(id = "1", path = null, sourceType = SourceType.STREAM)) else emptyList(),
+                onDetailRequested = { onlineCalls.incrementAndGet() },
+            ) {
+                onlineCalls.incrementAndGet()
+                error("Imported audio must never request an online source")
+            }
+            provider.preferOnlineSource("-1")
+            val local = provider.resolveMediaSource("-1", "jymaster")
+            assertEquals(uri, local.uri)
+            assertNotNull(local.localPlaybackInfo)
+            assertTrue(provider.getAvailableMusicQualities("-1", true).isEmpty())
+            assertEquals(null, local.cacheKey)
+            assertEquals(0, onlineCalls.get())
+            assertEquals("A catalog ID must never resolve its unrelated device-library row", null, provider.resolveLocalSource("1"))
+        }
+    }
+
+    private suspend fun withLocalWave(useContentUri: Boolean, block: suspend (Uri) -> Unit) {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val file = context.filesDir.resolve("quality-regression-${UUID.randomUUID()}.wav")
+        val pcmBytes = 4_410 * 4
+        val wave = ByteBuffer.allocate(44 + pcmBytes).order(ByteOrder.LITTLE_ENDIAN)
+            .put("RIFF".toByteArray()).putInt(36 + pcmBytes).put("WAVEfmt ".toByteArray())
+            .putInt(16).putShort(1.toShort()).putShort(2.toShort()).putInt(44_100)
+            .putInt(44_100 * 4).putShort(4.toShort()).putShort(16.toShort())
+            .put("data".toByteArray()).putInt(pcmBytes).array()
+        file.writeBytes(wave)
+        try {
+            val uri = if (useContentUri) FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+            else Uri.fromFile(file)
+            block(uri)
+            assertTrue("Selecting an online source must retain the original local bytes", wave.contentEquals(file.readBytes()))
+        } finally {
+            file.delete()
+        }
+    }
+
     private fun provider(
         catalog: String,
         localSong: Song? = null,
+        extraSongs: List<Song> = emptyList(),
+        onDetailRequested: () -> Unit = {},
         response: suspend (GetSongUrlV1) -> SongUrl,
     ): MediaUriProvider {
         val track = gson.fromJson(catalog, JsonObject::class.java).apply { addProperty("id", 1) }
@@ -349,7 +551,10 @@ class MediaUriProviderQualityTest {
             arrayOf(ApiService::class.java),
         ) { _, method, arguments ->
             when (method.name) {
-                "getSongDetail" -> detail
+                "getSongDetail" -> {
+                    onDetailRequested()
+                    detail
+                }
                 "getSongUrlV1" -> {
                     val request = arguments!![0] as GetSongUrlV1
                     @Suppress("UNCHECKED_CAST")
@@ -366,9 +571,9 @@ class MediaUriProviderQualityTest {
             arrayOf(SongDao::class.java),
         ) { _, method, arguments ->
             check(method.name == "getSong") { "Unexpected database call: ${method.name}" }
-            flowOf(localSong?.takeIf { it.id == arguments!![0] })
+            flowOf((listOfNotNull(localSong) + extraSongs).firstOrNull { it.id == arguments!![0] })
         } as SongDao
-        return MediaUriProvider(api, SongRepository(songDao))
+        return MediaUriProvider(api, SongRepository(songDao), InstrumentationRegistry.getInstrumentation().targetContext)
     }
 
     private fun source(

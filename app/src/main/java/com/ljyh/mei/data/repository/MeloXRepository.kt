@@ -2,10 +2,8 @@ package com.ljyh.mei.data.repository
 
 import android.app.Activity
 import android.content.Context
-import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
-import android.provider.OpenableColumns
 import android.provider.Settings
 import android.util.Log
 import androidx.datastore.preferences.core.edit
@@ -64,16 +62,25 @@ import com.ljyh.mei.data.model.melox.SongWikiTagGroup
 import com.ljyh.mei.data.model.melox.ShareResource
 import com.ljyh.mei.data.model.melox.ShareResourceKind
 import com.ljyh.mei.data.model.melox.AccountDetail
+import com.ljyh.mei.data.model.melox.AccountConnectionPage
+import com.ljyh.mei.data.model.melox.AccountConnectionType
 import com.ljyh.mei.data.model.melox.AccountPlaylist
 import com.ljyh.mei.data.model.melox.AccountProfile
 import com.ljyh.mei.data.model.melox.AccountSong
 import com.ljyh.mei.data.model.melox.UserPlayRecord
+import com.ljyh.mei.data.model.melox.ListeningStatsPeriod
+import com.ljyh.mei.data.model.melox.ListeningStatsReport
+import com.ljyh.mei.data.model.melox.ListeningStatsSummary
+import com.ljyh.mei.data.model.melox.ListeningStatsYear
 import com.ljyh.mei.data.network.api.MeloXDirectService
 import com.ljyh.mei.data.network.NeteaseLoginSecurity
 import com.ljyh.mei.data.network.readNeteaseLoginCookies
 import com.ljyh.mei.data.network.NeteaseSessionType
 import com.ljyh.mei.data.network.neteaseSessionType
 import com.ljyh.mei.data.network.requireNeteaseMobileSession
+import com.ljyh.mei.data.network.NETEASE_EXPECTED_SESSION_HEADER
+import com.ljyh.mei.data.network.neteaseSessionFingerprint
+import com.ljyh.mei.data.network.requireExpectedNeteaseSession
 import com.ljyh.mei.constants.NeteaseSessionTypeKey
 import com.ljyh.mei.di.NETEASE_WEB_SESSION_HEADER
 import com.ljyh.mei.data.network.NeteaseOfficialDeviceId
@@ -88,9 +95,14 @@ import com.ljyh.mei.di.readBoundedPlaybackResponseBody
 import com.ljyh.mei.utils.log.logPlaybackHistory
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
@@ -98,7 +110,6 @@ import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.ResponseBody
 import okio.BufferedSink
-import okio.source
 import org.json.JSONObject
 import timber.log.Timber
 import java.security.MessageDigest
@@ -162,9 +173,10 @@ class MeloXRepository @Inject constructor(
             val programs = programsResponse.await()
             PodcastDetail(
                 podcast = podcast,
-                programs = programs.programs,
+                programs = programs.programs.distinctBy(PodcastProgram::id),
                 hasMore = programs.hasMore,
                 totalCount = programs.totalCount,
+                nextOffset = offset + programs.fetchedCount,
             )
         }
 
@@ -181,13 +193,7 @@ class MeloXRepository @Inject constructor(
             "/api/dj/program/byradio",
             mapOf("radioId" to id, "offset" to offset, "limit" to limit.coerceIn(1, 50), "asc" to false),
         )
-        val programs = response.array("programs").mapNotNull(::parseProgram)
-        val totalCount = response.int("count") ?: (offset + programs.size)
-        return PodcastProgramPage(
-            programs = programs,
-            hasMore = response.boolean("more") ?: (offset + programs.size < totalCount),
-            totalCount = totalCount,
-        )
+        return parsePodcastProgramPage(response, offset)
     }
 
     suspend fun subscribedPodcasts(offset: Int = 0, limit: Int = 50): PodcastPage {
@@ -195,15 +201,7 @@ class MeloXRepository @Inject constructor(
             "/api/djradio/get/subed",
             mapOf("offset" to offset, "limit" to limit.coerceIn(1, 100), "total" to true),
         )
-        val podcasts = response.array("djRadios").mapNotNull(::parsePodcast)
-        val totalCount = response.int("count") ?: response.int("total") ?: (offset + podcasts.size)
-        return PodcastPage(
-            podcasts = podcasts,
-            hasMore = response.boolean("hasMore")
-                ?: response.boolean("more")
-                ?: (offset + podcasts.size < totalCount),
-            totalCount = totalCount,
-        )
+        return parseSubscribedPodcastPage(response, offset)
     }
 
     suspend fun searchDiscovery(): SearchDiscovery {
@@ -645,6 +643,37 @@ class MeloXRepository @Inject constructor(
             mapOf("uid" to userId, "limit" to limit.coerceIn(1, 2_000), "offset" to 0, "includeVideo" to true),
         ).array("playlist").mapNotNull(::parseAccountPlaylist)
 
+    suspend fun accountConnections(
+        userId: Long,
+        type: AccountConnectionType,
+        offset: Int = 0,
+        limit: Int = 30,
+    ): AccountConnectionPage {
+        require(userId > 0) { "A valid NetEase user ID is required" }
+        require(offset >= 0) { "The account connection offset must not be negative" }
+        val pageSize = limit.coerceIn(1, 100)
+        val path = when (type) {
+            AccountConnectionType.Following -> "/api/user/getfollows/$userId"
+            AccountConnectionType.Followers -> "/api/user/getfolloweds/$userId"
+        }
+        val body = buildMap<String, Any> {
+            put("offset", offset)
+            put("limit", pageSize)
+            when (type) {
+                AccountConnectionType.Following -> put("order", true)
+                AccountConnectionType.Followers -> {
+                    put("userId", userId)
+                    put("time", "0")
+                    put("getcounts", "true")
+                }
+            }
+        }
+        val page = parseAccountConnections(request(path, body), type, offset, pageSize)
+        return page.copy(
+            users = resolveAccountConnectionArtists(page.users) { accountDetail(it).profile },
+        )
+    }
+
     suspend fun userPlayRecords(userId: Long, allTime: Boolean): List<UserPlayRecord> {
         val response = request(
             "/api/v1/play/record",
@@ -652,6 +681,31 @@ class MeloXRepository @Inject constructor(
         )
         return parseUserPlayRecords(response, allTime)
     }
+
+    suspend fun listeningStatsSummary(): ListeningStatsSummary = parseListeningStatsSummary(
+        request("/api/content/activity/listen/data/total"),
+    )
+
+    suspend fun listeningStatsReport(
+        period: ListeningStatsPeriod,
+        endTimeMs: Long? = null,
+    ): ListeningStatsReport {
+        require(period != ListeningStatsPeriod.Year) { "Annual listening summaries use listeningStatsYears" }
+        require(endTimeMs == null || endTimeMs > 0) { "A valid listening report end time is required" }
+        val isCurrent = endTimeMs == null
+        val path = if (isCurrent) "realtime/report" else "report"
+        val body = buildMap<String, Any> {
+            put("type", period.wireValue)
+            if (endTimeMs != null) put("endTime", endTimeMs)
+        }
+        return parseListeningStatsReport(
+            request("/api/content/activity/listen/data/$path", body), period, isCurrent,
+        )
+    }
+
+    suspend fun listeningStatsYears(): List<ListeningStatsYear> = parseListeningStatsYears(
+        request("/api/content/activity/listen/data/year/report"),
+    )
 
     suspend fun recentSongs(limit: Int = 100): List<AccountSong> {
         val response = request(
@@ -764,16 +818,12 @@ class MeloXRepository @Inject constructor(
     }
 
     suspend fun cloudSongs(offset: Int = 0, limit: Int = 200): CloudMusicPage {
-        val response = request("/api/v1/cloud/get", mapOf("offset" to offset, "limit" to limit))
-        val songs = response.array("data").mapNotNull(::parseCloudSong)
-        val count = response.int("count") ?: songs.size
-        return CloudMusicPage(
-            songs = songs,
-            count = count,
-            usedSize = response.long("size") ?: 0,
-            maxSize = response.long("maxSize") ?: 0,
-            hasMore = response.boolean("hasMore") ?: (offset + songs.size < count),
+        require(offset >= 0) { "Cloud offset must not be negative" }
+        val response = request(
+            "/api/v1/cloud/get",
+            mapOf("offset" to offset, "limit" to limit.coerceIn(1, 200)),
         )
+        return parseCloudMusicPage(response, offset)
     }
 
     suspend fun deleteCloudSong(id: Long) {
@@ -781,7 +831,22 @@ class MeloXRepository @Inject constructor(
     }
 
     suspend fun uploadCloudSong(uri: Uri, onProgress: (Long, Long) -> Unit = { _, _ -> }) {
-        val file = prepareCloudUploadFile(uri)
+        val credential = context.dataStore.data.first()[CookieKey]
+        check(!credential.isNullOrBlank()) { "NetEase account is not signed in" }
+        val expectedSession = neteaseSessionFingerprint(credential)
+        val file = prepareCloudUploadFile(context, uri)
+        try {
+            uploadCloudSong(file, expectedSession, onProgress)
+        } finally {
+            file.close()
+        }
+    }
+
+    private suspend fun uploadCloudSong(
+        file: CloudUploadFile,
+        expectedSession: String,
+        onProgress: (Long, Long) -> Unit,
+    ) {
         val bitrate = 999_000
         val check = requestEapi(
             "/api/cloud/upload/check",
@@ -789,6 +854,7 @@ class MeloXRepository @Inject constructor(
                 "bitrate" to bitrate.toString(), "ext" to "", "length" to file.size,
                 "md5" to file.md5, "songId" to "0", "version" to 1,
             ),
+            expectedSession = expectedSession,
         )
         val metadataToken = requestEapi(
             "/api/nos/token/alloc",
@@ -796,6 +862,7 @@ class MeloXRepository @Inject constructor(
                 "bucket" to "", "ext" to file.extension, "filename" to file.normalizedStem,
                 "local" to false, "nos_product" to 3, "type" to "audio", "md5" to file.md5,
             ),
+            expectedSession = expectedSession,
         ).objectOrNull("result") ?: error("NetEase did not return a cloud resource token")
 
         if (check.boolean("needUpload") == true) {
@@ -804,8 +871,9 @@ class MeloXRepository @Inject constructor(
                 "bucket" to bucket, "ext" to file.extension, "filename" to file.normalizedStem,
                 "local" to false, "nos_product" to 3, "type" to "audio", "md5" to file.md5,
             )
-            val uploadToken = request("/api/nos/token/alloc", tokenData).objectOrNull("result")
+            val uploadToken = request("/api/nos/token/alloc", tokenData, expectedSession).objectOrNull("result")
                 ?: error("NetEase did not return a NOS upload token")
+            requireCloudUploadSession(expectedSession)
             uploadToNos(
                 file = file,
                 bucket = bucket,
@@ -813,6 +881,7 @@ class MeloXRepository @Inject constructor(
                 token = uploadToken.string("token") ?: error("NOS token is missing"),
                 onProgress = onProgress,
             )
+            requireCloudUploadSession(expectedSession)
         }
 
         val info = requestEapi(
@@ -827,56 +896,14 @@ class MeloXRepository @Inject constructor(
                 "bitrate" to bitrate.toString(),
                 "resourceId" to (metadataToken.string("resourceId") ?: error("Cloud resource ID is missing")),
             ),
+            expectedSession = expectedSession,
         )
-        requestEapi("/api/cloud/pub/v2", mapOf("songid" to (info.long("songId") ?: 0)))
+        requestEapi(
+            "/api/cloud/pub/v2",
+            mapOf("songid" to (info.long("songId") ?: 0)),
+            expectedSession = expectedSession,
+        )
         onProgress(file.size, file.size)
-    }
-
-    private suspend fun prepareCloudUploadFile(uri: Uri): CloudUploadFile = withContext(Dispatchers.IO) {
-        val resolver = context.contentResolver
-        var filename: String? = null
-        var size = -1L
-        resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { cursor ->
-            if (cursor.moveToFirst()) {
-                cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME).takeIf { it >= 0 }?.let { filename = cursor.getString(it) }
-                cursor.getColumnIndex(OpenableColumns.SIZE).takeIf { it >= 0 }?.let { size = cursor.getLong(it) }
-            }
-        }
-        val safeFilename = filename?.takeIf(String::isNotBlank) ?: uri.lastPathSegment?.substringAfterLast('/') ?: "music.mp3"
-        if (size <= 0) size = resolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: -1
-        check(size > 0) { "The selected audio file is empty or unavailable" }
-        val digest = MessageDigest.getInstance("MD5")
-        resolver.openInputStream(uri)?.use { input ->
-            val buffer = ByteArray(1_048_576)
-            while (true) {
-                val read = input.read(buffer)
-                if (read < 0) break
-                if (read > 0) digest.update(buffer, 0, read)
-            }
-        } ?: error("The selected audio file cannot be opened")
-        val fallbackName = safeFilename.substringBeforeLast('.', safeFilename)
-        val retriever = MediaMetadataRetriever()
-        val metadata = runCatching {
-            retriever.setDataSource(context, uri)
-            Triple(
-                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE),
-                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST),
-                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM),
-            )
-        }.getOrNull()
-        retriever.release()
-        CloudUploadFile(
-            uri = uri,
-            filename = safeFilename,
-            extension = safeFilename.substringAfterLast('.', "mp3").lowercase(),
-            normalizedStem = fallbackName.filterNot(Char::isWhitespace).replace('.', '_').ifEmpty { "music" },
-            size = size,
-            md5 = digest.digest().joinToString("") { "%02x".format(it) },
-            songName = metadata?.first?.takeIf(String::isNotBlank) ?: fallbackName,
-            artist = metadata?.second?.takeIf(String::isNotBlank) ?: "Unknown artist",
-            album = metadata?.third?.takeIf(String::isNotBlank) ?: "Unknown album",
-            mimeType = resolver.getType(uri) ?: "audio/mpeg",
-        )
     }
 
     private suspend fun uploadToNos(
@@ -886,13 +913,13 @@ class MeloXRepository @Inject constructor(
         token: String,
         onProgress: (Long, Long) -> Unit,
     ) = withContext(Dispatchers.IO) {
+        val operation = currentCoroutineContext()
+        operation.ensureActive()
         val lbsRequest = Request.Builder()
             .url("https://wanproxy.127.net/lbs?version=1.0&bucketname=$bucket")
             .get()
             .build()
-        val uploadHost = cloudUploadClient.newCall(lbsRequest).execute().use { response ->
-            check(response.isSuccessful) { "NOS server lookup failed (${response.code})" }
-            val body = response.body.string()
+        val uploadHost = executeCloudUploadRequest(cloudUploadClient, lbsRequest).let { body ->
             JsonParser.parseString(body).asJsonObject.getAsJsonArray("upload")?.firstOrNull()?.asString
                 ?: error("NetEase did not return an available upload server")
         }
@@ -902,17 +929,23 @@ class MeloXRepository @Inject constructor(
             override fun contentType() = file.mimeType.toMediaTypeOrNull()
             override fun contentLength() = file.size
             override fun writeTo(sink: BufferedSink) {
-                context.contentResolver.openInputStream(file.uri)?.use { input ->
-                    val source = input.source()
+                file.file.inputStream().use { input ->
+                    val buffer = ByteArray(64 * 1024)
                     var sent = 0L
                     while (true) {
-                        val read = source.read(sink.buffer, 64 * 1024L)
+                        operation.ensureActive()
+                        val read = input.read(buffer)
                         if (read < 0) break
                         sent += read
+                        check(sent <= file.size) { "Cloud upload snapshot changed" }
+                        sink.write(buffer, 0, read)
                         sink.flush()
-                        onProgress(sent, file.size)
+                        operation.ensureActive()
+                        // Publication is a separate request after the binary transfer.
+                        onProgress(sent.coerceAtMost(file.size - maxOf(1L, file.size / 100L)), file.size)
                     }
-                } ?: error("The selected audio file cannot be reopened")
+                    check(sent == file.size) { "Cloud upload snapshot changed" }
+                }
             }
         }
         val request = Request.Builder()
@@ -921,11 +954,15 @@ class MeloXRepository @Inject constructor(
             .header("Content-MD5", file.md5)
             .post(body)
             .build()
-        cloudUploadClient.newCall(request).execute().use { response ->
-            check(response.isSuccessful) {
-                response.body.string().takeIf(String::isNotBlank) ?: "NOS upload failed (${response.code})"
-            }
+        val receipt = JsonParser.parseString(executeCloudUploadRequest(cloudUploadClient, request)).asJsonObject
+        check(receipt.long("offset") == file.size) {
+            "NOS did not acknowledge the complete file"
         }
+    }
+
+    private suspend fun requireCloudUploadSession(expectedSession: String) {
+        currentCoroutineContext().ensureActive()
+        context.dataStore.data.first().requireExpectedNeteaseSession(expectedSession)
     }
 
     suspend fun privateConversations(offset: Int = 0, limit: Int = 50): List<PrivateConversation> =
@@ -1139,7 +1176,7 @@ class MeloXRepository @Inject constructor(
             "/api/listen/together/room/check",
             mapOf("roomId" to roomId),
         ).objectOrNull("data")
-        return (data?.boolean("joinable") ?: false) to data?.string("status")
+        return parseListenTogetherRoomCheck(data)
     }
 
     suspend fun acceptListenTogetherRoom(roomId: String, inviterId: String): ListenTogetherRoom {
@@ -1257,16 +1294,37 @@ class MeloXRepository @Inject constructor(
         requestEapi("/api/listen/together/end/v2", mapOf("roomId" to roomId))
     }
 
-    private suspend fun request(path: String, body: Map<String, Any> = emptyMap()): JsonObject =
+    private suspend fun request(
+        path: String,
+        body: Map<String, Any> = emptyMap(),
+        expectedSession: String? = null,
+    ): JsonObject =
         try {
-            validate(weapi.post(path.replaceFirst("/api/", "/weapi/"), body))
+            if (expectedSession != null) requireCloudUploadSession(expectedSession)
+            val response = weapi.post(
+                path.replaceFirst("/api/", "/weapi/"), body,
+                headers = expectedSession?.let { mapOf(NETEASE_EXPECTED_SESSION_HEADER to it) }.orEmpty(),
+            )
+            if (expectedSession != null) requireCloudUploadSession(expectedSession)
+            validate(response)
         } catch (error: Exception) {
             if (error is kotlinx.coroutines.CancellationException) throw error
-            requestEapi(path, body)
+            requestEapi(path, body, expectedSession)
         }
 
-    private suspend fun requestEapi(path: String, body: Map<String, Any> = emptyMap()): JsonObject =
-        validate(eapi.post(path.replaceFirst("/api/", "/eapi/"), body))
+    private suspend fun requestEapi(
+        path: String,
+        body: Map<String, Any> = emptyMap(),
+        expectedSession: String? = null,
+    ): JsonObject {
+        if (expectedSession != null) requireCloudUploadSession(expectedSession)
+        val response = eapi.post(
+            path.replaceFirst("/api/", "/eapi/"), body,
+            headers = expectedSession?.let { mapOf(NETEASE_EXPECTED_SESSION_HEADER to it) }.orEmpty(),
+        )
+        if (expectedSession != null) requireCloudUploadSession(expectedSession)
+        return validate(response)
+    }
 
     private fun validate(response: JsonObject): JsonObject {
         val code = response.int("code") ?: 200
@@ -1614,19 +1672,6 @@ private val PLAYBACK_QUERY_SENSITIVE_PATTERN = Regex(
 )
 private val PLAYBACK_URL_CREDENTIAL_PATTERN = Regex("(?i)(https?://)[^/@\\s:]+:[^/@\\s]+@")
 
-private data class CloudUploadFile(
-    val uri: Uri,
-    val filename: String,
-    val extension: String,
-    val normalizedStem: String,
-    val size: Long,
-    val md5: String,
-    val songName: String,
-    val artist: String,
-    val album: String,
-    val mimeType: String,
-)
-
 private fun JsonElement.identifierLong(): Long? = runCatching {
     when {
         isJsonPrimitive && asJsonPrimitive.isNumber -> asLong
@@ -1754,6 +1799,34 @@ private fun parsePodcast(element: JsonElement?): Podcast? {
     )
 }
 
+internal fun parsePodcastProgramPage(response: JsonObject, offset: Int): PodcastProgramPage {
+    val rows = response.array("programs")
+    val totalCount = response.int("count") ?: (offset + rows.size)
+    val hasMore = response.boolean("more") ?: (offset + rows.size < totalCount)
+    check(!hasMore || rows.isNotEmpty()) { "Podcast pagination did not advance" }
+    return PodcastProgramPage(
+        programs = rows.mapNotNull(::parseProgram),
+        hasMore = hasMore,
+        totalCount = totalCount,
+        fetchedCount = rows.size,
+    )
+}
+
+internal fun parseSubscribedPodcastPage(response: JsonObject, offset: Int): PodcastPage {
+    val rows = response.array("djRadios")
+    val totalCount = response.int("count") ?: response.int("total") ?: (offset + rows.size)
+    val hasMore = response.boolean("hasMore")
+        ?: response.boolean("more")
+        ?: (offset + rows.size < totalCount)
+    check(!hasMore || rows.isNotEmpty()) { "Podcast pagination did not advance" }
+    return PodcastPage(
+        podcasts = rows.mapNotNull(::parsePodcast),
+        hasMore = hasMore,
+        totalCount = totalCount,
+        fetchedCount = rows.size,
+    )
+}
+
 internal fun parsePodcastProgramDetail(response: JsonObject, requestedId: Long): PodcastProgram {
     val program = parseProgram(response.get("program"))
     check(program != null && program.id == requestedId && (program.mainSongId ?: 0L) > 0L) {
@@ -1784,6 +1857,24 @@ private fun parseProgram(element: JsonElement?): PodcastProgram? {
     )
 }
 
+internal fun parseCloudMusicPage(response: JsonObject, offset: Int): CloudMusicPage {
+    require(offset >= 0) { "Cloud offset must not be negative" }
+    val rows = response.get("data")?.takeIf(JsonElement::isJsonArray)?.asJsonArray
+        ?: error("NetEase did not return cloud songs")
+    val nextOffset = Math.addExact(offset, rows.size())
+    val count = response.int("count") ?: nextOffset
+    val hasMore = response.boolean("hasMore") ?: (nextOffset < count)
+    check(!hasMore || nextOffset > offset) { "Cloud pagination did not advance" }
+    return CloudMusicPage(
+        songs = rows.mapNotNull(::parseCloudSong),
+        count = count,
+        usedSize = response.long("size") ?: 0,
+        maxSize = response.long("maxSize") ?: 0,
+        hasMore = hasMore,
+        nextOffset = nextOffset,
+    )
+}
+
 private fun parseCloudSong(element: JsonElement?): CloudSong? {
     val value = element?.takeIf(JsonElement::isJsonObject)?.asJsonObject ?: return null
     val simple = value.objectOrNull("simpleSong")
@@ -1803,8 +1894,58 @@ private fun parseCloudSong(element: JsonElement?): CloudSong? {
     )
 }
 
+internal suspend fun resolveAccountConnectionArtists(
+    users: List<AccountProfile>,
+    loadProfile: suspend (Long) -> AccountProfile,
+): List<AccountProfile> = coroutineScope {
+    val requests = Semaphore(4)
+    users.map { user ->
+        async {
+            if (!user.hasVerifiedIdentity || user.artistId != null) return@async user
+            requests.withPermit {
+                try {
+                    val profile = loadProfile(user.id)
+                    user.copy(artistId = profile.artistId?.takeIf { it > 0 && profile.id == user.id })
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    user
+                }
+            }
+        }
+    }.awaitAll()
+}
+
+internal fun parseAccountConnections(
+    response: JsonObject,
+    type: AccountConnectionType,
+    offset: Int,
+    limit: Int,
+): AccountConnectionPage {
+    check(response.int("code") == 200) {
+        response.string("message") ?: response.string("msg") ?: "Account connections are unavailable"
+    }
+    val listKey = when (type) {
+        AccountConnectionType.Following -> "follow"
+        AccountConnectionType.Followers -> "followeds"
+    }
+    val data = response.element(listKey)
+    check(data?.isJsonArray == true) { "Account connections are unavailable" }
+    val rawUsers = data.asJsonArray
+    val nextOffset = (offset.toLong() + rawUsers.size()).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+    return AccountConnectionPage(
+        users = rawUsers.mapNotNull { parseAccountProfile(it.objectValue()) }
+            .filter { it.id > 0 }
+            .distinctBy(AccountProfile::id),
+        hasMore = rawUsers.size() > 0 && nextOffset > offset &&
+            (response.boolean("more") ?: (rawUsers.size() >= limit)),
+        nextOffset = nextOffset,
+    )
+}
+
 private fun parseAccountProfile(value: JsonObject?): AccountProfile? = value?.let {
     val id = it.long("userId") ?: return null
+    val artistId = it.long("artistId")?.takeIf { artistId -> artistId > 0 }
     AccountProfile(
         id = id,
         nickname = it.string("nickname") ?: "NetEase user",
@@ -1816,6 +1957,11 @@ private fun parseAccountProfile(value: JsonObject?): AccountProfile? = value?.le
         eventCount = it.int("eventCount"),
         playlistCount = it.int("playlistCount"),
         playlistSubscribedCount = it.int("playlistBeSubscribedCount"),
+        artistId = artistId,
+        hasVerifiedIdentity = artistId != null || it.int("authStatus") == 1 ||
+            (it.int("userType") ?: 0) > 0 ||
+            (it.objectOrNull("mainAuthType")?.int("type") ?: 0) > 0 ||
+            it.array("allAuthTypes").any { auth -> (auth.objectValue()?.int("type") ?: 0) > 0 },
     )
 }
 
@@ -1987,6 +2133,13 @@ private fun parseShareResource(kind: ShareResourceKind, value: JsonObject): Shar
             ShareResourceKind.Album -> value.string("picUrl")
         },
     )
+}
+
+internal fun parseListenTogetherRoomCheck(data: JsonObject?): Pair<Boolean, String?> {
+    val joinable = data?.boolean("joinable") ?: false
+    val status = data?.string("status")
+    val reason = if (joinable) status else data?.string("copywriting")?.takeIf(String::isNotBlank) ?: status
+    return joinable to reason
 }
 
 private fun parseRoom(value: JsonObject): ListenTogetherRoom = ListenTogetherRoom(

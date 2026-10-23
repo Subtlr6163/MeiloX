@@ -56,12 +56,14 @@ data class PodcastPage(
     val podcasts: List<Podcast>,
     val hasMore: Boolean,
     val totalCount: Int,
+    val fetchedCount: Int = podcasts.size,
 )
 
 data class PodcastProgramPage(
     val programs: List<PodcastProgram>,
     val hasMore: Boolean,
     val totalCount: Int,
+    val fetchedCount: Int = programs.size,
 )
 
 data class PodcastDetail(
@@ -69,6 +71,7 @@ data class PodcastDetail(
     val programs: List<PodcastProgram>,
     val hasMore: Boolean,
     val totalCount: Int,
+    val nextOffset: Int = programs.size,
 )
 
 data class CloudSong(
@@ -89,6 +92,7 @@ data class CloudMusicPage(
     val usedSize: Long,
     val maxSize: Long,
     val hasMore: Boolean,
+    val nextOffset: Int = songs.size,
 )
 
 data class MessageContact(
@@ -282,6 +286,14 @@ data class SearchDiscoveryPlaylist(
     val creatorNickname: String?,
 )
 
+enum class AccountConnectionType { Following, Followers }
+
+data class AccountConnectionPage(
+    val users: List<AccountProfile>,
+    val hasMore: Boolean,
+    val nextOffset: Int,
+)
+
 data class AccountProfile(
     val id: Long,
     val nickname: String,
@@ -293,6 +305,8 @@ data class AccountProfile(
     val eventCount: Int?,
     val playlistCount: Int?,
     val playlistSubscribedCount: Int?,
+    val artistId: Long? = null,
+    val hasVerifiedIdentity: Boolean = false,
 )
 
 data class AccountDetail(

@@ -13,6 +13,31 @@ class PlayerSheetMotionTest {
     private val mini = Rect(12f, 700f, 388f, 748f)
     private val page = Rect(0f, 0f, 400f, 800f)
 
+    @Test fun lyricHeaderArtworkKeepsExactEndpointsAndShrinksItsTopInsetOnCollapse() {
+        val source = Rect(20f, 708f, 52f, 740f)
+        val header = Rect(24f, 76f, 70f, 122f)
+        assertEquals(source, playerTopAnchoredArtworkRect(source, header, mini, page, 0f))
+        assertEquals(header, playerTopAnchoredArtworkRect(source, header, mini, page, 1f))
+        var previous = Float.POSITIVE_INFINITY
+        for (step in 100 downTo 0) {
+            val progress = step / 100f
+            val artwork = playerTopAnchoredArtworkRect(source, header, mini, page, progress)
+            val container = playerContainerRect(mini, page, progress)
+            val inset = artwork.top - container.top
+            assertTrue(inset <= previous + 0.001f)
+            assertTrue(inset >= 8f - 0.001f && inset <= 76f + 0.001f)
+            previous = inset
+        }
+    }
+
+    @Test fun lyricHeaderTopInsetReversesWithoutASecondTrajectory() {
+        val source = Rect(20f, 708f, 52f, 740f)
+        val header = Rect(24f, 76f, 70f, 122f)
+        val opening = (0..100).map { playerTopAnchoredArtworkRect(source, header, mini, page, it / 100f) }
+        val closing = (100 downTo 0).map { playerTopAnchoredArtworkRect(source, header, mini, page, it / 100f) }
+        assertEquals(opening, closing.reversed())
+    }
+
     @Test fun pressedArtworkKeepsItsActualOriginAndReachesSquareTarget() {
         val pressed = Rect(3f, 707f, 36f, 743f)
         val target = Rect(50f, 100f, 350f, 400f)
@@ -45,10 +70,12 @@ class PlayerSheetMotionTest {
         assertEquals(1f, release.fraction(0f), 0f)
     }
 
-    @Test fun pressLightFadesBeforeMiniContent() {
+    @Test fun pressLightFadesAtTheNativeBackgroundHandoff() {
         assertEquals(1f, playerPressHighlightAlpha(0f), 0f)
         assertTrue(playerPressHighlightAlpha(0.09f) > 0f)
-        assertEquals(0f, playerPressHighlightAlpha(0.1f), 0f)
+        assertTrue(playerPressHighlightAlpha(0.1f) > 0f)
+        assertTrue(playerPressHighlightAlpha(0.8f) > 0f)
+        assertEquals(0f, playerPressHighlightAlpha(PlayerBackgroundHandoffEnd), 0f)
         assertTrue(playerMiniContentAlpha(0.1f) > 0f)
         assertTrue(playerMiniContentAlpha(0.7f) > 0f)
         assertEquals(0f, playerMiniContentAlpha(0.8f), 0f)
@@ -163,6 +190,42 @@ class PlayerSheetMotionTest {
         } finally { state.dispose() }
     }
 
+    @Test fun contentVisibilityDoesNotRestartAtExpandedDragBoundaries() = runBlocking {
+        val clock = BroadcastFrameClock()
+        val state = BottomSheetState(CoroutineScope(coroutineContext + clock), 1f, {}, 0.dp, 100.dp,
+            800.dp, 800.dp, expandedAnchor)
+        try {
+            assertTrue(state.isContentVisible)
+            state.beginDrag()
+            assertFalse(state.isExpanded)
+            assertTrue(state.isContentVisible)
+            state.dispatchRawDelta(200f)
+            assertTrue(state.isContentVisible)
+            state.dispatchRawDelta(-200f)
+            assertTrue(state.isContentVisible)
+            state.cancelDrag()
+            assertTrue(state.isExpanded)
+            assertTrue(state.isContentVisible)
+        } finally { state.dispose() }
+    }
+
+    @Test fun contentUpdatesStartOnOpeningAndStopOnlyAfterCollapseSettles() = runBlocking {
+        val clock = BroadcastFrameClock()
+        val state = BottomSheetState(CoroutineScope(coroutineContext + clock), 1f, {}, 0.dp, 100.dp,
+            800.dp, 100.dp, collapsedAnchor)
+        try {
+            assertFalse(state.isContentVisible)
+            state.beginDrag()
+            assertTrue(state.isContentVisible)
+            state.dispatchRawDelta(-200f)
+            state.cancelDrag()
+            assertTrue(state.isContentVisible)
+            repeat(180) { yield(); clock.sendFrame(it * 16_666_667L); yield() }
+            assertTrue(state.isCollapsed)
+            assertFalse(state.isContentVisible)
+        } finally { state.dispose() }
+    }
+
     @Test fun reversalAndMissingRenderLayersStillReachLiveEndpoints() = runBlocking {
         val clock = BroadcastFrameClock()
         val state = BottomSheetState(CoroutineScope(coroutineContext + clock), 2f, {}, 0.dp, 100.dp,
@@ -235,6 +298,132 @@ class PlayerSheetMotionTest {
             assertFalse(state.isTransitioning)
             assertFalse(state.isDismissed)
         } finally { state.dispose() }
+    }
+
+    @Test fun restoredPlaybackReversesDismissalBeforeOrAfterItFinishes() = runBlocking {
+        for (restoreAfterFrames in listOf(0, 8, 180)) {
+            val clock = BroadcastFrameClock()
+            val state = BottomSheetState(CoroutineScope(coroutineContext + clock), 1f, {}, 0.dp, 100.dp,
+                800.dp, 100.dp, collapsedAnchor)
+            var frame = 0L
+            suspend fun frames(count: Int) {
+                repeat(count) { yield(); frame += 16_666_667L; clock.sendFrame(frame); yield() }
+            }
+            try {
+                state.syncPlaybackVisibility(false)
+                frames(restoreAfterFrames)
+                assertEquals(dismissedAnchor, state.targetAnchor)
+                assertEquals(restoreAfterFrames == 180, state.isDismissed)
+                val beforeRestore = state.value
+                state.syncPlaybackVisibility(true)
+                assertEquals(collapsedAnchor, state.targetAnchor)
+                assertEquals(beforeRestore, state.value)
+                frames(180)
+                assertTrue(state.isCollapsed)
+                assertFalse(state.isDismissed)
+                assertEquals(100.dp, state.value)
+            } finally { state.dispose() }
+        }
+    }
+
+    @Test fun playbackVisibilityUpdatesPreserveExpansionAndUserDragging() = runBlocking {
+        val clock = BroadcastFrameClock()
+        val anchors = mutableListOf<Int>()
+        val state = BottomSheetState(CoroutineScope(coroutineContext + clock), 1f, { anchors += it },
+            0.dp, 100.dp, 800.dp, 100.dp, collapsedAnchor)
+        var frame = 0L
+        suspend fun frames(count: Int) {
+            repeat(count) { yield(); frame += 16_666_667L; clock.sendFrame(frame); yield() }
+        }
+        try {
+            state.expandSoft()
+            frames(8)
+            assertTrue(state.progress > 0f && state.progress < 1f)
+            val expandingValue = state.value
+            repeat(3) { state.syncPlaybackVisibility(true) }
+            assertEquals(expandingValue, state.value)
+            assertEquals(listOf(expandedAnchor), anchors)
+            frames(180)
+            assertTrue(state.isExpanded)
+            repeat(3) { state.syncPlaybackVisibility(true) }
+            assertTrue(state.isExpanded)
+            assertEquals(listOf(expandedAnchor), anchors)
+
+            state.beginDrag()
+            state.dispatchRawDelta(200f)
+            val draggingValue = state.value
+            repeat(3) { state.syncPlaybackVisibility(true) }
+            assertTrue(state.isDragging)
+            assertEquals(draggingValue, state.value)
+            assertEquals(listOf(expandedAnchor), anchors)
+            state.cancelDrag()
+            frames(180)
+            assertTrue(state.isExpanded)
+        } finally { state.dispose() }
+    }
+
+    @Test fun clearingPlaybackWhileThePlayerOpensFinishesDismissal() = runBlocking {
+        for (initialAnchor in listOf(dismissedAnchor, collapsedAnchor)) {
+            for (clearAfterFrames in listOf(0, 8)) {
+                val clock = BroadcastFrameClock()
+                val initialValue = if (initialAnchor == dismissedAnchor) 0.dp else 100.dp
+                val state = BottomSheetState(CoroutineScope(coroutineContext + clock), 1f, {},
+                    0.dp, 100.dp, 800.dp, initialValue, initialAnchor)
+                var frame = 0L
+                suspend fun frames(count: Int) {
+                    repeat(count) { yield(); frame += 16_666_667L; clock.sendFrame(frame); yield() }
+                }
+                try {
+                    if (initialAnchor == dismissedAnchor) state.syncPlaybackVisibility(true)
+                    else state.expandSoft()
+                    frames(clearAfterFrames)
+                    assertFalse(state.isDismissed)
+                    state.syncPlaybackVisibility(false)
+                    assertEquals(dismissedAnchor, state.targetAnchor)
+                    frames(180)
+                    assertTrue(state.isDismissed)
+                    assertEquals(0.dp, state.value)
+                } finally { state.dispose() }
+            }
+        }
+    }
+
+    @Test fun changingNavigationAnchorDuringCollapseKeepsTheFullPlayerTransition() = runBlocking {
+        for (framesBeforeNavigation in listOf(0, 8)) {
+            val clock = BroadcastFrameClock()
+            val scope = CoroutineScope(coroutineContext + clock)
+            val previous = BottomSheetState(scope, 1f, {}, 0.dp, 150.dp,
+                800.dp, 800.dp, expandedAnchor)
+            var replacement: BottomSheetState? = null
+            var frame = 0L
+            suspend fun frames(count: Int) {
+                repeat(count) { yield(); frame += 16_666_667L; clock.sendFrame(frame); yield() }
+            }
+            try {
+                previous.collapseSoft()
+                frames(framesBeforeNavigation)
+                val current = BottomSheetState(scope, 1f, {}, 0.dp, 100.dp,
+                    800.dp, previous.value, previous.targetAnchor,
+                    previouslyShown = previous.hasBeenShown,
+                    previouslyCollapsed = previous.isCollapsed)
+                replacement = current
+                previous.dispose()
+                assertFalse(current.isCollapsed)
+                assertTrue(current.isTransitioning)
+                assertTrue(current.isContentVisible)
+                assertTrue(current.progress > 0f)
+                assertEquals(previous.value, current.value)
+                current.relocate()
+                assertTrue(current.isTransitioning)
+                frames(180)
+                assertEquals(100.dp, current.value)
+                assertTrue(current.isCollapsed)
+                assertFalse(current.isTransitioning)
+            } finally {
+                previous.dispose()
+                replacement?.dispose()
+            }
+        }
     }
 
     @Test fun movingCollapsedNavigationAnchorDoesNotOpenThePlayer() = runBlocking {

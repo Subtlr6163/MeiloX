@@ -3,6 +3,7 @@ package com.ljyh.mei.data.model
 import com.google.gson.Gson
 import com.ljyh.mei.constants.MusicQuality
 import com.ljyh.mei.data.model.api.GetSongUrlV1
+import com.ljyh.mei.data.model.weapi.EveryDaySongs
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -11,6 +12,30 @@ import org.junit.Test
 
 class SongAudioAvailabilityTest {
     private val gson = Gson()
+
+    @Test
+    fun playlistAndDailySongsAcceptMissingEmptyAndPresentTranslations() {
+        for ((translations, expected) in listOf("null" to null, "[]" to null, "[\"Translation\"]" to "Translation")) {
+            val json = """{"id":1,"name":"Song","ar":[],"al":{"id":2,"name":"Album","picUrl":""},"tns":$translations}"""
+            assertEquals(expected, gson.fromJson(json, PlaylistDetail.Playlist.Track::class.java).toMediaMetadata().tns)
+            assertEquals(expected, gson.fromJson(json, EveryDaySongs.Data.DailySong::class.java).toMediaMetadata().tns)
+        }
+    }
+
+    @Test
+    fun albumSongMetadataRetainsDistinctLongAlbumIdentity() {
+        val song = gson.fromJson(
+            """{"id":3447570734,"name":"Track title","dt":180000,"ar":[{"id":1,"name":"Artist"}],"al":{"id":3000000001,"name":"Album title","pic":123}}""",
+            AlbumDetail.Song::class.java,
+        )
+
+        val metadata = song.toMediaMetadata()
+
+        assertEquals(3_447_570_734L, metadata.id)
+        assertEquals("Track title", metadata.title)
+        assertEquals(3_000_000_001L, metadata.album.id)
+        assertEquals("Album title", metadata.album.title)
+    }
 
     @Test
     fun missingOrNullResourceFieldsDoNotInventQualities() {

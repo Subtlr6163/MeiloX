@@ -20,8 +20,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import com.ljyh.mei.R
 import com.ljyh.mei.constants.AutoMixDurationKey
 import com.ljyh.mei.constants.AutoMixEnabledKey
@@ -38,12 +41,23 @@ import com.ljyh.mei.constants.CloudShuffleEnabledKey
 import com.ljyh.mei.constants.MusicQuality
 import com.ljyh.mei.constants.MusicQualityKey
 import com.ljyh.mei.constants.NoAudioSourceKey
+import com.ljyh.mei.constants.NotificationAction
+import com.ljyh.mei.constants.NotificationLeftActionKey
+import com.ljyh.mei.constants.NotificationRightActionKey
 import com.ljyh.mei.constants.PreviousPlaybackKey
+import com.ljyh.mei.constants.RestorePlaybackPositionKey
+import com.ljyh.mei.constants.RestorePlaybackStateKey
+import com.ljyh.mei.ui.component.player.hasFloatingLyricsBackgroundPermission
+import com.ljyh.mei.ui.component.player.isXiaomiFloatingLyricsPermissionRequired
+import com.ljyh.mei.ui.component.player.openFloatingLyricsPermissionSettings
 import com.ljyh.mei.ui.glass.GlassCard
 import com.ljyh.mei.ui.glass.GlassIconButton
 import com.ljyh.mei.ui.glass.GlassSegmentedControl
 import com.ljyh.mei.ui.glass.GlassSlider
 import com.ljyh.mei.ui.glass.GlassToggle
+import com.ljyh.mei.ui.glass.IosAlertButtonRole
+import com.ljyh.mei.ui.glass.IosAlertButtonSpec
+import com.ljyh.mei.ui.glass.IosAlertDialog
 import com.ljyh.mei.ui.glass.IosPinnedListPage
 import com.ljyh.mei.ui.glass.IosPopupButton
 import com.ljyh.mei.ui.glass.LocalGlassColors
@@ -51,6 +65,7 @@ import com.ljyh.mei.ui.glass.SfIcon
 import com.ljyh.mei.ui.glass.SfSymbol
 import com.ljyh.mei.ui.local.LocalNavController
 import com.ljyh.mei.ui.local.LocalPlayerAwareWindowInsets
+import com.ljyh.mei.ui.local.LocalPlayerConnection
 import com.ljyh.mei.ui.screen.Screen
 import com.ljyh.mei.utils.rememberEnumPreference
 import com.ljyh.mei.utils.rememberPreference
@@ -61,11 +76,17 @@ import kotlin.math.roundToInt
 fun PlaySetting(
     @Suppress("UNUSED_PARAMETER") scrollBehavior: TopAppBarScrollBehavior,
 ) {
+    val context = LocalContext.current
     val navController = LocalNavController.current
+    val playerConnection = LocalPlayerConnection.current
     val (musicQuality, onMusicQualityChange) = rememberEnumPreference(MusicQualityKey, MusicQuality.EXHIGH)
     val (loopPlayback, onLoopPlaybackChange) = rememberPreference(LoopPlaybackKey, true)
     val (cloudShuffle, onCloudShuffleChange) = rememberPreference(CloudShuffleEnabledKey, true)
     val (previousPlayback, onPreviousPlaybackChange) = rememberPreference(PreviousPlaybackKey, true)
+    val (restorePlaybackPosition, onRestorePlaybackPositionChange) = rememberPreference(RestorePlaybackPositionKey, true)
+    val (restorePlaybackState, onRestorePlaybackStateChange) = rememberPreference(RestorePlaybackStateKey, true)
+    val (notificationLeftAction, onNotificationLeftActionChange) = rememberEnumPreference(NotificationLeftActionKey, NotificationAction.PlayMode)
+    val (notificationRightAction, onNotificationRightActionChange) = rememberEnumPreference(NotificationRightActionKey, NotificationAction.Like)
     val (noAudioSource, onNoAudioSourceChange) = rememberPreference(NoAudioSourceKey, false)
     val (autoMixEnabled, onAutoMixEnabledChange) = rememberPreference(AutoMixEnabledKey, false)
     val (autoMixMode, onAutoMixModeChange) = rememberEnumPreference(AutoMixModeKey, AutoMixMode.Smart)
@@ -80,6 +101,24 @@ fun PlaySetting(
     var maximumTempoPreview by remember { mutableStateOf<Float?>(null) }
     val autoMixDuration = autoMixDurationPreview ?: storedAutoMixDuration
     val maximumTempo = maximumTempoPreview ?: storedMaximumTempo
+    val requiresXiaomiFloatingLyricsPermission = remember { isXiaomiFloatingLyricsPermissionRequired() }
+    val floatingLyricsPermissionDescription = stringResource(
+        if (requiresXiaomiFloatingLyricsPermission) R.string.notification_floating_lyrics_background_permission_description_xiaomi
+        else R.string.notification_floating_lyrics_background_permission_description,
+    )
+    var floatingLyricsBackgroundAllowed by remember(context) {
+        mutableStateOf(hasFloatingLyricsBackgroundPermission(context))
+    }
+    var showFloatingLyricsPermission by remember { mutableStateOf(false) }
+    val checkFloatingLyricsPermission: (NotificationAction) -> Unit = { action ->
+        if (action == NotificationAction.FloatingLyrics) {
+            floatingLyricsBackgroundAllowed = hasFloatingLyricsBackgroundPermission(context)
+            showFloatingLyricsPermission = !floatingLyricsBackgroundAllowed
+        }
+    }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        floatingLyricsBackgroundAllowed = hasFloatingLyricsBackgroundPermission(context)
+    }
 
     IosPinnedListPage(
         title = stringResource(R.string.playback_settings),
@@ -102,13 +141,82 @@ fun PlaySetting(
                 )
                 ToggleRow(stringResource(R.string.skip_unavailable), "waveform.slash", noAudioSource, onNoAudioSourceChange)
                 ToggleRow(stringResource(R.string.previous_behavior), "backward.fill", previousPlayback, onPreviousPlaybackChange)
+                ToggleRow(
+                    stringResource(R.string.restore_playback_position), "arrow.counterclockwise",
+                    restorePlaybackPosition, onRestorePlaybackPositionChange,
+                    description = stringResource(R.string.restore_playback_position_description),
+                )
+                ToggleRow(
+                    stringResource(R.string.restore_playback_state), "play.fill",
+                    restorePlaybackState, onRestorePlaybackStateChange,
+                    description = stringResource(R.string.restore_playback_state_description),
+                )
                 ValueRow(stringResource(R.string.music_quality), "waveform") {
                     IosPopupButton(
                         selected = musicQuality,
                         items = MusicQuality.entries,
-                        onSelected = onMusicQualityChange,
+                        onSelected = { quality ->
+                            if (quality != musicQuality) {
+                                if (playerConnection != null) {
+                                    playerConnection.changeQuality(quality, preferOnlineSource = false)
+                                } else {
+                                    onMusicQualityChange(quality)
+                                }
+                            }
+                        },
                         label = { "${it.explanation} · ${it.text}" },
                     )
+                }
+            }
+        }
+        item {
+            SettingsGroup(stringResource(R.string.notification_controls)) {
+                ValueRow(stringResource(R.string.notification_left_action), notificationLeftAction.systemName) {
+                    IosPopupButton(
+                        selected = notificationLeftAction,
+                        items = NotificationAction.entries,
+                        onSelected = { action ->
+                            onNotificationLeftActionChange(action)
+                            checkFloatingLyricsPermission(action)
+                        },
+                        label = { stringResource(it.labelRes) },
+                    )
+                }
+                ValueRow(stringResource(R.string.notification_right_action), notificationRightAction.systemName) {
+                    IosPopupButton(
+                        selected = notificationRightAction,
+                        items = NotificationAction.entries,
+                        onSelected = { action ->
+                            onNotificationRightActionChange(action)
+                            checkFloatingLyricsPermission(action)
+                        },
+                        label = { stringResource(it.labelRes) },
+                    )
+                }
+                if (notificationLeftAction == NotificationAction.FloatingLyrics || notificationRightAction == NotificationAction.FloatingLyrics) {
+                    GlassCard(
+                        Modifier.fillMaxWidth(),
+                        onClick = { openFloatingLyricsPermissionSettings(context) },
+                    ) {
+                        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                            SfIcon("text.rectangle", contentDescription = null)
+                            Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
+                                Text(stringResource(R.string.notification_floating_lyrics_background_permission))
+                                Text(
+                                    floatingLyricsPermissionDescription,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Text(
+                                stringResource(
+                                    if (floatingLyricsBackgroundAllowed) R.string.notification_floating_lyrics_permission_allowed
+                                    else R.string.notification_floating_lyrics_permission_allow,
+                                ),
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -165,6 +273,27 @@ fun PlaySetting(
                 }
             }
         }
+    }
+    if (showFloatingLyricsPermission) {
+        IosAlertDialog(
+            onDismissRequest = { showFloatingLyricsPermission = false },
+            title = stringResource(R.string.notification_floating_lyrics_background_permission),
+            message = floatingLyricsPermissionDescription,
+            buttons = listOf(
+                IosAlertButtonSpec(
+                    label = stringResource(R.string.notification_floating_lyrics_permission_later),
+                    role = IosAlertButtonRole.Cancel,
+                    onClick = { showFloatingLyricsPermission = false },
+                ),
+                IosAlertButtonSpec(
+                    label = stringResource(R.string.pc_qr_login_open_settings),
+                    onClick = {
+                        showFloatingLyricsPermission = false
+                        openFloatingLyricsPermissionSettings(context)
+                    },
+                ),
+            ),
+        )
     }
 }
 

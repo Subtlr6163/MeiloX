@@ -80,6 +80,8 @@ class PlayerConnection(
     val currentMediaItemIndex = MutableStateFlow(-1)
     val currentWindowIndex = MutableStateFlow(-1)
     val isFMMode = MutableStateFlow(service.isFmMode())
+    val queueAutoplayEnabled = service.queueManager.queueAutoplayEnabled
+    val queueAutoplayStartEntryId = service.queueManager.queueAutoplayStartEntryId
 
     // 这里 repeatMode 我们存储对应的 PlayMode 枚举值(int)，用于 UI 显示
     val repeatMode = MutableStateFlow(PlayMode.SHUFFLE_MODE_ALL.mode)
@@ -92,6 +94,8 @@ class PlayerConnection(
     val error = MutableStateFlow<PlaybackException?>(null)
     val availableMusicQualities = service.availableMusicQualities
     val currentMusicQuality = service.currentMusicQuality
+    val localPlaybackInfo = service.localPlaybackInfo
+    val isPlayingLocalSource = service.isPlayingLocalSource
     val isLoadingMusicQualities = service.isLoadingMusicQualities
 
     private var qualityChangeJob: Job? = null
@@ -118,17 +122,21 @@ class PlayerConnection(
         return mediaMetadata.value?.id.toString() == id && isPlaying.value
     }
     fun onTrackClicked(trackId: String, buildQueue: () -> ListQueue?) {
-        val foundIndex = player.mediaItems.indexOfFirst { it.mediaId == trackId }
-        val foundItem = player.mediaItems.getOrNull(foundIndex)
-        if (foundItem != null && isPlayableMediaItem(foundItem)) {
-            player.seekToDefaultPosition(foundIndex)
-            player.play()
-        } else {
-            buildQueue()?.let {
-                playQueue(it)
-            }
-
+        // A song may also exist in a restored or unrelated queue. The tapped list owns
+        // this playback intent, while the user's current playback modes still apply.
+        val selectedQueue = buildQueue()?.startingAt(trackId)
+        if (selectedQueue != null) {
+            playQueue(selectedQueue, repeatMode = player.repeatMode)
+            return
         }
+        // A partially loaded list can still start the exact song. Reuse known local
+        // metadata without retaining the old queue or resolving a local ID online.
+        val knownItem = player.mediaItems.firstOrNull { it.mediaId == trackId }
+        if (knownItem?.let(::isPlayableMediaItem) != true && (trackId.toLongOrNull() ?: 0L) <= 0L) return
+        playQueue(
+            ListQueue(id = "track_$trackId", items = listOf(trackId to knownItem)),
+            repeatMode = player.repeatMode,
+        )
     }
 
     fun fmStart(firstSongId: String? = null) {
@@ -153,15 +161,23 @@ class PlayerConnection(
         }
     }.await()
 
+    fun setQueueAutoplayEnabled(enabled: Boolean): Boolean {
+        val accepted = service.queueManager.setQueueAutoplayEnabled(enabled)
+        isFMMode.value = service.isFmMode()
+        updateCanSkipPreviousAndNext()
+        if (accepted) service.schedulePlaybackSnapshot()
+        return accepted
+    }
 
-    fun playQueue(queue: ListQueue, shuffle: Boolean? = null) {
+
+    fun playQueue(queue: ListQueue, shuffle: Boolean? = null, repeatMode: Int = REPEAT_MODE_ALL) {
         // 判断当前 UI 上的模式是否是随机模式
-        val startInShuffle = shuffle ?: (repeatMode.value == PlayMode.SHUFFLE_MODE_ALL.mode)
+        val startInShuffle = shuffle ?: (this.repeatMode.value == PlayMode.SHUFFLE_MODE_ALL.mode)
         service.queueTitle = queue.title
         queueTitle.value = queue.title
         // 调用新的 playQueue 方法，传入随机意图
         service.scope.launch {
-            service.queueManager.playQueue(queue, startInShuffleMode = startInShuffle)
+            service.queueManager.playQueue(queue, startInShuffleMode = startInShuffle, repeatMode = repeatMode)
         }
     }
     fun playNext(item: MediaItem) = playNext(listOf(item))
@@ -178,20 +194,47 @@ class PlayerConnection(
 
     fun refreshAvailableMusicQualities() = service.refreshAvailableMusicQualities()
 
-    fun changeQuality(quality: MusicQuality) {
+    fun changeQuality(quality: MusicQuality, preferOnlineSource: Boolean = true) {
         qualityChangeJob?.cancel()
+        val selectedItem = player.currentMediaItem
+        val mediaId = selectedItem?.mediaId
+        val entryId = selectedItem?.queueEntryId
+        val index = player.currentMediaItemIndex
         qualityChangeJob = scope.launch {
             service.dataStore.edit { it[MusicQualityKey] = quality.name }
             currentCoroutineContext().ensureActive()
 
-            val index = player.currentMediaItemIndex
-            if (player.currentMediaItem == null) return@launch
-            if (index !in 0 until player.mediaItemCount) return@launch
+            val currentItem = player.currentMediaItem
+            if (mediaId == null || currentItem?.mediaId != mediaId || currentItem?.queueEntryId != entryId ||
+                player.currentMediaItemIndex != index || index !in 0 until player.mediaItemCount
+            ) return@launch
             val position = player.currentPosition
             val shouldPlay = player.playWhenReady
 
             // Keep the playlist intact, but force every source that may have been
             // prepared at the previous quality to be discarded.
+            if (preferOnlineSource) service.mediaUriProvider.preferOnlineSource(mediaId)
+            service.resetRejectedPlaybackSources()
+            service.refreshPlaybackSource(index, position, shouldPlay, refreshQueuedSources = true)
+        }
+    }
+
+    fun useLocalSource() {
+        qualityChangeJob?.cancel()
+        val selectedItem = player.currentMediaItem
+        val mediaId = selectedItem?.mediaId
+        val entryId = selectedItem?.queueEntryId
+        val index = player.currentMediaItemIndex
+        qualityChangeJob = scope.launch {
+            val currentItem = player.currentMediaItem
+            if (mediaId == null || currentItem?.mediaId != mediaId || currentItem?.queueEntryId != entryId ||
+                player.currentMediaItemIndex != index || index !in 0 until player.mediaItemCount
+            ) return@launch
+            if (service.localPlaybackInfo.value == null || service.isPlayingLocalSource.value) return@launch
+            val position = player.currentPosition
+            val shouldPlay = player.playWhenReady
+
+            service.mediaUriProvider.preferLocalSource(mediaId)
             service.resetRejectedPlaybackSources()
             service.refreshPlaybackSource(index, position, shouldPlay)
         }
@@ -220,44 +263,7 @@ class PlayerConnection(
         if (!player.playWhenReady) player.playWhenReady = true
     }
 
-    /**
-     * 切换播放模式
-     * 逻辑：列表循环 (REPEAT_ALL) -> 随机播放 (SHUFFLE) -> 单曲循环 (REPEAT_ONE) -> ...
-     */
-    fun switchPlayMode() {
-        // 基于当前的 UI 状态决定下一步
-        // 注意：这里不需要返回 Int，因为操作完 Player 后，ExoPlayer 会回调 Listener，
-        // Listener 会调用 updatePlayModeState() 更新 repeatMode Flow，
-        // UI 观察 Flow 自动变化。这样才可靠。
-
-        val currentUiMode = PlayMode.fromInt(repeatMode.value) ?: PlayMode.REPEAT_MODE_ALL
-
-        // 判断用户是否开启了“列表循环”设置
-        // 如果开启：列表模式 = REPEAT_MODE_ALL
-        // 如果关闭：列表模式 = REPEAT_MODE_OFF (播完停止)
-        val shouldLoopAll = service.dataStore[LoopPlaybackKey] == true
-
-        when (currentUiMode) {
-            PlayMode.REPEAT_MODE_ALL -> {
-                // 当前是列表 -> 切换到 随机
-                // 行为：开启随机，且通常随机模式下也是列表循环的
-                service.setShuffleModeEnabled(true)
-                player.repeatMode = if (shouldLoopAll) REPEAT_MODE_ALL else REPEAT_MODE_OFF
-            }
-            PlayMode.SHUFFLE_MODE_ALL -> {
-                // 当前是随机 -> 切换到 单曲
-                // 行为：关闭随机，开启单曲循环
-                service.setShuffleModeEnabled(false)
-                player.repeatMode = REPEAT_MODE_ONE
-            }
-            PlayMode.REPEAT_MODE_ONE -> {
-                // 当前是单曲 -> 切换到 列表
-                // 行为：关闭随机，开启列表循环(或不循环)
-                service.setShuffleModeEnabled(false)
-                player.repeatMode = if (shouldLoopAll) REPEAT_MODE_ALL else REPEAT_MODE_OFF
-            }
-        }
-    }
+    fun switchPlayMode() = service.switchPlayMode()
 
 
     // --- Listeners ---

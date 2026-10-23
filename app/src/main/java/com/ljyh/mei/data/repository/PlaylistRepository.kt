@@ -18,6 +18,9 @@ import com.ljyh.mei.data.model.api.GetSongUrlV1
 import com.ljyh.mei.data.model.api.ManipulateTrack
 import com.ljyh.mei.data.model.api.ManipulateTrackResult
 import com.ljyh.mei.data.model.api.SubscribePlaylist
+import com.ljyh.mei.data.model.api.UpdatePlaylistTrackOrder
+import com.ljyh.mei.data.model.validatePlaylistTrackOrder
+import com.ljyh.mei.data.model.requireValidAlbumDetail
 import com.ljyh.mei.data.model.toMediaMetadata
 import com.ljyh.mei.data.model.weapi.EveryDaySongs
 import com.ljyh.mei.data.model.weapi.HighQualityPlaylist
@@ -27,6 +30,9 @@ import com.ljyh.mei.data.network.Resource
 import com.ljyh.mei.data.network.api.EApiService
 import com.ljyh.mei.data.network.api.WeApiService
 import com.ljyh.mei.data.network.safeApiCall
+import com.ljyh.mei.data.network.neteaseSessionFingerprint
+import com.ljyh.mei.playback.effectivePlaybackQuality
+import com.ljyh.mei.playback.isSupportedPlaybackQuality
 import com.ljyh.mei.playback.playbackQualityFallbacks
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -34,10 +40,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import timber.log.Timber
 
 class PlaylistRepository(
@@ -49,11 +58,60 @@ class PlaylistRepository(
     private val onUnsubscribed: suspend (String) -> Unit = {},
     private val subscriptionScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val onTracksChanged: suspend (Set<Long>, String) -> Unit = { _, _ -> },
 ) {
     private val _collectionChanges = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val collectionChanges = _collectionChanges.asSharedFlow()
     private val subscriptionLock = Any()
     private val subscriptions = mutableMapOf<SubscriptionKey, SubscriptionEntry>()
+    private val trackOrderMutex = Mutex()
+
+    suspend fun loadPlaylistForOrder(
+        id: String,
+        ownerUserId: Long,
+        expectedSession: String,
+    ): PlaylistDetail = withContext(ioDispatcher) {
+        requireOrderSession(expectedSession)
+        val detail = apiService.getPlaylistDetail(GetPlaylistDetail(id = id, n = "200"), expectedSession)
+        requireOrderSession(expectedSession)
+        check(detail.code == 200 && detail.playlist.Id.toString() == id &&
+            detail.playlist.creator.userId == ownerUserId) { "Playlist ownership changed" }
+        detail
+    }
+
+    suspend fun updatePlaylistTrackOrder(
+        id: String,
+        originalIds: List<Long>,
+        orderedIds: List<Long>,
+        ownerUserId: Long,
+        expectedSession: String,
+        isCurrent: () -> Boolean,
+    ): BaseResponse = withContext(ioDispatcher) {
+        trackOrderMutex.withLock {
+            validatePlaylistTrackOrder(originalIds, orderedIds, originalIds)
+            check(isCurrent()) { "Playlist editor is no longer current" }
+            // Read the API directly: subscription reads may wait on their own pending write.
+            val detail = loadPlaylistForOrder(id, ownerUserId, expectedSession)
+            val playlist = detail.playlist
+            validatePlaylistTrackOrder(originalIds, orderedIds, playlist.trackIds.map { it.id })
+            requireOrderSession(expectedSession)
+            check(isCurrent()) { "Playlist editor changed before saving" }
+            val response = apiService.updatePlaylistTrackOrder(
+                UpdatePlaylistTrackOrder(id, orderedIds), expectedSession,
+            )
+            check(response.code == 200) { "Playlist order update failed (${response.code})" }
+            requireOrderSession(expectedSession)
+            _collectionChanges.emit(Unit)
+            response
+        }
+    }
+
+    private fun requireOrderSession(expectedSession: String) {
+        val credential = subscriptionAccount()
+        check(credential.isNotBlank() && neteaseSessionFingerprint(credential) == expectedSession) {
+            "NetEase account changed during playlist editing"
+        }
+    }
 
     private data class SubscriptionKey(val account: String, val playlistId: String)
 
@@ -238,7 +296,9 @@ class PlaylistRepository(
 
                 responseCode = response.code
                 response.fullSourcesFor(requestedIds.toSet()).forEach { source ->
-                    fullSourcesById.putIfAbsent(source.id.toString(), source)
+                    if (isSupportedPlaybackQuality(effectivePlaybackQuality(source.level, attemptedQuality))) {
+                        fullSourcesById.putIfAbsent(source.id.toString(), source)
+                    }
                 }
                 if (fullSourcesById.size == requestedIds.size) break
             }
@@ -259,17 +319,41 @@ class PlaylistRepository(
         trackIds: String,
         imme: Boolean = true
     ): Resource<ManipulateTrackResult> {
-        return withContext(Dispatchers.IO) {
-            safeApiCall {
-                apiService.manipulateTracks(
+        val account = subscriptionAccount()
+        if (account.isBlank()) return Resource.Error("An authenticated session is required")
+        val expectedSession = neteaseSessionFingerprint(account)
+        return withContext(ioDispatcher) {
+            val result = safeApiCall {
+                check(subscriptionAccount() == account) { "NetEase account changed during playlist update" }
+                val response = apiService.manipulateTracks(
                     ManipulateTrack(
                         op = op,
                         pid = pid,
                         trackIds = trackIds,
                         imme = imme
-                    )
+                    ),
+                    expectedSession,
                 )
+                check(subscriptionAccount() == account) { "NetEase account changed during playlist update" }
+                response
             }
+            if (result is Resource.Success &&
+                (result.data.code == 200 || (op == "add" && result.data.code == 502))
+            ) {
+                val ids = trackIds.split(',').mapNotNull { it.trim().toLongOrNull()?.takeIf { id -> id > 0 } }.toSet()
+                if (ids.isNotEmpty()) {
+                    try {
+                        // Finish syncing an accepted write even if its screen has closed.
+                        withContext(NonCancellable) { onTracksChanged(ids, expectedSession) }
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Exception) {
+                        Timber.w(error, "Unable to refresh song likes after playlist update")
+                    }
+                }
+                if (subscriptionAccount() != account) return@withContext Resource.Error("NetEase account changed during playlist update")
+            }
+            result
         }
     }
 
@@ -355,7 +439,7 @@ class PlaylistRepository(
             safeApiCall {
                 apiService.getAlbumDetail(
                     id = id
-                )
+                ).requireValidAlbumDetail()
             }
         }
     }

@@ -24,8 +24,7 @@ internal fun PlayerTransitionGlass(
     expandedCornerRadius: Float,
 ) {
     val appearance = LocalMiniPlayerAppearance.current
-    val tint = appearance?.let { defaultGlassColors(it).container }
-        ?: LocalGlassColors.current.container
+    val colors = appearance?.let { defaultGlassColors(it) } ?: LocalGlassColors.current
     val recording = remember(renderer) { SheetGlassCoordinates() }
     Canvas(Modifier.fillMaxSize().onGloballyPositioned { recording.coordinates = it }) {
         val coordinates = recording.coordinates ?: return@Canvas
@@ -37,6 +36,7 @@ internal fun PlayerTransitionGlass(
         val radius = playerContainerCornerRadius(
             layers.sourceContainer.height / 2f, expandedCornerRadius, p,
         ).coerceIn(0f, bounds.size.minDimension / 2f)
+        val pressHighlight = layers.transitionPressHighlight
         renderer.draw(
             scope = this,
             coordinates = coordinates,
@@ -45,8 +45,13 @@ internal fun PlayerTransitionGlass(
             bounds = bounds,
             radius = radius,
             shape = ContinuousRoundedRectangle(radius.toDp()),
-            tint = tint,
-            highlightAlpha = 0.5f * (0.54f + 0.38f * layers.transitionPressHighlight.progress),
+            tint = colors.container,
+            navigationMaterial = true,
+            dropShadowAlpha = 1f - playerBackgroundAlpha(p),
+            isDark = colors.isDark,
+            highlightAlpha = 0.5f * 0.54f,
+            pressHighlight = pressHighlight,
+            pressHighlightBounds = layers.transitionPressHighlightBounds.translate(-layers.hostBounds.topLeft),
         )
     }
 }

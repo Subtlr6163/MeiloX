@@ -15,14 +15,17 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -34,11 +37,14 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -47,6 +53,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -58,7 +65,9 @@ import androidx.media3.common.util.UnstableApi
 import coil3.compose.AsyncImage
 import com.kyant.backdrop.backdrops.rememberCanvasBackdrop
 import com.kyant.capsule.ContinuousRoundedRectangle
+import com.kyant.shapes.Capsule
 import com.ljyh.mei.R
+import com.ljyh.mei.constants.DetailPageHorizontalPadding
 import com.ljyh.mei.data.model.api.ArtistDetail
 import com.ljyh.mei.data.model.toMediaItem
 import com.ljyh.mei.data.model.toMediaMetadata
@@ -66,23 +75,22 @@ import com.ljyh.mei.data.network.Resource
 import com.ljyh.mei.playback.queue.ListQueue
 import com.ljyh.mei.ui.component.item.Track
 import com.ljyh.mei.ui.component.playlist.CoverBackground
+import com.ljyh.mei.ui.component.playlist.FavoriteTrackStar
 import com.ljyh.mei.ui.component.playlist.rememberCoverBackground
+import com.ljyh.mei.ui.component.playlist.rememberFavoriteTrackIds
 import com.ljyh.mei.ui.component.player.OverlayState
 import com.ljyh.mei.ui.component.shimmer.ListItemPlaceHolder
 import com.ljyh.mei.ui.component.shimmer.ShimmerHost
 import com.ljyh.mei.ui.component.shimmer.TextPlaceholder
 import com.ljyh.mei.ui.glass.GlassButton
-import com.ljyh.mei.ui.glass.GlassEmphasis
-import com.ljyh.mei.ui.glass.GlassIconButton
-import com.ljyh.mei.ui.glass.GlassSurfaceStyle
 import com.ljyh.mei.ui.glass.IosListRow
+import com.ljyh.mei.ui.glass.IosPageHorizontalPadding
 import com.ljyh.mei.ui.glass.IosPinnedPage
 import com.ljyh.mei.ui.glass.IosTypography
 import com.ljyh.mei.ui.glass.LocalGlassColors
 import com.ljyh.mei.ui.glass.LocalGlassBackdrop
 import com.ljyh.mei.ui.glass.LocalBlurBackdrop
 import com.ljyh.mei.ui.glass.defaultGlassColors
-import com.ljyh.mei.ui.glass.SheetGroupedListBackgroundAlpha
 import com.ljyh.mei.ui.glass.SfIcon
 import com.ljyh.mei.ui.glass.SfSymbol
 import com.ljyh.mei.ui.local.LocalNavController
@@ -95,6 +103,7 @@ import com.ljyh.mei.ui.screen.Screen
 import com.ljyh.mei.ui.screen.playlist.component.StandaloneTrackActionOverlay
 import com.ljyh.mei.ui.theme.LocalAccentSeedColor
 import com.ljyh.mei.ui.theme.MusicTheme
+import com.ljyh.mei.utils.color.ColorExtractionUtils
 import kotlinx.coroutines.CancellationException
 import java.util.UUID
 
@@ -110,7 +119,8 @@ fun ArtistScreen(
 
     val artistDetail by viewModel.artistDetail.collectAsState()
     val artistAlbums by viewModel.artistAlbums.collectAsState()
-    val artistSongs by viewModel.artistSongs.collectAsState()
+    // Lazy content and its derived tracks must capture the same response snapshot.
+    val artistSongs = viewModel.artistSongs.collectAsState().value
     val followMutation by viewModel.followMutation.collectAsState()
     val confirmedFollowed by viewModel.confirmedFollowed.collectAsState()
     val isFollowed = resolveArtistFollowed(id, artistSongs, artistAlbums, confirmedFollowed)
@@ -124,12 +134,12 @@ fun ArtistScreen(
         artist.cover.takeIf(String::isNotBlank) ?: artist.avatar
     }.orEmpty()
     val hotSongs = (artistSongs as? Resource.Success)?.data?.hotSongs.orEmpty()
+    val hotTracks = remember(hotSongs) { hotSongs.map { it.toMediaMetadata() } }
+    val favoriteTrackIds = rememberFavoriteTrackIds(hotTracks)
 
     val scrollState = rememberLazyListState()
     LaunchedEffect(id) {
-        viewModel.getArtistDetail(id)
-        viewModel.getArtistAlbums(id)
-        viewModel.getArtistSongs(id)
+        viewModel.loadArtistIfNeeded(id)
     }
 
     ArtistCoverTheme(
@@ -137,6 +147,15 @@ fun ArtistScreen(
         coverUrl = heroCover,
         viewModel = viewModel,
     ) { background ->
+        val separatorColor = LocalGlassColors.current.content.copy(alpha = 0.16f)
+        val headerAccent = remember(background.seedColor, background.color, background.endColor) {
+            ColorExtractionUtils.detailAccentColor(
+                // Neutral artwork or unavailable extraction must not inherit another cover's accent.
+                seedColor = background.seedColor ?: Color.Gray,
+                backgroundColor = background.color,
+                backgroundEndColor = background.endColor,
+            )
+        }
         BoxWithConstraints(Modifier.fillMaxSize()) {
             // The square hero follows the actual page width, including split-screen resizing.
             val heroHeightPx = with(LocalDensity.current) { maxWidth.toPx() }
@@ -158,7 +177,10 @@ fun ArtistScreen(
                 if (isArtistUnavailable) {
                     ArtistUnavailableState(
                         onNavigateBack = navController::popBackStack,
-                        modifier = Modifier.fillMaxSize().padding(contentPadding),
+                        modifier = Modifier.fillMaxSize().padding(
+                            top = contentPadding.calculateTopPadding(),
+                            bottom = contentPadding.calculateBottomPadding(),
+                        ),
                     )
                 } else {
                     LazyColumn(
@@ -178,6 +200,7 @@ fun ArtistScreen(
                                         ArtistHeader(
                                             artist = artist,
                                             cover = heroCover,
+                                            accent = headerAccent,
                                             canPlayHotSongs = playerConnection != null && hotSongs.isNotEmpty(),
                                             onInfoClick = onInfoClick,
                                             onPlayHotSongs = {
@@ -222,30 +245,71 @@ fun ArtistScreen(
                         when (val songsResource = artistSongs) {
                             is Resource.Success -> {
                                 val songs = songsResource.data.hotSongs.orEmpty()
-                                items(songs.take(10), key = { it.id }) { song ->
-                                    Track(
-                                        track = song.toMediaMetadata(),
-                                        onClick = {
-                                            val allIds = songs.map {
-                                                it.id.toString() to it.toMediaMetadata().toMediaItem()
-                                            }
-                                            playerConnection?.onTrackClicked(
-                                                trackId = song.id.toString(),
-                                                buildQueue = {
-                                                    ListQueue(
-                                                        UUID.randomUUID().toString(),
-                                                        "Hot Songs",
-                                                        allIds,
-                                                        songs.indexOf(song)
+                                val visibleSongs = songs.take(10)
+                                itemsIndexed(visibleSongs, key = { _, song -> song.id }) { index, song ->
+                                    val track = hotTracks[index]
+                                    Column(
+                                        modifier = Modifier.padding(
+                                            horizontal = DetailPageHorizontalPadding - IosPageHorizontalPadding,
+                                        ),
+                                    ) {
+                                        Box {
+                                            Track(
+                                                track = track,
+                                                detailInkBlend = true,
+                                                onClick = {
+                                                    val allIds = songs.map {
+                                                        it.id.toString() to it.toMediaMetadata().toMediaItem()
+                                                    }
+                                                    playerConnection?.onTrackClicked(
+                                                        trackId = song.id.toString(),
+                                                        buildQueue = {
+                                                            ListQueue(
+                                                                UUID.randomUUID().toString(),
+                                                                "Hot Songs",
+                                                                allIds,
+                                                                songs.indexOf(song)
+                                                            )
+                                                        }
                                                     )
-                                                }
+                                                },
+                                                onMoreClick = { currentOverlay = OverlayState.TrackActionMenu(track, it) }
                                             )
-                                        },
-                                        onMoreClick = { currentOverlay = OverlayState.TrackActionMenu(song.toMediaMetadata(), it) }
+                                            if (
+                                                track.id > 0 && !track.isLocal && !track.isPodcast &&
+                                                track.id.toString() in favoriteTrackIds
+                                            ) {
+                                                FavoriteTrackStar(
+                                                    modifier = Modifier.align(Alignment.CenterStart)
+                                                        .offset(x = IosPageHorizontalPadding - DetailPageHorizontalPadding / 2f - 6.dp),
+                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                )
+                                            }
+                                        }
+                                        if (index < visibleSongs.lastIndex) {
+                                            HorizontalDivider(
+                                                modifier = Modifier.padding(
+                                                    start = IosPageHorizontalPadding + 64.dp,
+                                                    end = IosPageHorizontalPadding,
+                                                )
+                                                    .graphicsLayer {
+                                                        blendMode = BlendMode.Luminosity
+                                                        compositingStrategy = CompositingStrategy.Offscreen
+                                                    },
+                                                thickness = 0.5.dp,
+                                                color = separatorColor,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            is Resource.Loading -> items(5) {
+                                ShimmerHost {
+                                    ListItemPlaceHolder(
+                                        modifier = Modifier.padding(horizontal = DetailPageHorizontalPadding - 12.dp),
                                     )
                                 }
                             }
-                            is Resource.Loading -> items(5) { ShimmerHost { ListItemPlaceHolder() } }
                             is Resource.Error -> item { ErrorItem(songsResource.message) }
                         }
 
@@ -255,7 +319,18 @@ fun ArtistScreen(
                             item(key = "all-artist-songs") {
                                 IosListRow(
                                     title = stringResource(R.string.artist_all_songs_count, songCount),
-                                    modifier = Modifier.padding(horizontal = 6.dp),
+                                    modifier = Modifier.padding(
+                                        horizontal = DetailPageHorizontalPadding - IosPageHorizontalPadding,
+                                    ).drawBehind {
+                                        drawLine(
+                                            color = separatorColor,
+                                            start = Offset(IosPageHorizontalPadding.toPx(), 0f),
+                                            end = Offset(size.width - IosPageHorizontalPadding.toPx(), 0f),
+                                            strokeWidth = 0.5.dp.toPx(),
+                                            blendMode = BlendMode.Luminosity,
+                                        )
+                                    },
+                                    showTopSeparator = false,
                                     onClick = onAllSongsClick,
                                     trailing = {
                                         SfIcon(
@@ -278,7 +353,7 @@ fun ArtistScreen(
                                 val albums = albumsResource.data.hotAlbums.orEmpty()
                                 item {
                                     LazyRow(
-                                        contentPadding = PaddingValues(horizontal = 20.dp),
+                                        contentPadding = PaddingValues(horizontal = DetailPageHorizontalPadding),
                                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                                     ) {
                                         items(albums, key = { it.id }) { hotAlbum ->
@@ -294,7 +369,7 @@ fun ArtistScreen(
                             }
                             is Resource.Loading -> item {
                                 LazyRow(
-                                    contentPadding = PaddingValues(horizontal = 20.dp),
+                                    contentPadding = PaddingValues(horizontal = DetailPageHorizontalPadding),
                                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                                 ) {
                                     items(4) { ShimmerHost { AlbumCardShimmer() } }
@@ -309,7 +384,18 @@ fun ArtistScreen(
                             item(key = "all-artist-albums") {
                                 IosListRow(
                                     title = stringResource(R.string.artist_all_albums_count, albumCount),
-                                    modifier = Modifier.padding(horizontal = 6.dp).padding(top = 10.dp),
+                                    modifier = Modifier.padding(
+                                        horizontal = DetailPageHorizontalPadding - IosPageHorizontalPadding,
+                                    ).padding(top = 10.dp).drawBehind {
+                                        drawLine(
+                                            color = separatorColor,
+                                            start = Offset(IosPageHorizontalPadding.toPx(), 0f),
+                                            end = Offset(size.width - IosPageHorizontalPadding.toPx(), 0f),
+                                            strokeWidth = 0.5.dp.toPx(),
+                                            blendMode = BlendMode.Luminosity,
+                                        )
+                                    },
+                                    showTopSeparator = false,
                                     onClick = onAllAlbumsClick,
                                     trailing = {
                                         SfIcon(
@@ -374,7 +460,8 @@ private fun ArtistCoverTheme(
                 ownerKey = viewModel,
             )
             // Body controls and their popups sample the cover-local surface, not the app theme.
-            val backdrop = rememberCanvasBackdrop { drawRect(brush = background.brush) }
+            val backdropBrush = rememberUpdatedState(background.brush)
+            val backdrop = rememberCanvasBackdrop { drawRect(brush = backdropBrush.value) }
             CompositionLocalProvider(
                 LocalGlassBackdrop provides backdrop,
                 LocalBlurBackdrop provides backdrop,
@@ -391,7 +478,7 @@ private fun ArtistUnavailableState(
     modifier: Modifier = Modifier,
 ) {
     Column(
-        modifier = modifier.padding(horizontal = 24.dp),
+        modifier = modifier.padding(horizontal = DetailPageHorizontalPadding),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
@@ -430,6 +517,7 @@ private fun ArtistUnavailableState(
 private fun ArtistHeader(
     artist: ArtistDetail.Data.Artist,
     cover: String,
+    accent: Color,
     canPlayHotSongs: Boolean,
     isFollowed: Boolean,
     isFollowLoading: Boolean,
@@ -438,9 +526,6 @@ private fun ArtistHeader(
     onFollowClick: () -> Unit,
 ) {
     val colors = LocalGlassColors.current
-    val regularButtonBackground = colors.elevatedBackground.copy(
-        alpha = SheetGroupedListBackgroundAlpha,
-    )
     val subtitle = remember(artist) {
         (artist.transNames + artist.alias.filterIsInstance<String>())
             .map(String::trim)
@@ -450,9 +535,8 @@ private fun ArtistHeader(
     }
     val playHotSongsLabel = stringResource(R.string.artist_play_hot_songs)
 
-    Column(
+    BoxWithConstraints(
         modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         AsyncImage(
             model = cover,
@@ -477,77 +561,112 @@ private fun ArtistHeader(
                 },
         )
 
-        Text(
-            text = artist.name,
-            style = IosTypography.title2,
-            color = colors.content,
-            textAlign = TextAlign.Center,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 20.dp).padding(top = 8.dp),
-        )
-        if (subtitle.isNotBlank()) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(top = (maxWidth - 64.dp).coerceAtLeast(0.dp)),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
             Text(
-                text = subtitle,
-                style = IosTypography.subheadline,
-                color = colors.secondaryContent,
+                text = artist.name,
+                style = IosTypography.title2,
+                color = colors.content,
                 textAlign = TextAlign.Center,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(horizontal = 20.dp).padding(top = 7.dp),
+                modifier = Modifier.padding(horizontal = DetailPageHorizontalPadding).padding(top = 8.dp),
             )
-        }
-
-        Row(
-            modifier = Modifier.padding(top = 18.dp, bottom = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            GlassIconButton(
-                onClick = onInfoClick,
-                style = GlassSurfaceStyle.Navigation,
-                navigationSurfaceColor = regularButtonBackground,
-                navigationSurfaceAlphaMultiplier = 1f,
-                sampleBackdrop = false,
-            ) {
-                SfIcon(
-                    "info",
-                    stringResource(R.string.artist_info_title),
-                    size = 24.dp,
-                    weight = FontWeight.SemiBold,
-                )
-            }
-            GlassButton(
-                onClick = onPlayHotSongs,
-                modifier = Modifier.semantics { contentDescription = playHotSongsLabel },
-                style = GlassSurfaceStyle.Navigation,
-                enabled = canPlayHotSongs,
-                emphasis = GlassEmphasis.Prominent,
-            ) {
-                SfIcon("play.fill", null, size = 18.dp)
-                Spacer(Modifier.width(8.dp))
+            if (subtitle.isNotBlank()) {
                 Text(
-                    stringResource(R.string.pip_play),
-                    style = IosTypography.headline,
+                    text = subtitle,
+                    style = IosTypography.subheadline,
+                    color = colors.secondaryContent,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = DetailPageHorizontalPadding).padding(top = 7.dp),
                 )
             }
-            GlassIconButton(
-                onClick = onFollowClick,
-                enabled = !isFollowLoading,
-                style = GlassSurfaceStyle.Navigation,
-                navigationSurfaceColor = regularButtonBackground.takeUnless { isFollowed },
-                navigationSurfaceAlphaMultiplier = if (isFollowed) 1.25f else 1f,
-                emphasis = if (isFollowed) GlassEmphasis.Prominent else GlassEmphasis.Regular,
-                sampleBackdrop = isFollowed,
+
+            Row(
+                modifier = Modifier.padding(top = 18.dp, bottom = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(24.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                SfIcon(
-                    if (isFollowed) "checkmark" else "plus",
-                    stringResource(if (isFollowed) R.string.artist_following else R.string.artist_follow),
-                    size = 24.dp,
-                    weight = FontWeight.SemiBold,
-                )
+                ArtistActionButton(
+                    onClick = onInfoClick,
+                    accent = accent,
+                ) {
+                    SfIcon(
+                        "info",
+                        stringResource(R.string.artist_info_title),
+                        size = 24.dp,
+                        weight = FontWeight.SemiBold,
+                        tint = accent,
+                    )
+                }
+                ArtistActionButton(
+                    onClick = onPlayHotSongs,
+                    modifier = Modifier.semantics { contentDescription = playHotSongsLabel },
+                    accent = accent,
+                    enabled = canPlayHotSongs,
+                    prominent = true,
+                ) {
+                    SfIcon(
+                        "play.fill", null,
+                        modifier = Modifier.graphicsLayer {
+                            translationX = 2.dp.toPx()
+                            blendMode = BlendMode.DstOut
+                            compositingStrategy = CompositingStrategy.Offscreen
+                        },
+                        size = 28.dp,
+                        tint = Color.Black,
+                    )
+                }
+                ArtistActionButton(
+                    onClick = onFollowClick,
+                    accent = accent,
+                    enabled = !isFollowLoading,
+                ) {
+                    SfIcon(
+                        if (isFollowed) "star.fill" else "star",
+                        stringResource(if (isFollowed) R.string.artist_following else R.string.artist_follow),
+                        size = 24.dp,
+                        weight = FontWeight.SemiBold,
+                        tint = accent,
+                    )
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun ArtistActionButton(
+    onClick: () -> Unit,
+    accent: Color,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    prominent: Boolean = false,
+    content: @Composable () -> Unit,
+) {
+    val colors = LocalGlassColors.current
+    Box(
+        modifier = modifier
+            .size(if (prominent) 64.dp else 44.dp)
+            .graphicsLayer {
+                blendMode = BlendMode.Luminosity
+                compositingStrategy = CompositingStrategy.Offscreen
+                alpha = if (enabled) 1f else 0.4f
+            }
+            .clip(Capsule())
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (prominent) {
+            Box(Modifier.fillMaxSize().background(accent))
+        } else {
+            Box(Modifier.fillMaxSize().background(colors.content.copy(alpha = 0.10f)))
+        }
+        content()
     }
 }
 
@@ -610,9 +729,8 @@ fun AlbumCardShimmer() {
 @Composable
 fun ArtistHeaderShimmer() {
     ShimmerHost {
-        Column(
+        BoxWithConstraints(
             modifier = Modifier.fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Box(
                 modifier = Modifier
@@ -620,21 +738,25 @@ fun ArtistHeaderShimmer() {
                     .aspectRatio(1f)
                     .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.18f)),
             )
-            TextPlaceholder(Modifier.padding(top = 8.dp).width(180.dp).height(22.dp))
-            TextPlaceholder(Modifier.padding(top = 7.dp).width(120.dp).height(16.dp))
-            Row(
-                modifier = Modifier.padding(top = 18.dp, bottom = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
-                verticalAlignment = Alignment.CenterVertically,
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(top = (maxWidth - 64.dp).coerceAtLeast(0.dp)),
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                listOf(44.dp, 122.dp, 44.dp).forEach { width ->
-                    Spacer(
-                        modifier = Modifier
-                            .width(width)
-                            .height(44.dp)
-                            .clip(ContinuousRoundedRectangle(50))
-                            .background(MaterialTheme.colorScheme.surfaceVariant),
-                    )
+                TextPlaceholder(Modifier.padding(top = 8.dp).width(180.dp).height(22.dp))
+                TextPlaceholder(Modifier.padding(top = 7.dp).width(120.dp).height(16.dp))
+                Row(
+                    modifier = Modifier.padding(top = 18.dp, bottom = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(24.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    listOf(44.dp, 64.dp, 44.dp).forEach { size ->
+                        Spacer(
+                            modifier = Modifier
+                                .size(size)
+                                .clip(Capsule())
+                                .background(MaterialTheme.colorScheme.surfaceVariant),
+                        )
+                    }
                 }
             }
         }
@@ -650,7 +772,12 @@ fun SectionTitle(title: String) {
         text = title,
         style = MaterialTheme.typography.titleMedium,
         fontWeight = FontWeight.Bold,
-        modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 4.dp)
+        modifier = Modifier.padding(
+            start = DetailPageHorizontalPadding,
+            end = DetailPageHorizontalPadding,
+            top = 20.dp,
+            bottom = 4.dp,
+        )
     )
 }
 
@@ -658,7 +785,7 @@ fun SectionTitle(title: String) {
 fun ErrorItem(message: String) {
     Text(
         text = message,
-        modifier = Modifier.padding(20.dp),
+        modifier = Modifier.padding(horizontal = DetailPageHorizontalPadding, vertical = 20.dp),
         color = MaterialTheme.colorScheme.error
     )
 }

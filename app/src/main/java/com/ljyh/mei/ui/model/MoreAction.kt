@@ -34,7 +34,7 @@ enum class MoreAction(
     SONG_WIKI("song_wiki", R.string.song_wiki, "book.pages", 5, 1),
 
     // --- 评论 ---
-    COMMENT("comment", R.string.more_action_comments, "bubble.left", 7, 1);
+    COMMENT("comment", R.string.more_action_comments, "bubble.left.and.bubble.right", 7, 1);
 
     companion object {
         // 简单工厂方法
@@ -47,4 +47,14 @@ enum class MoreAction(
 enum class SortOrder {
     FREQUENCY, // 常用的靠前
     RISK, // 低风险的靠前
+    CUSTOM,
+}
+
+internal fun resolveMoreActionOrder(order: SortOrder, savedIds: List<String>): List<MoreAction> = when (order) {
+    SortOrder.FREQUENCY -> MoreAction.entries.sortedByDescending { it.frequency }
+    SortOrder.RISK -> MoreAction.entries.sortedBy { it.riskLevel }
+    SortOrder.CUSTOM -> {
+        val known = savedIds.mapNotNull(MoreAction::fromId).distinct()
+        known + MoreAction.entries.filterNot(known::contains)
+    }
 }

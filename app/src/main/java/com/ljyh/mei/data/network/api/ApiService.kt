@@ -43,10 +43,13 @@ import com.ljyh.mei.data.model.api.ManipulateTrackResult
 import com.ljyh.mei.data.model.api.SearchResult
 import com.ljyh.mei.data.model.api.SearchSuggest
 import com.ljyh.mei.data.model.api.SubscribePlaylist
+import com.ljyh.mei.data.model.api.UpdatePlaylistTrackOrder
 import com.ljyh.mei.data.model.weapi.Comment
 import com.ljyh.mei.data.model.weapi.Like
 import com.ljyh.mei.data.model.weapi.LikeResult
+import com.ljyh.mei.data.network.NETEASE_EXPECTED_SESSION_HEADER
 import retrofit2.http.Body
+import retrofit2.http.Header
 import retrofit2.http.Headers
 import retrofit2.http.POST
 import retrofit2.http.Path
@@ -62,13 +65,19 @@ interface ApiService {
     * 获取歌单详情
     * */
     @POST("/api/v6/playlist/detail")
-    suspend fun getPlaylistDetail(@Body body: GetPlaylistDetail): PlaylistDetail
+    suspend fun getPlaylistDetail(
+        @Body body: GetPlaylistDetail,
+        @Header(NETEASE_EXPECTED_SESSION_HEADER) expectedSession: String? = null,
+    ): PlaylistDetail
 
     /*
     * 获取歌曲详情
     * */
     @POST("/api/v3/song/detail")
-    suspend fun getSongDetail(@Body body: GetSongDetails): Tracks
+    suspend fun getSongDetail(
+        @Body body: GetSongDetails,
+        @Header(NETEASE_EXPECTED_SESSION_HEADER) expectedSession: String? = null,
+    ): Tracks
 
 
     /*
@@ -103,7 +112,10 @@ interface ApiService {
     ): UserPlaylist
 
     @POST("/api/song/like/check")
-    suspend fun checkSongLike(@Body body: CheckSongLike): CheckSongLikeResult
+    suspend fun checkSongLike(
+        @Body body: CheckSongLike,
+        @Header(NETEASE_EXPECTED_SESSION_HEADER) expectedSession: String? = null,
+    ): CheckSongLikeResult
 
     @POST("/api/album/sublist")
     suspend fun getCollectAlbumList(@Body body: GetAlbumList): UserAlbumList
@@ -116,7 +128,8 @@ interface ApiService {
 
     @POST("/api/search/get/")
     suspend fun search(
-        @Body body: GetSearch
+        @Body body: GetSearch,
+        @Header("X-Netease-Cookie-OS") cookieOs: String? = null,
     ): SearchResult
 
 
@@ -137,10 +150,22 @@ interface ApiService {
     suspend fun getUserPhotoAlbum(@Body body: GetUserPhotoAlbum): AlbumPhoto
 
     @POST("/api/radio/like")
-    suspend fun like(@Body body: Like): LikeResult
+    suspend fun like(
+        @Body body: Like,
+        @Header(NETEASE_EXPECTED_SESSION_HEADER) expectedSession: String? = null,
+    ): LikeResult
 
     @POST("/api/playlist/manipulate/tracks")
-    suspend fun manipulateTracks(@Body body: ManipulateTrack): ManipulateTrackResult
+    suspend fun manipulateTracks(
+        @Body body: ManipulateTrack,
+        @Header(NETEASE_EXPECTED_SESSION_HEADER) expectedSession: String? = null,
+    ): ManipulateTrackResult
+
+    @POST("/api/playlist/manipulate/tracks")
+    suspend fun updatePlaylistTrackOrder(
+        @Body body: UpdatePlaylistTrackOrder,
+        @Header(NETEASE_EXPECTED_SESSION_HEADER) expectedSession: String,
+    ): BaseResponse
 
     @POST("/api/playlist/create")
     suspend fun createPlaylist(@Body body: CreatePlaylist): CreatePlaylistResult

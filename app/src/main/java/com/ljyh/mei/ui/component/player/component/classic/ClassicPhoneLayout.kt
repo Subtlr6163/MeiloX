@@ -2,6 +2,7 @@ package com.ljyh.mei.ui.component.player.component.classic
 
 import android.os.Build
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
 import androidx.annotation.RequiresApi
 import androidx.compose.animation.core.Spring
@@ -25,12 +26,16 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.util.UnstableApi
@@ -44,10 +49,13 @@ import com.ljyh.mei.ui.component.player.component.FluidProgressSlider
 import com.ljyh.mei.ui.component.player.component.LyricScreen
 import com.ljyh.mei.ui.component.player.component.PlayerActionToolbar
 import com.ljyh.mei.ui.component.player.component.PlayerProgressSlider
+import com.ljyh.mei.ui.component.player.component.applemusic.PlayerQueuePage
+import com.ljyh.mei.ui.component.player.component.applemusic.playerMetadataAnchorBounds
 import com.ljyh.mei.ui.component.player.component.classic.component.Cover
 import com.ljyh.mei.ui.component.player.component.classic.component.PlayerHeader
 import com.ljyh.mei.ui.component.player.overlay.PlayerOverlayHandler
 import com.ljyh.mei.ui.component.player.state.PlayerStateContainer
+import com.ljyh.mei.ui.component.sheet.LocalPlayerSheet
 import com.ljyh.mei.ui.model.LyricSource
 import com.ljyh.mei.utils.rememberEnumPreference
 import kotlinx.coroutines.launch
@@ -63,6 +71,29 @@ fun ClassicPhoneLayout(
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    var headerTextCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    var headerRowCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    val pagerState = rememberPagerState(pageCount = { 3 })
+    val sheet = LocalPlayerSheet.current
+    val sheetExpanded by remember(sheet) { derivedStateOf { sheet?.state?.isExpanded == true } }
+
+    DisposableEffect(overlayHandler, pagerState, scope) {
+        val openPlaylist: () -> Unit = {
+            scope.launch {
+                pagerState.animateScrollToPage(2, animationSpec = spring(stiffness = Spring.StiffnessLow))
+            }
+        }
+        overlayHandler.onShowPlaylist = openPlaylist
+        onDispose {
+            if (overlayHandler.onShowPlaylist === openPlaylist) overlayHandler.onShowPlaylist = null
+        }
+    }
+
+    BackHandler(enabled = sheetExpanded && pagerState.currentPage != 0) {
+        scope.launch {
+            pagerState.animateScrollToPage(0, animationSpec = spring(stiffness = Spring.StiffnessLow))
+        }
+    }
 
     val mediaMetadata by stateContainer.mediaMetadata
     val isPlaying by stateContainer.isPlaying
@@ -92,8 +123,15 @@ fun ClassicPhoneLayout(
                     .fillMaxWidth()
                     .padding(horizontal = PlayerHorizontalPadding),
                 onClick = {
-                    overlayHandler.showAlbumArtist(it.album, it.artists, it.coverUrl)
+                    overlayHandler.showAlbumArtist(
+                        it.album,
+                        it.artists,
+                        it.coverUrl,
+                        anchorBounds = playerMetadataAnchorBounds(headerTextCoordinates, headerRowCoordinates),
+                    )
                 },
+                onTextPositioned = { headerTextCoordinates = it },
+                onRowPositioned = { headerRowCoordinates = it },
                 onMoreClick = {
                     overlayHandler.showMoreAction()
                 },
@@ -104,8 +142,7 @@ fun ClassicPhoneLayout(
             )
         }
 
-        // Pager (Cover / Lyrics)
-        val pagerState = rememberPagerState(pageCount = { 2 })
+        // Keep the original cover and lyrics pages while adding the inline queue.
         HorizontalPager(
             state = pagerState,
             modifier = Modifier
@@ -126,7 +163,6 @@ fun ClassicPhoneLayout(
                                 mediaMetadata = it,
                                 isPlaying = isPlaying,
                                 modifier = Modifier
-                                    .fillMaxWidth()
                                     .aspectRatio(1f)
                             )
                         }
@@ -136,6 +172,8 @@ fun ClassicPhoneLayout(
                 1 -> {
                     LyricScreen(
                         lyricData = lyricLine,
+                        // Account for the pager inset while matching the progress track.
+                        sourceBadgeEndOffset = PlayerHorizontalPadding - 8.dp,
                         playerConnection = stateContainer.playerConnection,
                         modifier = Modifier
                             .fillMaxSize()
@@ -159,6 +197,14 @@ fun ClassicPhoneLayout(
                         },
                         controlsVisible = stateContainer.controlsVisible,
                         onToggleControls = {},
+                    )
+                }
+
+                2 -> {
+                    PlayerQueuePage(
+                        playerConnection = stateContainer.playerConnection,
+                        modifier = Modifier.fillMaxSize(),
+                        horizontalPadding = PlayerHorizontalPadding,
                     )
                 }
             }
@@ -212,6 +258,8 @@ fun ClassicPhoneLayout(
         // Action Toolbar (Queue, Like, Sleep, etc.)
         PlayerActionToolbar(
             modifier = Modifier.padding(horizontal = PlayerHorizontalPadding),
+            lyricsVisible = pagerState.currentPage == 1,
+            queueVisible = pagerState.currentPage == 2,
             onLyricClick = {
                 scope.launch {
                     pagerState.animateScrollToPage(if (pagerState.currentPage == 1) 0 else 1,
@@ -220,7 +268,12 @@ fun ClassicPhoneLayout(
                 }
             },
             onPlaylistClick = {
-                overlayHandler.showPlaylist()
+                scope.launch {
+                    pagerState.animateScrollToPage(
+                        if (pagerState.currentPage == 2) 0 else 2,
+                        animationSpec = spring(stiffness = Spring.StiffnessLow),
+                    )
+                }
             },
             onSleepTimerClick = {
                 overlayHandler.showSleepTimer()

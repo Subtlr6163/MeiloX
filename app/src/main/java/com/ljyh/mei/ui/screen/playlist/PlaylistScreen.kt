@@ -11,6 +11,7 @@ import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -39,6 +40,7 @@ import com.ljyh.mei.ui.component.DownloadConfirmDialog
 import com.ljyh.mei.ui.local.LocalNavController
 import com.ljyh.mei.ui.local.LocalPlayerConnection
 import com.ljyh.mei.ui.model.UiPlaylist
+import com.ljyh.mei.ui.glass.IosCascadingMenuItem
 import com.ljyh.mei.ui.screen.Screen
 import com.ljyh.mei.utils.DownloadManager
 import com.ljyh.mei.utils.rememberEnumPreference
@@ -72,12 +74,16 @@ fun PlaylistScreen(
     val unSubscriberState by viewModel.unSubscribePlaylist.collectAsState()
     val isSubscriptionUpdating by viewModel.subscriptionUpdating.collectAsState()
     val confirmedSubscription by viewModel.confirmedSubscription.collectAsState()
+    val trackOrder by viewModel.trackOrder.collectAsState()
+    DisposableEffect(id, viewModel) {
+        onDispose { viewModel.closeTrackOrder() }
+    }
 
     // 3. Paging 数据
     var isPlaylistSearchActive by remember { mutableStateOf(false) }
     var playlistSearchQuery by remember { mutableStateOf("") }
-    val pagingFlow = remember(id, playlistDetail, playlistSearchQuery, removedTrackIds) {
-        viewModel.searchPlaylistTracks(playlistDetail, playlistSearchQuery, removedTrackIds)
+    val pagingFlow = remember(id, playlistDetail, playlistSearchQuery) {
+        viewModel.searchPlaylistTracks(playlistDetail, playlistSearchQuery)
     }
     val lazyPagingItems = pagingFlow.collectAsLazyPagingItems()
 
@@ -304,7 +310,25 @@ fun PlaylistScreen(
         onSelect = selection::start,
         onSubscribe = { toggleSubscription() },
         onRefresh = { selection.finish(); viewModel.getPlaylistDetail(id.toString()) },
-    )
+    ).toMutableList().apply {
+        if (uiData.isCreator) add(2, IosCascadingMenuItem(
+            androidx.compose.ui.res.stringResource(com.ljyh.mei.R.string.playlist_order_title),
+            "line.3.horizontal",
+            enabled = playlistDetail is Resource.Success && trackOrder == null,
+            onClick = { selection.finish(); viewModel.openTrackOrder(id.toString()) },
+        ))
+    }
+
+    trackOrder?.takeIf { it.playlistId == id.toString() }?.let { order ->
+        PlaylistOrderSheet(
+            state = order,
+            onMove = viewModel::moveOrderedTrack,
+            onVisibleTracks = viewModel::loadVisibleOrderTracks,
+            onSave = viewModel::saveTrackOrder,
+            onReload = { viewModel.closeTrackOrder(); viewModel.openTrackOrder(id.toString()) },
+            onDismiss = viewModel::closeTrackOrder,
+        )
+    }
 
     if (showDownloadDialog) {
         DownloadConfirmDialog(
@@ -357,11 +381,13 @@ fun PlaylistScreen(
             // 播放全部
             onPlayAll = {
                 buildListQueue()?.let { queue ->
+                    viewModel.recordPlaylistPlayback(id.toString())
                     playerConnection.playQueue(queue)
                 }
             },
             onShufflePlay = {
                 buildListQueue(randomStart = true)?.let { queue ->
+                    viewModel.recordPlaylistPlayback(id.toString())
                     playerConnection.playQueue(queue, shuffle = true)
                 }
             },
@@ -372,7 +398,9 @@ fun PlaylistScreen(
                 else playerConnection.onTrackClicked(
                     trackId = mediaMetadata.id.toString(),
                     buildQueue = {
-                        buildListQueue(mediaMetadata.id)
+                        buildListQueue(mediaMetadata.id)?.also {
+                            viewModel.recordPlaylistPlayback(id.toString())
+                        }
                     }
                 )
             },

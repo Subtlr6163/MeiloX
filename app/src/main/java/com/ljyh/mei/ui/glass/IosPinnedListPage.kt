@@ -27,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -179,10 +180,14 @@ private fun progressiveBlurPassShader(
     """.trimIndent()
 }
 
-private fun BackdropEffectScope.topBarProgressiveBlur(
+internal fun BackdropEffectScope.progressiveBackdropBlur(
     maxRadius: Float,
-    tint: Color,
-    tintIntensity: Float,
+    tint: Color = Color.Transparent,
+    tintIntensity: Float = 0f,
+    startYFraction: Float = 0.42f,
+    endYFraction: Float = 1f,
+    startIntensity: Float = 1f,
+    endIntensity: Float = 0f,
 ) {
     if (maxRadius <= 0f) return
     if (!isRuntimeShaderSupported()) {
@@ -191,17 +196,16 @@ private fun BackdropEffectScope.topBarProgressiveBlur(
     }
 
     val resolvedRadius = maxRadius.coerceAtMost(150f)
-    val gradientStartY = size.height * 0.42f
 
     fun applyPass(key: String, shader: String, appliesTint: Boolean = false) {
         runtimeShaderEffect(key, shader, "content") {
             setFloatUniform("blurRadius", resolvedRadius)
             setFloatUniform("crop", 0f, 0f, size.width, size.height)
             setFloatUniform("unbounded", 0f)
-            setFloatUniform("startIntensity", 1f)
-            setFloatUniform("endIntensity", 0f)
-            setFloatUniform("startPoint", 0f, gradientStartY)
-            setFloatUniform("endPoint", 0f, size.height)
+            setFloatUniform("startIntensity", startIntensity)
+            setFloatUniform("endIntensity", endIntensity)
+            setFloatUniform("startPoint", 0f, size.height * startYFraction)
+            setFloatUniform("endPoint", 0f, size.height * endYFraction)
             if (appliesTint) {
                 setColorUniform("tint", tint)
                 setFloatUniform("tintIntensity", tintIntensity)
@@ -245,7 +249,7 @@ fun rememberIosGridCollapseProgress(
 fun IosPinnedListPage(
     title: String,
     bottomPadding: Dp,
-    horizontalContentPadding: Dp = 16.dp,
+    horizontalContentPadding: Dp = IosPageHorizontalPadding,
     modifier: Modifier = Modifier,
     subtitle: String? = null,
     listState: LazyListState = rememberLazyListState(),
@@ -254,6 +258,8 @@ fun IosPinnedListPage(
     verticalArrangement: Arrangement.Vertical = Arrangement.spacedBy(10.dp),
     onNavigateBack: (() -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
+    actionsStyle: IosToolbarActionStyle = IosToolbarActionStyle.Merged,
+    actionsSeparationProgress: Float? = null,
     backgroundColor: Color? = null,
     backgroundBrush: Brush? = null,
     content: LazyListScope.() -> Unit,
@@ -277,55 +283,60 @@ fun IosPinnedListPage(
         modifier = modifier,
         onNavigateBack = onNavigateBack,
         actions = actions,
+        actionsStyle = actionsStyle,
+        actionsSeparationProgress = actionsSeparationProgress,
         collapseProgress = collapseProgress,
         backgroundColor = backgroundColor,
         backgroundBrush = backgroundBrush,
     ) { contentPadding ->
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(
-                start = horizontalContentPadding,
-                top = contentPadding.calculateTopPadding(),
-                end = horizontalContentPadding,
-                bottom = contentPadding.calculateBottomPadding(),
-            ),
-            verticalArrangement = verticalArrangement,
-        ) {
-            if (showsLargeTitle) {
-                item(key = "ios-large-title:$title") {
-                    Column(
-                        Modifier
-                            .fillMaxWidth()
-                            .graphicsLayer {
-                                alpha = 1f - collapseProgress
-                                val scale = 1f - 0.04f * collapseProgress
-                                scaleX = scale
-                                scaleY = scale
-                                transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0.5f)
-                            }
-                            .blur(6.dp * collapseProgress)
-                            .offset(y = (-10).dp)
-                            .padding(horizontal = largeTitleHorizontalPadding, vertical = 6.dp),
-                    ) {
-                        Text(
-                            text = title,
-                            style = IosTypography.largeTitle,
-                            fontWeight = FontWeight.Bold,
-                            color = LocalGlassColors.current.content,
-                        )
-                        subtitle?.let {
+        // A different scroll state owns a different measurement node and item provider.
+        key(listState) {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(
+                    start = horizontalContentPadding,
+                    top = contentPadding.calculateTopPadding(),
+                    end = horizontalContentPadding,
+                    bottom = contentPadding.calculateBottomPadding(),
+                ),
+                verticalArrangement = verticalArrangement,
+            ) {
+                if (showsLargeTitle) {
+                    item(key = "ios-large-title:$title") {
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .graphicsLayer {
+                                    alpha = 1f - collapseProgress
+                                    val scale = 1f - 0.04f * collapseProgress
+                                    scaleX = scale
+                                    scaleY = scale
+                                    transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0.5f)
+                                }
+                                .blur(6.dp * collapseProgress)
+                                .offset(y = (-10).dp)
+                                .padding(horizontal = largeTitleHorizontalPadding, vertical = 6.dp),
+                        ) {
                             Text(
-                                text = it,
-                                style = IosTypography.subheadline,
-                                color = LocalGlassColors.current.secondaryContent,
-                                modifier = Modifier.padding(top = 3.dp),
+                                text = title,
+                                style = IosTypography.largeTitle,
+                                fontWeight = FontWeight.Bold,
+                                color = LocalGlassColors.current.content,
                             )
+                            subtitle?.let {
+                                Text(
+                                    text = it,
+                                    style = IosTypography.subheadline,
+                                    color = LocalGlassColors.current.secondaryContent,
+                                    modifier = Modifier.padding(top = 3.dp),
+                                )
+                            }
                         }
                     }
                 }
+                content()
             }
-            content()
         }
     }
 }
@@ -344,6 +355,8 @@ fun IosPinnedPage(
     subtitle: String? = null,
     onNavigateBack: (() -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
+    actionsStyle: IosToolbarActionStyle = IosToolbarActionStyle.Merged,
+    actionsSeparationProgress: Float? = null,
     collapseProgress: Float = 1f,
     backgroundColor: Color? = null,
     topBarBlurProgress: Float = collapseProgress,
@@ -357,9 +370,9 @@ fun IosPinnedPage(
     val statusBarHeight = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val toolbarHeight = statusBarHeight + 62.dp
     val contentPadding = PaddingValues(
-        start = 16.dp,
+        start = IosPageHorizontalPadding,
         top = toolbarHeight + 10.dp,
-        end = 16.dp,
+        end = IosPageHorizontalPadding,
         bottom = bottomPadding + 24.dp,
     )
 
@@ -392,7 +405,7 @@ fun IosPinnedPage(
                                 backdrop = pageBackdrop,
                                 shape = { RectangleShape },
                                 effects = {
-                                    topBarProgressiveBlur(
+                                    progressiveBackdropBlur(
                                         maxRadius = 10.dp.toPx(),
                                         tint = pageBackground,
                                         tintIntensity = 0.78f,
@@ -422,6 +435,8 @@ fun IosPinnedPage(
                         }
                     },
                     actions = actions,
+                    actionsStyle = actionsStyle,
+                    actionsSeparationProgress = actionsSeparationProgress,
                 )
             }
         }

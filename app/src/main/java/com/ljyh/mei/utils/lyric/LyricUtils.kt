@@ -3,6 +3,7 @@ package com.ljyh.mei.utils.lyric
 import com.ljyh.mei.ui.model.LyricData
 import com.ljyh.mei.ui.model.LyricSource
 import com.ljyh.mei.ui.model.LyricSourceData
+import com.ljyh.mei.ui.model.LyricVariant
 import timber.log.Timber
 
 fun createDefaultLyricData(
@@ -37,6 +38,30 @@ internal fun selectLyricUpdate(
     if (candidatePriority < currentPriority) return current
     if (candidatePriority == currentPriority && !alignmentFinished) return current
     return candidate
+}
+
+/** A manual choice bypasses automatic source priority without changing source data. */
+internal fun selectPreferredLyricUpdate(
+    current: LyricData,
+    candidate: LyricData,
+    preferredSource: LyricSource?,
+    sourcesFinished: Boolean,
+    alignmentFinished: Boolean,
+    preferredVariant: LyricVariant? = null,
+): LyricData {
+    val variantChanged = preferredVariant != null && lyricVariantOf(candidate) == preferredVariant &&
+        lyricVariantOf(current) != preferredVariant
+    val previous = if ((preferredSource != null && current.source != preferredSource) || variantChanged) {
+        createDefaultLyricData("歌词加载中", source = LyricSource.Loading)
+    } else current
+    return selectLyricUpdate(previous, candidate, sourcesFinished, alignmentFinished)
+}
+
+internal fun selectLyricSources(
+    sources: List<LyricSourceData>,
+    preferredSource: LyricSource?,
+): List<LyricSourceData> = if (preferredSource == null) sources else sources.filter {
+    it.source == preferredSource
 }
 
 private fun LyricData.displayPriority(): Int {
@@ -80,7 +105,7 @@ fun mergeLyrics(sources: List<LyricSourceData>, isPureMusic: Boolean = false): L
                     isVerbatim = true,
                     isPureMusic = isPureMusic,
                     source = LyricSource.NetEaseCloudMusic,
-                    lyricLine = YRCParser.parse(yrc, translation)
+                    lyricLine = attachPhonetics(YRCParser.parse(yrc, translation), n.romalrc?.lyric)
                 )
             }
         }
@@ -96,7 +121,7 @@ fun mergeLyrics(sources: List<LyricSourceData>, isPureMusic: Boolean = false): L
                 isVerbatim = true,
                 isPureMusic = isPureMusic,
                 source = LyricSource.QQMusic,
-                lyricLine = QRCParser.parse(q.lyric, q.trans)
+                lyricLine = attachPhonetics(QRCParser.parse(q.lyric, q.trans), q.roma)
             )
         }
         // 有些情况下 QQ 有逐字但没有 trans（视为非完整逐字），上面判断要求 trans 存在
@@ -113,7 +138,7 @@ fun mergeLyrics(sources: List<LyricSourceData>, isPureMusic: Boolean = false): L
                 isVerbatim = false,
                 isPureMusic = isPureMusic,
                 source = LyricSource.NetEaseCloudMusic,
-                lyricLine = LRCParser.parse(lrc, n.tlyric?.lyric)
+                lyricLine = attachPhonetics(LRCParser.parse(lrc, n.tlyric?.lyric), n.romalrc?.lyric)
             )
         }
     }
@@ -128,7 +153,7 @@ fun mergeLyrics(sources: List<LyricSourceData>, isPureMusic: Boolean = false): L
                 isVerbatim = false,
                 isPureMusic = isPureMusic,
                 source = LyricSource.QQMusic,
-                lyricLine = LRCParser.parse(lrcText, q.trans)
+                lyricLine = attachPhonetics(LRCParser.parse(lrcText, q.trans), q.roma)
             )
         }
     }

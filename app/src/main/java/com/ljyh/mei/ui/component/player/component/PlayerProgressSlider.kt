@@ -38,6 +38,7 @@ import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -63,6 +64,8 @@ fun PlayerProgressSlider(
     val musicQuality = playerConnection?.currentMusicQuality?.collectAsStateWithLifecycle()?.value
     val availableQualities = playerConnection?.availableMusicQualities?.collectAsStateWithLifecycle()?.value.orEmpty()
     val isLoadingQualities = playerConnection?.isLoadingMusicQualities?.collectAsStateWithLifecycle()?.value ?: false
+    val localPlaybackInfo = playerConnection?.localPlaybackInfo?.collectAsStateWithLifecycle()?.value
+    val isPlayingLocalSource = playerConnection?.isPlayingLocalSource?.collectAsStateWithLifecycle()?.value ?: false
     val isDurationValid = remember(duration) { duration > 0 }
     val valueRange = remember(duration) { 0f..(duration.takeIf { it > 0 } ?: 1).toFloat() }
 
@@ -232,6 +235,7 @@ fun PlayerProgressSlider(
 
             Text(
                 text = makeTimeString(sliderPosition.toLong()),
+                modifier = Modifier.weight(1f),
                 style = timeTextStyle,
                 color = Color.White.copy(alpha = 0.9f), // 使用白色，微透
                 maxLines = 1,
@@ -242,8 +246,11 @@ fun PlayerProgressSlider(
                 quality = musicQuality,
                 availableQualities = availableQualities,
                 isLoading = isLoadingQualities,
+                localPlaybackInfo = localPlaybackInfo,
+                isPlayingLocalSource = isPlayingLocalSource,
                 onMenuOpened = { playerConnection?.refreshAvailableMusicQualities() },
                 onQualitySelected = { playerConnection?.changeQuality(it) },
+                onLocalSourceSelected = { playerConnection?.useLocalSource() },
                 style = timeTextStyle,
                 color = Color.White.copy(alpha = 0.8f),
             )
@@ -251,6 +258,8 @@ fun PlayerProgressSlider(
 
             Text(
                 text = if (duration > 0) makeTimeString(duration) else "-:--",
+                modifier = Modifier.weight(1f),
+                textAlign = TextAlign.End,
                 style = timeTextStyle,
                 color = Color.White.copy(alpha = 0.6f),
                 maxLines = 1,

@@ -1,6 +1,7 @@
 package com.ljyh.mei.ui.glass
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Row
@@ -13,6 +14,7 @@ import androidx.compose.material3.LocalContentColor
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -23,6 +25,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.GraphicsLayerScope
 import androidx.compose.ui.graphics.Paint
@@ -33,7 +36,10 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.CompositingStrategy
 import androidx.compose.ui.graphics.layer.drawLayer
@@ -41,10 +47,10 @@ import androidx.compose.ui.node.DrawModifierNode
 import androidx.compose.ui.node.ModifierNodeElement
 import androidx.compose.ui.node.invalidateDraw
 import androidx.compose.ui.node.requireGraphicsContext
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
@@ -372,13 +378,100 @@ private fun DrawScope.drawGlassSurfaceColor(
     drawRect(surfaceColor.copy(alpha = surfaceColor.alpha * if (enabled) 1f else 0.8f))
 }
 
+internal const val LightNavigationContainerAlphaScale = 0.5f
+
+/** Adjusts only the sampled image, before the neutral tint and foreground are drawn. */
+internal fun DrawScope.drawLightNavigationBackdrop() {
+    drawRect(Color(0xFFF8F8F8).copy(alpha = 0.25f), blendMode = BlendMode.Luminosity)
+    drawRect(Color(0xFF444444).copy(alpha = 0.15f), blendMode = BlendMode.Plus)
+}
+
+/** Neutral navigation material, applied to the sampled image before its inner shadows. */
+internal fun DrawScope.drawNavigationGlassMaterial(
+    containerColor: Color,
+    isDark: Boolean,
+    containerAlphaMultiplier: Float = 1.25f,
+) {
+    if (isDark) {
+        drawRect(Color(0xFF999999).copy(alpha = 0.17f), blendMode = BlendMode.Luminosity)
+    } else {
+        drawLightNavigationBackdrop()
+    }
+    drawRect(
+        containerColor.copy(
+            alpha = containerColor.alpha * containerAlphaMultiplier.coerceAtLeast(0f) *
+                if (isDark) 0.6f else LightNavigationContainerAlphaScale,
+        ),
+    )
+}
+
+/** Both edge highlights use luminosity and additive passes, fading toward the center. */
+private fun DrawScope.drawDetailActionHighlights(shape: Shape) {
+    if (size.minDimension <= 0f) return
+    val outline = shape.createOutline(size, layoutDirection, this)
+    val stroke = Stroke(ceil(0.5.dp.toPx()) * 2f)
+    val middle = size.height / 2f
+    val highlightColor = Color.White.copy(alpha = 0.30f)
+    clipRect(bottom = middle) {
+        val brush = Brush.verticalGradient(
+            colors = listOf(highlightColor, Color.Transparent),
+            endY = middle,
+        )
+        drawOutline(
+            outline = outline,
+            brush = brush,
+            style = stroke,
+            blendMode = BlendMode.Luminosity,
+        )
+        drawOutline(
+            outline = outline,
+            brush = brush,
+            style = stroke,
+            blendMode = BlendMode.Plus,
+        )
+    }
+    clipRect(top = middle) {
+        val brush = Brush.verticalGradient(
+            colors = listOf(Color.Transparent, highlightColor),
+            startY = middle,
+            endY = size.height,
+        )
+        drawOutline(
+            outline = outline,
+            brush = brush,
+            style = stroke,
+            blendMode = BlendMode.Luminosity,
+        )
+        drawOutline(
+            outline = outline,
+            brush = brush,
+            style = stroke,
+            blendMode = BlendMode.Plus,
+        )
+    }
+}
+
+@Composable
+internal fun rememberNavigationInnerShadows(enabled: Boolean): NavigationInnerShadowRenderer? {
+    val renderer = remember(enabled) { if (enabled) NavigationInnerShadowRenderer() else null }
+    DisposableEffect(renderer) {
+        onDispose { renderer?.release() }
+    }
+    return renderer
+}
+
 /** Shared outer navigation-glass material used by the expanded nav and floating controls. */
 internal fun Modifier.navigationGlassBackground(
     backdrop: Backdrop,
     shape: () -> Shape,
     containerColor: Color,
+    navigationMaterial: Boolean,
+    innerShadows: NavigationInnerShadowRenderer?,
+    isDark: Boolean = false,
     containerAlphaMultiplier: Float = 1.25f,
     surfaceOverlay: (DrawScope.() -> Unit)? = null,
+    pressOverlay: (DrawScope.() -> Unit)? = null,
+    accentHighlights: Boolean = false,
     pressProgress: Float = 0f,
     pressProgressState: androidx.compose.runtime.State<Float>? = null,
     highlightAngle: Float = 90f,
@@ -386,6 +479,7 @@ internal fun Modifier.navigationGlassBackground(
     layerBlock: (GraphicsLayerScope.() -> Unit)? = null,
     appearance: GlassAppearance = GlassAppearance(),
 ): Modifier = this
+    .navigationGlassDropShadow(shape, layerBlock)
     .navigationGlassBoxShadow(shape, GlassBoxShadowAlpha, layerBlock)
     .drawBackdrop(
         backdrop = if (sampleBackdrop && appearance.usesBackdrop) backdrop else emptyBackdrop(),
@@ -402,23 +496,19 @@ internal fun Modifier.navigationGlassBackground(
                         chromaticAberration = true,
                     )
                 }
+                if (navigationMaterial && !isDark) liftNavigationShadows()
             }
         },
         highlight = {
-            val progress = pressProgressState?.value ?: pressProgress
-            Highlight.Default.copy(
-                alpha = 0.54f + 0.38f * progress,
-                style = HighlightStyle.Default(angle = highlightAngle),
-            )
+            if (accentHighlights) null else {
+                val progress = pressProgressState?.value ?: pressProgress
+                Highlight.Default.copy(
+                    alpha = 0.54f + 0.38f * progress,
+                    style = HighlightStyle.Default(angle = highlightAngle),
+                )
+            }
         },
-        shadow = {
-            Shadow(
-                radius = 15.dp,
-                offset = DpOffset(0.dp, 8.dp),
-                color = Color.Black,
-                alpha = 0.02f * GlassBoxShadowAlpha,
-            )
-        },
+        shadow = null,
         innerShadow = null,
         layerBlock = layerBlock,
         onDrawSurface = {
@@ -426,6 +516,9 @@ internal fun Modifier.navigationGlassBackground(
                 drawRect(containerColor.copy(alpha = 1f))
             } else if (surfaceOverlay != null) {
                 surfaceOverlay()
+            } else if (navigationMaterial && sampleBackdrop && appearance.usesBackdrop) {
+                drawNavigationGlassMaterial(containerColor, isDark, containerAlphaMultiplier)
+                innerShadows?.draw(this, shape(), isDark = isDark)
             } else {
                 drawRect(
                     containerColor.copy(
@@ -433,6 +526,12 @@ internal fun Modifier.navigationGlassBackground(
                     ),
                 )
             }
+        },
+        onDrawFront = {
+            if (accentHighlights) {
+                drawDetailActionHighlights(shape())
+            }
+            pressOverlay?.invoke(this)
         },
     )
 
@@ -452,23 +551,41 @@ fun GlassSurface(
     sampleBackdrop: Boolean = true,
     exportedBackdrop: LayerBackdrop? = null,
     onVisualBoundsChanged: ((Rect, GlassPressHighlight) -> Unit)? = null,
-    pressHighlight: GlassPressHighlight? = null,
+    pressHighlight: (() -> GlassPressHighlight?)? = null,
     cancelPressFeedback: Boolean = false,
+    groupSurfaceSeparation: (() -> Float)? = LocalToolbarActionSeparation.current,
     morphProgress: androidx.compose.runtime.State<Float>? = null,
     morphCaptureWidth: Dp? = null,
     morphVerticalTravel: Dp = 0.dp,
     onClick: (() -> Unit)? = null,
+    onLongClick: (() -> Unit)? = null,
     contentAlignment: Alignment = Alignment.Center,
+    detailAction: Boolean = false,
     content: @Composable BoxScope.() -> Unit,
 ) {
     val colors = LocalGlassColors.current
     val appearance = LocalGlassAppearance.current
     val isLight = !colors.isDark
+    val navigationMaterial = emphasis == GlassEmphasis.Regular &&
+        navigationSurfaceColor == null && sampleBackdrop && appearance.usesBackdrop
+    val accentDetailAction = detailAction && style == GlassSurfaceStyle.Navigation &&
+        emphasis == GlassEmphasis.Prominent && navigationSurfaceColor == null &&
+        sampleBackdrop && appearance.usesBackdrop
+    val innerShadows = rememberNavigationInnerShadows(
+        style == GlassSurfaceStyle.Navigation && (navigationMaterial || accentDetailAction),
+    )
     val brightness = LocalGlassSurfaceBrightness.current.coerceIn(0f, 1f)
     val animationScope = rememberCoroutineScope()
     val interactiveHighlight = remember(animationScope) {
         InteractiveHighlight(animationScope = animationScope)
     }
+    val toolbarMember = rememberToolbarActionMember(
+        eligible = style == GlassSurfaceStyle.Navigation && emphasis == GlassEmphasis.Regular && !detailAction,
+        material = ToolbarActionMaterial(navigationSurfaceColor, navigationSurfaceAlphaMultiplier, sampleBackdrop),
+        separation = groupSurfaceSeparation,
+        highlight = interactiveHighlight,
+    )
+    val sharesToolbarSurface = toolbarMember?.sharesSurface == true
     LaunchedEffect(interactiveHighlight, cancelPressFeedback) {
         if (cancelPressFeedback) interactiveHighlight.cancelPress()
     }
@@ -477,12 +594,12 @@ fun GlassSurface(
         GlassEmphasis.Prominent -> colors.prominentContainer
     }
     val pressProgressState = remember(interactiveHighlight, pressHighlight) {
-        derivedStateOf { pressHighlight?.progress ?: interactiveHighlight.pressProgress }
+        derivedStateOf { pressHighlight?.invoke()?.progress ?: interactiveHighlight.pressProgress }
     }
     val shapeProvider = remember(shape) { { shape } }
-    val dragScaleLayerBlock: GraphicsLayerScope.() -> Unit = remember(interactiveHighlight, onVisualBoundsChanged) {
+    val dragScaleLayerBlock: GraphicsLayerScope.() -> Unit = remember(interactiveHighlight, toolbarMember, onVisualBoundsChanged) {
         {
-            applyGlassDragScale(
+            if (toolbarMember != null) toolbarMember.applyPressTransform(this) else applyGlassDragScale(
                 pressProgress = interactiveHighlight.pressProgress,
                 offset = interactiveHighlight.offset,
             )
@@ -518,6 +635,8 @@ fun GlassSurface(
             active = morphing,
             shape = shape,
             tint = navigationSurfaceColor ?: surfaceColor,
+            navigationMaterial = navigationMaterial,
+            isDark = colors.isDark,
             pressProgress = { pressProgressState.value },
             layerBlock = dragScaleLayerBlock,
             tintMultiplier = navigationSurfaceAlphaMultiplier,
@@ -526,7 +645,9 @@ fun GlassSurface(
             morphProgress = { morphProgress.value },
         )
     } else null
-    val glassModifier = if (morphing && morphGlassModifier != null) {
+    val glassModifier = if (sharesToolbarSurface) {
+        Modifier.graphicsLayer { toolbarMember?.applyPressTransform(this) }
+    } else if (morphing && morphGlassModifier != null) {
         morphGlassModifier
     } else if (style == GlassSurfaceStyle.Navigation) {
         val containerColor = navigationSurfaceColor ?: surfaceColor
@@ -536,6 +657,9 @@ fun GlassSurface(
             containerColor,
             emphasis,
             isLight,
+            navigationMaterial,
+            accentDetailAction,
+            innerShadows,
             brightness,
             enabled,
             navigationSurfaceAlphaMultiplier,
@@ -548,12 +672,21 @@ fun GlassSurface(
                 backdrop = surfaceBackdrop,
                 shape = shapeProvider,
                 containerColor = containerColor,
+                navigationMaterial = navigationMaterial,
+                innerShadows = innerShadows,
+                isDark = colors.isDark,
                 containerAlphaMultiplier = navigationSurfaceAlphaMultiplier,
-                surfaceOverlay = if (emphasis == GlassEmphasis.Prominent) {
+                surfaceOverlay = if (accentDetailAction) {
+                    {
+                        drawGlassSurfaceColor(containerColor, true, isLight, brightness, enabled)
+                        innerShadows?.draw(this, shape, isDark = colors.isDark)
+                    }
+                } else if (emphasis == GlassEmphasis.Prominent) {
                     {
                         drawGlassSurfaceColor(containerColor, true, isLight, brightness, enabled)
                     }
                 } else null,
+                accentHighlights = accentDetailAction,
                 pressProgressState = pressProgressState,
                 sampleBackdrop = sampleBackdrop,
                 layerBlock = dragScaleLayerBlock,
@@ -636,40 +769,77 @@ fun GlassSurface(
             )
         }
     }
-    val surfaceModifier = modifier.then(glassModifier)
-
-    Box(
-        modifier = surfaceModifier
-            .then(
-                if (pressHighlight != null) interactiveHighlight.highlightModifier(
-                    progressProvider = { pressHighlight.progress },
-                    positionProvider = { Offset(it.width * pressHighlight.position.x, it.height * pressHighlight.position.y) },
-                ) else if (onClick != null && enabled) interactiveHighlight.modifier else Modifier,
-            )
-            .then(
-                if (onClick != null) {
-                    Modifier.clickable(
-                        enabled = enabled,
-                        interactionSource = null,
-                        indication = null,
-                        role = Role.Button,
-                        onClick = onClick,
-                    ).then(if (enabled) interactiveHighlight.gestureModifier else Modifier)
-                } else {
-                    Modifier
-                },
-            ),
-        contentAlignment = contentAlignment,
-        content = {
-            val contentColor = if (emphasis == GlassEmphasis.Prominent) Color.White else colors.content
-            CompositionLocalProvider(
-                LocalContentColor provides contentColor,
-                LocalGlassContentColor provides contentColor,
-            ) {
-                content()
-            }
-        },
-    )
+    val drawSurface: @Composable (Modifier) -> Unit = { surfaceModifier ->
+        Box(
+            modifier = surfaceModifier
+                .then(
+                    if (sharesToolbarSurface) Modifier
+                    else if (pressHighlight != null) interactiveHighlight.highlightModifier(
+                        progressProvider = { pressHighlight()?.progress ?: interactiveHighlight.pressProgress },
+                        positionProvider = { size ->
+                            pressHighlight()?.let { Offset(size.width * it.position.x, size.height * it.position.y) }
+                                ?: interactiveHighlight.highlightPosition(size)
+                        },
+                    ) else if (onClick != null && enabled) interactiveHighlight.modifier else Modifier,
+                )
+                .then(
+                    if (onClick != null) {
+                        val click = if (onLongClick != null) Modifier.combinedClickable(
+                            enabled = enabled,
+                            interactionSource = null,
+                            indication = null,
+                            role = Role.Button,
+                            onClick = onClick,
+                            onLongClick = onLongClick,
+                        ) else Modifier.clickable(
+                            enabled = enabled,
+                            interactionSource = null,
+                            indication = null,
+                            role = Role.Button,
+                            onClick = onClick,
+                        )
+                        click.then(if (enabled) interactiveHighlight.gestureModifier else Modifier)
+                    } else {
+                        Modifier
+                    },
+                ),
+            contentAlignment = contentAlignment,
+            content = {
+                val contentColor = if (emphasis == GlassEmphasis.Prominent) Color.White else colors.content
+                CompositionLocalProvider(
+                    LocalContentColor provides contentColor,
+                    LocalGlassContentColor provides contentColor,
+                    LocalIosToolbarActionGroup provides null,
+                    LocalToolbarActionSeparation provides null,
+                ) {
+                    if (accentDetailAction) {
+                        Box(
+                            modifier = Modifier.graphicsLayer {
+                                blendMode = BlendMode.Plus
+                                compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen
+                            },
+                            contentAlignment = contentAlignment,
+                            content = content,
+                        )
+                    } else {
+                        content()
+                    }
+                }
+            },
+        )
+    }
+    if (toolbarMember == null) {
+        drawSurface(modifier.then(glassModifier))
+    } else {
+        // Register an untransformed layout wrapper. The inner surface owns press scaling,
+        // so a press cannot change adjacency or apply the same deformation twice.
+        Box(
+            modifier = modifier.onGloballyPositioned(toolbarMember::updateCoordinates),
+            propagateMinConstraints = true,
+        ) {
+            drawSurface(glassModifier)
+        }
+    }
 }
 
 @Composable
@@ -681,6 +851,9 @@ fun GlassButton(
     navigationSurfaceColor: Color? = null,
     enabled: Boolean = true,
     emphasis: GlassEmphasis = GlassEmphasis.Regular,
+    navigationSurfaceAlphaMultiplier: Float = 1.25f,
+    sampleBackdrop: Boolean = true,
+    detailAction: Boolean = false,
     content: @Composable RowScope.() -> Unit,
 ) {
     GlassSurface(
@@ -688,10 +861,13 @@ fun GlassButton(
         backdrop = backdrop,
         style = style,
         navigationSurfaceColor = navigationSurfaceColor,
+        navigationSurfaceAlphaMultiplier = navigationSurfaceAlphaMultiplier,
         shape = Capsule(),
         emphasis = emphasis,
         enabled = enabled,
+        sampleBackdrop = sampleBackdrop,
         onClick = onClick,
+        detailAction = detailAction,
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 16.dp),
@@ -714,6 +890,9 @@ fun GlassIconButton(
     sampleBackdrop: Boolean = true,
     morphProgress: androidx.compose.runtime.State<Float>? = null,
     morphCaptureWidth: Dp? = null,
+    groupSurfaceSeparation: (() -> Float)? = LocalToolbarActionSeparation.current,
+    onLongClick: (() -> Unit)? = null,
+    detailAction: Boolean = false,
     content: @Composable BoxScope.() -> Unit,
 ) {
     GlassSurface(
@@ -728,7 +907,10 @@ fun GlassIconButton(
         sampleBackdrop = sampleBackdrop,
         morphProgress = morphProgress,
         morphCaptureWidth = morphCaptureWidth,
+        groupSurfaceSeparation = groupSurfaceSeparation,
         onClick = onClick,
+        onLongClick = onLongClick,
+        detailAction = detailAction,
         content = content,
     )
 }

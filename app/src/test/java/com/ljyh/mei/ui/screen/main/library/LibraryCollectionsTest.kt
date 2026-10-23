@@ -3,6 +3,15 @@ package com.ljyh.mei.ui.screen.main.library
 import com.ljyh.mei.constants.LibraryStyle
 import com.ljyh.mei.data.repository.LibraryAccount
 import com.ljyh.mei.data.repository.LibraryCollectionPage
+import com.ljyh.mei.data.repository.collectLibraryPages
+import com.ljyh.mei.data.model.room.Playlist
+import com.ljyh.mei.di.repository.observeOwnedPlaylists
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.runBlocking
 import com.ljyh.mei.ui.navigation.ContentFeature
 import com.ljyh.mei.ui.navigation.LibraryPage
 import org.junit.Assert.assertEquals
@@ -13,6 +22,66 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LibraryCollectionsTest {
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun playerPlaylistChoicesFollowLoginSwitchAndLogoutWithoutDatabaseChanges() = runTest {
+        fun playlist(id: String, owner: String) = Playlist(id, id, "", owner, "", "", 1)
+        val rows = MutableStateFlow(listOf(playlist("a", "1"), playlist("b", "2")))
+        val accounts = MutableStateFlow<LibraryAccount?>(null)
+        var visible = emptyList<Playlist>()
+        backgroundScope.launch { observeOwnedPlaylists(rows, accounts).collect { visible = it } }
+        runCurrent()
+        assertTrue(visible.isEmpty())
+        accounts.value = LibraryAccount("1", "session-1")
+        runCurrent()
+        assertEquals(listOf("a"), visible.map { it.id })
+        accounts.value = LibraryAccount("2", "session-2")
+        runCurrent()
+        assertEquals(listOf("b"), visible.map { it.id })
+        rows.value += playlist("c", "2")
+        runCurrent()
+        assertEquals(listOf("b", "c"), visible.map { it.id })
+        accounts.value = null
+        runCurrent()
+        assertTrue(visible.isEmpty())
+    }
+
+    @Test
+    fun completePlaylistChoicesContinuePastOneHundredAndDeduplicateOverlap() = runBlocking {
+        val offsets = mutableListOf<Int>()
+        val choices = collectLibraryPages(key = { it }) { offset ->
+            offsets += offset
+            when (offset) {
+                0 -> LibraryCollectionPage((1..100).map(Int::toString), 100, true)
+                100 -> LibraryCollectionPage((100..140).map(Int::toString), 141, false)
+                else -> error("Unexpected offset")
+            }
+        }
+        assertEquals(listOf(0, 100), offsets)
+        assertEquals((1..140).map(Int::toString), choices)
+    }
+
+    @Test
+    fun incompletePlaylistChoicesFailOnEmptyRepeatedOrNonAdvancingContinuation() = runBlocking {
+        listOf(
+            LibraryCollectionPage(emptyList<String>(), 100, true),
+            LibraryCollectionPage(listOf("one"), 200, true),
+            LibraryCollectionPage(listOf("two"), 100, true),
+        ).forEach { continuation ->
+            val result = runCatching {
+                collectLibraryPages(key = { it }) { offset ->
+                    if (offset == 0) LibraryCollectionPage(listOf("one"), 100, true)
+                    else continuation
+                }
+            }
+            assertTrue(result.exceptionOrNull() is IllegalStateException)
+        }
+        val empty = collectLibraryPages<String>(key = { it }) {
+            LibraryCollectionPage(emptyList(), 0, false)
+        }
+        assertTrue(empty.isEmpty())
+    }
+
     @Test
     fun defaultPageUsesTheMergedAlbumPageOnlyForTheDefaultStyle() {
         val enabledFeatures = ContentFeature.entries.toSet()

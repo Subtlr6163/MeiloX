@@ -17,10 +17,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -28,6 +29,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -36,7 +38,9 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.SheetState
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -100,7 +104,6 @@ import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.kyant.backdrop.drawBackdrop
 import com.kyant.backdrop.effects.blur
 import com.kyant.backdrop.highlight.Highlight
-import com.kyant.backdrop.shadow.InnerShadow
 import com.kyant.backdrop.shadow.Shadow
 import com.kyant.capsule.ContinuousRoundedRectangle
 import com.kyant.shapes.Capsule
@@ -112,6 +115,7 @@ import kotlin.math.max
 import kotlin.math.sin
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 val IosModalSheetShape = ContinuousRoundedRectangle(
@@ -139,9 +143,14 @@ private class IosPopupPositionProvider(
     private val targetMenuWidthPx: Int,
     private val horizontalInsetPx: Int,
     private val forceBelowAnchor: Boolean,
+    private val centerHorizontally: Boolean,
+    private val alignToAnchorStart: Boolean,
+    private val anchorAlignment: Alignment.Horizontal,
+    private val horizontalOvershootMarginPx: Int,
     private val visualHostWidthPx: Int,
     private val visualHostHeightPx: Int,
     private val anchorOvershootVerticalPx: Int,
+    private val onAnchorOriginResolved: (Float) -> Unit,
     private val onDirectionResolved: (opensAbove: Boolean) -> Unit,
 ) : PopupPositionProvider {
     private var opensAbove: Boolean? = null
@@ -169,18 +178,28 @@ private class IosPopupPositionProvider(
         val inset = horizontalInsetPx.coerceAtMost(
             ((windowSize.width - targetMenuWidthPx) / 2).coerceAtLeast(0),
         )
-        val menuLeft = (anchorBounds.right - targetMenuWidthPx).coerceIn(
+        val requestedLeft = if (centerHorizontally) {
+            (windowSize.width - targetMenuWidthPx) / 2
+        } else if (alignToAnchorStart) {
+            if (layoutDirection == LayoutDirection.Rtl) anchorBounds.right - targetMenuWidthPx else anchorBounds.left
+        } else {
+            anchorBounds.right - targetMenuWidthPx
+        }
+        val menuLeft = requestedLeft.coerceIn(
             inset,
             (windowSize.width - targetMenuWidthPx - inset).coerceAtLeast(inset),
         )
-        val x = menuLeft - (visualHostWidthPx - targetMenuWidthPx)
-        // The forced-below variant is used by message bubbles. Its popup host contains the
-        // vertical overshoot margin plus the 15% spring shell, so positioning the host at
-        // `anchorBounds.bottom` would leave the menu beside the bubble. Offset the host by the
-        // exact distance from its top edge to the resting menu top instead.
-        val menuTopInHost = (
-            visualHostHeightPx - targetMenuHeightPx
-        ).coerceAtLeast(0)
+        val anchorX = anchorBounds.left + anchorAlignment.align(0, anchorBounds.width, layoutDirection)
+        onAnchorOriginResolved((anchorX - menuLeft).toFloat() / targetMenuWidthPx.coerceAtLeast(1))
+        val menuLeftInHost = if (layoutDirection == LayoutDirection.Rtl) {
+            horizontalOvershootMarginPx
+        } else {
+            visualHostWidthPx - targetMenuWidthPx
+        }
+        val x = menuLeft - menuLeftInHost
+        // The bottom-aligned inner host leaves one fixed margin above the resting menu.
+        // The spring overshoot space sits below it and must not shift the menu over its anchor.
+        val menuTopInHost = anchorOvershootVerticalPx
         val visualY = if (forceBelowAnchor) {
             anchorBounds.bottom - menuTopInHost
         } else if (resolvedDirection) {
@@ -250,6 +269,9 @@ fun IosTopToolbar(
     collapseProgress: Float = 1f,
     navigation: (@Composable () -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
+    navigationStyle: IosToolbarActionStyle = IosToolbarActionStyle.Merged,
+    actionsStyle: IosToolbarActionStyle = IosToolbarActionStyle.Merged,
+    actionsSeparationProgress: Float? = null,
 ) {
     val progress = collapseProgress.coerceIn(0f, 1f)
     CompositionLocalProvider(
@@ -258,10 +280,16 @@ fun IosTopToolbar(
         LocalContentColor provides LocalGlassColors.current.content,
     ) {
         when (style) {
-            IosTopBarStyle.LargeTitle -> Column(modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+            IosTopBarStyle.LargeTitle -> Column(modifier.padding(horizontal = IosPageHorizontalPadding, vertical = 10.dp)) {
                 Row(Modifier.fillMaxWidth().height(54.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.weight(1f)) { navigation?.invoke() }
-                    Row(horizontalArrangement = Arrangement.spacedBy(IosTopToolbarActionGap), content = actions)
+                    Box(Modifier.weight(1f)) {
+                        IosToolbarActionGroup(style = navigationStyle) { navigation?.invoke() }
+                    }
+                    IosToolbarActionGroup(
+                        style = actionsStyle,
+                        separationProgress = actionsSeparationProgress,
+                        content = actions,
+                    )
                 }
                 Column(Modifier.offset(y = (-10).dp)) {
                     Text(title, style = IosTypography.largeTitle, color = LocalGlassColors.current.content)
@@ -269,7 +297,7 @@ fun IosTopToolbar(
                 }
             }
             IosTopBarStyle.CompactLargeTitle -> Row(
-                modifier.fillMaxWidth().height(54.dp).padding(horizontal = 16.dp),
+                modifier.fillMaxWidth().height(54.dp).padding(horizontal = IosPageHorizontalPadding),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
@@ -278,7 +306,11 @@ fun IosTopToolbar(
                     color = LocalGlassColors.current.content,
                     modifier = Modifier.weight(1f),
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(IosTopToolbarActionGap), content = actions)
+                IosToolbarActionGroup(
+                    style = actionsStyle,
+                    separationProgress = actionsSeparationProgress,
+                    content = actions,
+                )
             }
             else -> {
                 var leadingWidth by remember { mutableIntStateOf(0) }
@@ -288,10 +320,10 @@ fun IosTopToolbar(
                 val trailingPad = with(density) { trailingWidth.toDp() }
                 val centeredTitleSidePadding = maxOf(leadingPad, trailingPad) +
                     if (leadingWidth > 0 || trailingWidth > 0) IosTopToolbarActionGap else 0.dp
-                Box(modifier.fillMaxWidth().height(54.dp).padding(horizontal = 16.dp)) {
-                    Row(
+                Box(modifier.fillMaxWidth().height(54.dp).padding(horizontal = IosPageHorizontalPadding)) {
+                    IosToolbarActionGroup(
                         Modifier.align(Alignment.CenterStart).onSizeChanged { leadingWidth = it.width },
-                        verticalAlignment = Alignment.CenterVertically,
+                        style = navigationStyle,
                     ) { navigation?.invoke() }
                     Column(
                         Modifier
@@ -333,9 +365,10 @@ fun IosTopToolbar(
                             )
                         }
                     }
-                    Row(
+                    IosToolbarActionGroup(
                         Modifier.align(Alignment.CenterEnd).onSizeChanged { trailingWidth = it.width },
-                        horizontalArrangement = Arrangement.spacedBy(IosTopToolbarActionGap),
+                        style = actionsStyle,
+                        separationProgress = actionsSeparationProgress,
                         content = actions,
                     )
                 }
@@ -351,11 +384,13 @@ fun IosTopToolbar(
 fun IosSheetTopToolbar(
     title: String,
     modifier: Modifier = Modifier,
+    navigation: (@Composable () -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     IosTopToolbar(
         title = title,
         modifier = modifier.offset(y = (-5).dp),
+        navigation = navigation,
         actions = actions,
     )
 }
@@ -365,6 +400,7 @@ fun IosSheetTopToolbarButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    onLongClick: (() -> Unit)? = null,
     content: @Composable BoxScope.() -> Unit,
 ) {
     val colors = LocalGlassColors.current
@@ -376,6 +412,29 @@ fun IosSheetTopToolbarButton(
         modifier = modifier,
         enabled = enabled,
         navigationSurfaceColor = groupedListBackground,
+        navigationSurfaceAlphaMultiplier = 1f,
+        sampleBackdrop = false,
+        onLongClick = onLongClick,
+        content = content,
+    )
+}
+
+/** Text actions share the sheet toolbar's tint, highlight, and press physics. */
+@Composable
+fun IosSheetButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    content: @Composable RowScope.() -> Unit,
+) {
+    val colors = LocalGlassColors.current
+    GlassButton(
+        onClick = onClick,
+        modifier = modifier,
+        enabled = enabled,
+        navigationSurfaceColor = colors.elevatedBackground.copy(
+            alpha = LocalGroupedListBackgroundAlpha.current.coerceIn(0f, 1f),
+        ),
         navigationSurfaceAlphaMultiplier = 1f,
         sampleBackdrop = false,
         content = content,
@@ -685,6 +744,7 @@ fun IosContextMenu(
     heightOverride: androidx.compose.ui.unit.Dp? = null,
     menuWidth: androidx.compose.ui.unit.Dp = PopupMenuWidth,
     menuScale: Float = 1f,
+    initialTransformOrigin: TransformOrigin? = null,
     onMenuBoundsChanged: ((androidx.compose.ui.geometry.Rect) -> Unit)? = null,
     content: @Composable ColumnScope.(LayerBackdrop) -> Unit,
 ) {
@@ -701,8 +761,9 @@ fun IosContextMenu(
     ).coerceIn(0f, 1f)
     val menuHeight = heightOverride ?: (20.dp + 44.dp * itemCount)
     val radius = 34.dp
+    val menuShape = remember(radius) { RoundedRectangle(radius) }
     val transitionScale = 0.24f + 0.76f * animationProgress
-    val startOrigin = TransformOrigin(1f, if (opensAbove) 1f else 0f)
+    val startOrigin = initialTransformOrigin ?: TransformOrigin(1f, if (opensAbove) 1f else 0f)
     val originProgress = transformOriginProgress.coerceIn(0f, 1f)
     val transitionOrigin = TransformOrigin(
         pivotFractionX = startOrigin.pivotFractionX +
@@ -711,6 +772,7 @@ fun IosContextMenu(
             (0.5f - startOrigin.pivotFractionY) * originProgress,
     )
     val appearance = LocalGlassAppearance.current
+    val innerShadows = rememberNavigationInnerShadows(true)
     val childBackdrop = rememberLayerBackdrop()
     // Context menus render in a separate Popup window. Map their sampling coordinates back
     // to the source window so the menu refracts the content physically behind its position.
@@ -719,8 +781,9 @@ fun IosContextMenu(
     } else {
         emptyBackdrop()
     }
-    val isLight = !LocalGlassColors.current.isDark
-    val elevatedBackground = LocalGlassColors.current.elevatedBackground
+    val colors = LocalGlassColors.current
+    val isLight = !colors.isDark
+    val elevatedBackground = colors.elevatedBackground
     val menuLayerBlock: GraphicsLayerScope.() -> Unit = {
         transformOrigin = startOrigin
         applyGlassDragScale(
@@ -797,7 +860,7 @@ fun IosContextMenu(
                         )
                     }
                     .navigationGlassBoxShadow(
-                        shape = { RoundedRectangle(radius) },
+                        shape = { menuShape },
                         alpha = GlassBoxShadowAlpha * shadowAlpha.coerceIn(0f, 1f),
                         layerBlock = menuLayerBlock,
                     ),
@@ -808,7 +871,7 @@ fun IosContextMenu(
                         .drawBackdrop(
                             backdrop = samplingBackdrop,
                             exportedBackdrop = childBackdrop.takeIf { appearance.usesBackdrop },
-                            shape = { RoundedRectangle(radius) },
+                            shape = { menuShape },
                             effects = {
                                 if (appearance.usesBackdrop) {
                                     blur(if (isLight) 16.dp.toPx() else 12.dp.toPx())
@@ -829,7 +892,7 @@ fun IosContextMenu(
                                         shadowAlpha.coerceIn(0f, 1f),
                                 )
                             },
-                            innerShadow = { InnerShadow(radius = 8.dp, alpha = 0.10f * progress) },
+                            innerShadow = null,
                             layerBlock = menuLayerBlock,
                             onDrawSurface = {
                                 drawRect(
@@ -837,6 +900,7 @@ fun IosContextMenu(
                                         alpha = if (appearance.usesBackdrop) 0.70f * progress else 1f,
                                     ),
                                 )
+                                innerShadows?.draw(this, menuShape, isDark = colors.isDark)
                             },
                         )
                         .then(interactiveHighlight.modifier)
@@ -870,23 +934,35 @@ fun IosPopupMenu(
     keepAnchorVisible: Boolean = false,
     forceBelowAnchor: Boolean = false,
     fullScreen: Boolean = false,
+    centerHorizontally: Boolean = false,
+    alignToAnchorStart: Boolean = false,
+    expandFromAnchor: Alignment.Horizontal? = null,
     externalAnchorBounds: androidx.compose.ui.geometry.Rect? = null,
     menuWidth: androidx.compose.ui.unit.Dp = PopupMenuWidth,
     menuScale: Float = 1f,
     heightOverride: androidx.compose.ui.unit.Dp? = null,
     onMenuBoundsChanged: ((androidx.compose.ui.geometry.Rect) -> Unit)? = null,
     onMenuAlphaChanged: ((Float) -> Unit)? = null,
+    onAnchorSeparationChanged: ((Float) -> Unit)? = null,
+    anchorSeparationEnabled: Boolean = true,
     onClosed: (() -> Unit)? = null,
+    overlayContent: @Composable BoxScope.(Float) -> Unit = {},
     anchor: @Composable (onClick: () -> Unit) -> Unit,
     content: @Composable ColumnScope.(LayerBackdrop, close: () -> Unit) -> Unit,
 ) {
     var anchorSize by remember { mutableStateOf(IntSize.Zero) }
     var popupAlive by remember { mutableStateOf(expanded) }
+    var transitionStarted by remember { mutableStateOf(expanded) }
     var opensAbove by remember { mutableStateOf(false) }
+    var anchorFractionX by remember { mutableFloatStateOf(1f) }
     val progress = remember { Animatable(if (expanded) 1f else 0f) }
     val transformOriginProgress = remember { Animatable(if (expanded) 1f else 0f) }
     val menuAlpha = remember { Animatable(if (expanded) 1f else 0f) }
     val shadowAlpha = remember { Animatable(if (expanded) 1f else 0f) }
+    val separatesToolbarAnchor = anchorSeparationEnabled &&
+        (LocalIosToolbarActionGroup.current?.sharedRuns()?.isNotEmpty() == true || onAnchorSeparationChanged != null)
+    var detachAnchorForTransition by remember { mutableStateOf(expanded && separatesToolbarAnchor) }
+    val anchorSeparation = remember { Animatable(if (expanded) 1f else 0f) }
     var contentAlpha by remember { mutableFloatStateOf(if (expanded) 1f else 0f) }
 
     LaunchedEffect(Unit) {
@@ -935,12 +1011,26 @@ fun IosPopupMenu(
     }
 
     LaunchedEffect(expanded) {
-        if (expanded) {
+        if (expanded) coroutineScope {
+            transitionStarted = true
+            detachAnchorForTransition = detachAnchorForTransition || separatesToolbarAnchor
+            if (detachAnchorForTransition) {
+                launch {
+                    anchorSeparation.animateTo(
+                        1f,
+                        spring(dampingRatio = 0.82f, stiffness = 400f, visibilityThreshold = 0.02f),
+                    )
+                }
+                // Continue as soon as the neck has separated; the spring may settle behind
+                // the menu without holding an already detached button on screen.
+                snapshotFlow { anchorSeparation.value }.first { it >= 1f }
+            }
             popupAlive = true
             coroutineScope {
                 launch {
                     progress.animateTo(
                         targetValue = 1f,
+                        initialVelocity = if (detachAnchorForTransition) anchorSeparation.velocity.coerceIn(0f, 3f) else 0f,
                         animationSpec = spring(
                             dampingRatio = 0.78f,
                             stiffness = 240f,
@@ -960,8 +1050,10 @@ fun IosPopupMenu(
                 }
                 launch { menuAlpha.animateTo(1f, tween(120)) }
             }
-        } else {
-            coroutineScope {
+        } else coroutineScope {
+            // A second tap during detachment reverses the neck immediately; there is no
+            // popup to collapse yet, so it must not wait for the menu's closing duration.
+            if (popupAlive) {
                 launch {
                     progress.animateTo(
                         targetValue = 0f,
@@ -982,16 +1074,34 @@ fun IosPopupMenu(
                     )
                 }
                 launch { menuAlpha.animateTo(0f, tween(400)) }
+                snapshotFlow { progress.value <= 0.001f && menuAlpha.value <= 0f }.first { it }
             }
             progress.snapTo(0f)
             transformOriginProgress.snapTo(0f)
             menuAlpha.snapTo(0f)
             popupAlive = false
-            onClosed?.invoke()
+            if (detachAnchorForTransition) {
+                anchorSeparation.animateTo(
+                    0f,
+                    spring(dampingRatio = 0.82f, stiffness = 400f, visibilityThreshold = 0.02f),
+                )
+            } else {
+                anchorSeparation.snapTo(0f)
+            }
+            detachAnchorForTransition = false
+            if (transitionStarted) {
+                transitionStarted = false
+                onClosed?.invoke()
+            }
         }
     }
 
     val currentAlphaCallback by androidx.compose.runtime.rememberUpdatedState(onMenuAlphaChanged)
+    val currentSeparationCallback by androidx.compose.runtime.rememberUpdatedState(onAnchorSeparationChanged)
+    LaunchedEffect(anchorSeparation) {
+        snapshotFlow { anchorSeparation.value.coerceIn(0f, 1f) }
+            .collect { currentSeparationCallback?.invoke(it) }
+    }
     LaunchedEffect(menuAlpha) {
         androidx.compose.runtime.snapshotFlow { menuAlpha.value.coerceIn(0f, 1f) }
             .collect { currentAlphaCallback?.invoke(it) }
@@ -1028,7 +1138,11 @@ fun IosPopupMenu(
                     }
                 },
         ) {
-            anchor { onExpandedChange(!expanded) }
+            CompositionLocalProvider(
+                LocalToolbarActionSeparation provides { anchorSeparation.value.coerceIn(0f, 1f) },
+            ) {
+                anchor { onExpandedChange(!expanded) }
+            }
         }
         if (popupAlive && (anchorSize != IntSize.Zero || externalAnchorBounds != null)) {
             val density = androidx.compose.ui.platform.LocalDensity.current
@@ -1051,6 +1165,9 @@ fun IosPopupMenu(
                 targetMenuWidthPx,
                 horizontalInsetPx,
                 forceBelowAnchor,
+                centerHorizontally,
+                alignToAnchorStart,
+                expandFromAnchor,
                 visualHostWidthPx,
                 visualHostHeightPx,
             ) {
@@ -1059,11 +1176,16 @@ fun IosPopupMenu(
                     targetMenuWidthPx = targetMenuWidthPx,
                     horizontalInsetPx = horizontalInsetPx,
                     forceBelowAnchor = forceBelowAnchor,
+                    centerHorizontally = centerHorizontally,
+                    alignToAnchorStart = alignToAnchorStart,
+                    anchorAlignment = expandFromAnchor ?: Alignment.Start,
+                    horizontalOvershootMarginPx = with(density) { PopupMenuOvershootMarginStart.roundToPx() },
                     visualHostWidthPx = visualHostWidthPx,
                     visualHostHeightPx = visualHostHeightPx,
                     anchorOvershootVerticalPx = with(density) {
                         PopupMenuOvershootMarginVertical.roundToPx()
                     },
+                    onAnchorOriginResolved = { anchorFractionX = it },
                 ) { resolved ->
                     opensAbove = resolved
                 }
@@ -1110,12 +1232,16 @@ fun IosPopupMenu(
                 // outside taps (dismiss) instead of letting them vanish into the window.
                 Box(
                     Modifier
-                        .then(if (fullScreen) Modifier.fillMaxSize() else Modifier)
-                        .clickable(
+                        .then(if (fullScreen) Modifier.fillMaxSize() else Modifier),
+                    contentAlignment = androidx.compose.ui.AbsoluteAlignment.TopLeft,
+                ) {
+                    // The dismiss target is a sibling so it never merges submenu pane semantics.
+                    Box(
+                        Modifier.matchParentSize().clickable(
                             interactionSource = null,
                             indication = null,
                         ) { onExpandedChange(false) },
-                ) {
+                    )
                     CompositionLocalProvider(LocalIosPopupMenuInteractive provides expanded) {
                         // Wide cascading menus exceed the platform Popup's measured width.
                         // Keep their window at screen size and position the existing animation
@@ -1124,7 +1250,7 @@ fun IosPopupMenu(
                         IosContextMenu(
                             visible = true,
                             modifier = if (fullScreen) {
-                                Modifier.offset { fullScreenMenuOffset ?: IntOffset.Zero }
+                                Modifier.absoluteOffset { fullScreenMenuOffset ?: IntOffset.Zero }
                             } else {
                                 Modifier
                             },
@@ -1139,12 +1265,16 @@ fun IosPopupMenu(
                             itemCount = itemCount,
                             heightOverride = heightOverride,
                             menuScale = menuScale,
+                            initialTransformOrigin = if (expandFromAnchor != null) {
+                                TransformOrigin(anchorFractionX, if (opensAbove) 1f else 0f)
+                            } else null,
                             menuWidth = menuWidth,
                             onMenuBoundsChanged = onMenuBoundsChanged,
                         ) { childBackdrop ->
                             content(childBackdrop) { onExpandedChange(false) }
                         }
                     }
+                    overlayContent(menuAlpha.value.coerceIn(0f, 1f))
                 }
             }
         }
@@ -1223,6 +1353,7 @@ fun IosMenuItem(
     enabled: Boolean = true,
     iconTint: Color? = null,
     fontWeight: FontWeight? = null,
+    subtitle: String? = null,
     trailing: (@Composable () -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
@@ -1231,7 +1362,7 @@ fun IosMenuItem(
     Row(
         modifier
             .fillMaxWidth()
-            .height(44.dp)
+            .height(if (subtitle == null) 44.dp else 56.dp)
             .background(
                 color = Color.Black.copy(alpha = 0.15f * highlight.pressProgress),
                 shape = Capsule(),
@@ -1256,11 +1387,20 @@ fun IosMenuItem(
             }
         }
         Spacer(Modifier.width(12.dp))
-        Text(
-            title, modifier = Modifier.weight(1f), style = IosTypography.body,
-            fontWeight = fontWeight, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            color = if (destructive) LocalGlassColors.current.destructive else LocalGlassColors.current.content,
-        )
+        Column(Modifier.weight(1f)) {
+            Text(
+                title, style = IosTypography.body,
+                fontWeight = fontWeight, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                color = if (destructive) LocalGlassColors.current.destructive else LocalGlassColors.current.content,
+            )
+            subtitle?.let {
+                Text(
+                    it, style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    color = LocalGlassColors.current.secondaryContent,
+                )
+            }
+        }
         trailing?.invoke()
     }
 }
@@ -1392,6 +1532,7 @@ fun IosAlertSurface(
 ) {
     val colors = LocalGlassColors.current
     val appearance = LocalGlassAppearance.current
+    val innerShadows = rememberNavigationInnerShadows(true)
     val light = !colors.isDark
     val dialogWindow = (LocalView.current.parent as? DialogWindowProvider)?.window
     SideEffect {
@@ -1433,6 +1574,7 @@ fun IosAlertSurface(
                         }
                     },
                     highlight = { Highlight.Plain },
+                    innerShadow = null,
                     layerBlock = alertLayerBlock,
                     onDrawSurface = {
                         if (!appearance.usesBackdrop) {
@@ -1460,6 +1602,7 @@ fun IosAlertSurface(
                                 blendMode = BlendMode.Lighten,
                             )
                         }
+                        innerShadows?.draw(this, alertShape, isDark = colors.isDark)
                     },
                 )
                 .then(interactiveHighlight.modifier)
@@ -1614,6 +1757,7 @@ fun IosModalOverlay(
 
 /** Figma node 10525:1632. The glass shell reaches behind system navigation. */
 @OptIn(ExperimentalMaterial3Api::class)
+@Suppress("DEPRECATION")
 @Composable
 fun IosModalSheet(
     onDismissRequest: () -> Unit,
@@ -1621,6 +1765,8 @@ fun IosModalSheet(
     skipPartiallyExpanded: Boolean = true,
     backdrop: Backdrop = LocalBlurBackdrop.current,
     contentWindowInsets: @Composable () -> WindowInsets = { WindowInsets.statusBars },
+    sheetState: SheetState = rememberModalBottomSheetState(skipPartiallyExpanded = skipPartiallyExpanded),
+    contentNavigationBarInsets: @Composable () -> WindowInsets = { WindowInsets.navigationBars },
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val animationScope = rememberCoroutineScope()
@@ -1629,7 +1775,7 @@ fun IosModalSheet(
     }
     ModalBottomSheet(
         onDismissRequest = onDismissRequest,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = skipPartiallyExpanded),
+        sheetState = sheetState,
         modifier = modifier.graphicsLayer {
             clip = false
             applyGlassDragScale(
@@ -1645,6 +1791,14 @@ fun IosModalSheet(
         dragHandle = null,
         contentWindowInsets = contentWindowInsets,
     ) {
+        val dialogWindow = (LocalView.current.parent as? DialogWindowProvider)?.window
+        SideEffect {
+            dialogWindow?.apply {
+                navigationBarColor = android.graphics.Color.TRANSPARENT
+                navigationBarDividerColor = android.graphics.Color.TRANSPARENT
+                isNavigationBarContrastEnforced = false
+            }
+        }
         IosSheetSurface(
             modifier = Modifier.fillMaxWidth(),
             backdrop = backdrop,
@@ -1653,7 +1807,7 @@ fun IosModalSheet(
             applyDragScale = false,
         ) {
             Column(
-                Modifier.fillMaxWidth().navigationBarsPadding(),
+                Modifier.fillMaxWidth().windowInsetsPadding(contentNavigationBarInsets()),
             ) {
                 Box(
                     Modifier.fillMaxWidth().height(16.dp),
@@ -1685,6 +1839,7 @@ fun IosSheetSurface(
     val colors = LocalGlassColors.current
     val appearance = LocalGlassAppearance.current
     val isLight = !colors.isDark
+    val innerShadows = rememberNavigationInnerShadows(true)
     val animationScope = rememberCoroutineScope()
     val activeInteractiveHighlight = interactiveHighlight ?: remember(animationScope) {
         InteractiveHighlight(animationScope = animationScope)
@@ -1722,7 +1877,7 @@ fun IosSheetSurface(
                     effects = {},
                     highlight = { Highlight.Default.copy(alpha = if (isLight) 0.58f else 0.38f) },
                     shadow = { Shadow(radius = 48.dp, alpha = 0.25f) },
-                    innerShadow = { InnerShadow(radius = 8.dp, alpha = 0.12f) },
+                    innerShadow = null,
                     layerBlock = sheetLayerBlock,
                     onDrawSurface = {
                         drawRect(
@@ -1733,6 +1888,7 @@ fun IosSheetSurface(
                         if (appearance.usesBackdrop) {
                             drawRect(Color.White.copy(alpha = if (isLight) 0.12f else 0.04f))
                         }
+                        innerShadows?.draw(this, shape, isDark = colors.isDark)
                     },
                 )
                 .then(activeInteractiveHighlight.modifier)

@@ -3,6 +3,7 @@ package com.ljyh.mei.playback
 import android.content.Context
 import android.net.Uri
 import android.os.Bundle
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -11,7 +12,10 @@ import androidx.media3.common.MediaMetadata.MEDIA_TYPE_MUSIC
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import com.google.gson.Gson
+import com.google.gson.annotations.SerializedName
 import com.ljyh.mei.constants.PlaybackSnapshotKey
+import com.ljyh.mei.constants.RestorePlaybackPositionKey
+import com.ljyh.mei.constants.RestorePlaybackStateKey
 import com.ljyh.mei.data.model.MediaMetadata
 import com.ljyh.mei.data.model.PLACEHOLDER_URI
 import com.ljyh.mei.data.model.createPlaceholder
@@ -28,13 +32,21 @@ import timber.log.Timber
 private val Context.playbackProgressStore by preferencesDataStore(name = "playback_progress")
 private val ProgressKey = stringPreferencesKey("checkpoint")
 
+/** Stable disk keys; alternates match the verified pre-fix R8 checkpoint mapping. */
 internal data class PlaybackCheckpoint(
+    @field:SerializedName(value = "queueSavedAtEpochMs", alternate = ["a"])
     val queueSavedAtEpochMs: Long,
+    @field:SerializedName(value = "savedAtEpochMs", alternate = ["b"])
     val savedAtEpochMs: Long,
+    @field:SerializedName(value = "currentIndex", alternate = ["c"])
     val currentIndex: Int,
+    @field:SerializedName(value = "positionMs", alternate = ["d"])
     val positionMs: Long,
+    @field:SerializedName(value = "repeatMode", alternate = ["e"])
     val repeatMode: Int,
+    @field:SerializedName(value = "shuffleModeEnabled", alternate = ["f"])
     val shuffleModeEnabled: Boolean,
+    @field:SerializedName(value = "playWhenReady", alternate = ["g"])
     val playWhenReady: Boolean,
 )
 
@@ -53,6 +65,11 @@ internal fun PlaybackSnapshot.withCheckpoint(checkpoint: PlaybackCheckpoint?): P
     )
 }
 
+internal fun PlaybackSnapshot.withRestorePreferences(preferences: Preferences): PlaybackSnapshot = copy(
+    positionMs = if (preferences[RestorePlaybackPositionKey] != false) positionMs.coerceAtLeast(0L) else 0L,
+    playWhenReady = playWhenReady && preferences[RestorePlaybackStateKey] != false,
+)
+
 data class PlaybackSnapshot(
     val schemaVersion: Int = 2,
     val savedAtEpochMs: Long = System.currentTimeMillis(),
@@ -67,9 +84,11 @@ data class PlaybackSnapshot(
     val shuffleOrder: List<Int>? = null,
     val playlistSource: PlaylistQueueSource? = null,
     val similarFmSourceIds: List<String>? = null,
+    val queueAutoplayEnabled: Boolean = false,
+    val queueAutoplayStartIndex: Int? = null,
 ) {
     val isFmMode: Boolean
-        get() = sourceType == SOURCE_PERSONAL_FM
+        get() = sourceType == SOURCE_PERSONAL_FM || queueAutoplayEnabled
 
     companion object {
         const val SOURCE_QUEUE = "queue"
@@ -119,6 +138,8 @@ class PlaybackPersistence(
         isFmMode: Boolean,
         playlistSource: PlaylistQueueSource? = null,
         similarFmSourceIds: List<String>? = null,
+        queueAutoplayEnabled: Boolean = false,
+        queueAutoplayStartEntryId: String? = null,
     ): PlaybackSnapshot {
         val items = cachedItems ?: buildList(player.mediaItemCount) {
             repeat(player.mediaItemCount) { index ->
@@ -128,6 +149,7 @@ class PlaybackPersistence(
         val currentIndex = player.currentMediaItemIndex
             .takeIf { it in items.indices }
             ?: 0
+        val preserveQueueAutoplay = isFmMode && queueAutoplayEnabled
         return PlaybackSnapshot(
             items = items,
             currentIndex = currentIndex,
@@ -137,9 +159,13 @@ class PlaybackPersistence(
             playWhenReady = player.playWhenReady,
             queueTitle = queueTitle,
             shuffleOrder = cachedOrder ?: player.playbackOrderIndices(true).also { cachedOrder = it },
-            playlistSource = if (isFmMode) null else playlistSource,
+            playlistSource = if (!isFmMode || preserveQueueAutoplay) playlistSource else null,
             similarFmSourceIds = if (isFmMode) similarFmSourceIds else null,
-            sourceType = if (isFmMode) {
+            queueAutoplayEnabled = preserveQueueAutoplay,
+            queueAutoplayStartIndex = queueAutoplayStartEntryId?.takeIf { preserveQueueAutoplay }?.let { id ->
+                (0 until player.mediaItemCount).firstOrNull { player.getMediaItemAt(it).queueEntryId == id }
+            },
+            sourceType = if (isFmMode && !preserveQueueAutoplay) {
                 PlaybackSnapshot.SOURCE_PERSONAL_FM
             } else {
                 PlaybackSnapshot.SOURCE_QUEUE
@@ -154,7 +180,9 @@ class PlaybackPersistence(
                 val sameQueue = previous != null && previous.items === snapshot.items &&
                     previous.shuffleOrder === snapshot.shuffleOrder && previous.queueTitle == snapshot.queueTitle &&
                     previous.sourceType == snapshot.sourceType && previous.playlistSource == snapshot.playlistSource &&
-                    previous.similarFmSourceIds == snapshot.similarFmSourceIds
+                    previous.similarFmSourceIds == snapshot.similarFmSourceIds &&
+                    previous.queueAutoplayEnabled == snapshot.queueAutoplayEnabled &&
+                    previous.queueAutoplayStartIndex == snapshot.queueAutoplayStartIndex
                 if (!sameQueue) {
                     val queue = snapshot.copy(savedAtEpochMs = maxOf(snapshot.savedAtEpochMs, (previous?.savedAtEpochMs ?: 0L) + 1))
                     val encoded = gson.toJson(queue)

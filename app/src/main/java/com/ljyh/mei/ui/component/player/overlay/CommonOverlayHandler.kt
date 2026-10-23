@@ -15,6 +15,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.util.UnstableApi
 import com.ljyh.mei.ui.component.player.OverlayState
 import com.ljyh.mei.ui.component.player.PlayerViewModel
+import com.ljyh.mei.ui.component.player.component.localPlaybackQualityTitle
+import com.ljyh.mei.ui.component.player.component.PlayerNavigationMenu
 import com.ljyh.mei.ui.component.player.component.sheet.AlbumArtistBottomSheet
 import com.ljyh.mei.ui.component.player.component.sheet.MoreActionsSheet
 import com.ljyh.mei.ui.component.player.component.sheet.PlayerActionSettingsSheet
@@ -29,6 +31,10 @@ import com.ljyh.mei.ui.component.playlist.TrackActionMenu
 import com.ljyh.mei.ui.component.sheet.BottomSheetState
 import com.ljyh.mei.ui.local.LocalNavController
 import com.ljyh.mei.ui.model.MoreAction
+import com.ljyh.mei.ui.model.LyricSource
+import com.ljyh.mei.constants.PlayerStyle
+import com.ljyh.mei.constants.PlayerStyleKey
+import com.ljyh.mei.utils.rememberEnumPreference
 import com.ljyh.mei.ui.screen.Screen
 import com.ljyh.mei.R
 import com.ljyh.mei.ui.glass.IosAlertDialog
@@ -56,6 +62,7 @@ fun CommonOverlayHandler(
     val context = LocalContext.current
     val navController = LocalNavController.current
     val playerViewModel = stateContainer.playerViewModel
+    val playerStyle by rememberEnumPreference(PlayerStyleKey, PlayerStyle.AppleMusic)
 
     when (val overlay = overlayHandler.currentOverlayValue) {
         OverlayState.None -> {}
@@ -67,24 +74,44 @@ fun CommonOverlayHandler(
         }
 
         is OverlayState.AlbumArtist -> {
-            AlbumArtistBottomSheet(
-                coverUrl = overlay.cover,
-                albumInfo = overlay.album,
-                artistList = overlay.artists,
-                onAlbumClick = { id ->
-                    Screen.Album.navigate(navController) {
-                        addPath(id.toString())
-                    }
-                    sheetState?.collapse(spring(stiffness = Spring.StiffnessVeryLow))
-                },
-                onArtistClick = { id ->
-                    Screen.Artist.navigate(navController) {
-                        addPath(id.toString())
-                    }
-                    sheetState?.collapse(spring(stiffness = Spring.StiffnessVeryLow))
-                },
-                onDismissRequest = { overlayHandler.dismiss() },
-            )
+            val onAlbumClick: (Long) -> Unit = { id ->
+                Screen.Album.navigate(navController) { addPath(id.toString()) }
+                sheetState?.collapse(spring(stiffness = Spring.StiffnessVeryLow))
+            }
+            val onArtistClick: (Long) -> Unit = { id ->
+                Screen.Artist.navigate(navController) { addPath(id.toString()) }
+                sheetState?.collapse(spring(stiffness = Spring.StiffnessVeryLow))
+            }
+            val anchor = overlay.anchorBounds
+            if (anchor != null) {
+                PlayerNavigationMenu(
+                    album = overlay.album,
+                    artists = overlay.artists,
+                    playlistTitle = overlay.playlistTitle,
+                    anchorBounds = anchor,
+                    onAlbumClick = onAlbumClick,
+                    onArtistClick = onArtistClick,
+                    onPlaylistClick = {
+                        val playlistId = overlay.playlistId
+                        if (playlistId != null && playlistId > 0) {
+                            Screen.PlayList.navigate(navController) { addPath(playlistId.toString()) }
+                            sheetState?.collapse(spring(stiffness = Spring.StiffnessVeryLow))
+                        } else {
+                            overlayHandler.showPlaylist()
+                        }
+                    },
+                    onDismiss = overlayHandler::dismiss,
+                )
+            } else {
+                AlbumArtistBottomSheet(
+                    coverUrl = overlay.cover,
+                    albumInfo = overlay.album,
+                    artistList = overlay.artists,
+                    onAlbumClick = onAlbumClick,
+                    onArtistClick = onArtistClick,
+                    onDismissRequest = overlayHandler::dismiss,
+                )
+            }
         }
 
         is OverlayState.SongInfo -> {
@@ -160,7 +187,23 @@ fun CommonOverlayHandler(
                     }
 
                 },
-                viewModel = playerViewModel
+                viewModel = playerViewModel,
+                onFindLyrics = if (playerStyle == PlayerStyle.AppleMusic && stateContainer.mediaMetadata.value != null) {
+                    {
+                        stateContainer.mediaMetadata.value?.let { metadata ->
+                            playerViewModel.searchQQSong(metadata.title)
+                            overlayHandler.showQQMusicSelection(metadata)
+                        }
+                    }
+                } else null,
+                onFindLyricsLongClick = if (stateContainer.lyricLine.source == LyricSource.QQMusic) {
+                    {
+                        stateContainer.mediaMetadata.value?.let { metadata ->
+                            playerViewModel.deleteSongById(metadata.id.toString())
+                            android.widget.Toast.makeText(context, "已删除QQ音乐歌词", android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                } else null,
             )
         }
 
@@ -176,6 +219,8 @@ fun CommonOverlayHandler(
             val currentQuality = playerConnection?.currentMusicQuality?.collectAsStateWithLifecycle()?.value
             val availableQualities = playerConnection?.availableMusicQualities?.collectAsStateWithLifecycle()?.value.orEmpty()
             val isLoadingQualities = playerConnection?.isLoadingMusicQualities?.collectAsStateWithLifecycle()?.value ?: false
+            val localPlaybackInfo = playerConnection?.localPlaybackInfo?.collectAsStateWithLifecycle()?.value
+            val isPlayingLocalSource = playerConnection?.isPlayingLocalSource?.collectAsStateWithLifecycle()?.value ?: false
             val mediaMetadata = playerConnection?.mediaMetadata?.collectAsStateWithLifecycle()?.value
             LaunchedEffect(playerConnection, mediaMetadata?.id) {
                 playerConnection?.refreshAvailableMusicQualities()
@@ -185,15 +230,15 @@ fun CommonOverlayHandler(
                 title = stringResource(R.string.music_quality),
             ) {
                 IosGroupedList {
-                    availableQualities.forEachIndexed { index, quality ->
+                    localPlaybackInfo?.let { info ->
                         IosListRow(
-                            title = stringResource(quality.labelRes),
-                            showTopSeparator = index != 0,
+                            title = localPlaybackQualityTitle(info, includeSource = true),
+                            showTopSeparator = false,
                             onClick = {
-                                playerConnection?.changeQuality(quality)
+                                playerConnection?.useLocalSource()
                                 overlayHandler.dismiss()
                             },
-                            trailing = if (quality == currentQuality) {
+                            trailing = if (isPlayingLocalSource) {
                                 {
                                     SfIcon(
                                         "checkmark",
@@ -207,13 +252,35 @@ fun CommonOverlayHandler(
                             },
                         )
                     }
-                    if (isLoadingQualities || availableQualities.isEmpty()) {
+                    availableQualities.forEachIndexed { index, quality ->
+                        IosListRow(
+                            title = stringResource(quality.labelRes),
+                            showTopSeparator = index != 0 || localPlaybackInfo != null,
+                            onClick = {
+                                playerConnection?.changeQuality(quality)
+                                overlayHandler.dismiss()
+                            },
+                            trailing = if (!isPlayingLocalSource && quality == currentQuality) {
+                                {
+                                    SfIcon(
+                                        "checkmark",
+                                        contentDescription = null,
+                                        size = 17.dp,
+                                        tint = LocalGlassColors.current.content,
+                                    )
+                                }
+                            } else {
+                                null
+                            },
+                        )
+                    }
+                    if (isLoadingQualities || (availableQualities.isEmpty() && localPlaybackInfo == null)) {
                         IosListRow(
                             title = stringResource(
                                 if (isLoadingQualities) R.string.track_quality_loading
                                 else R.string.track_quality_unavailable,
                             ),
-                            showTopSeparator = availableQualities.isNotEmpty(),
+                            showTopSeparator = availableQualities.isNotEmpty() || localPlaybackInfo != null,
                         )
                     }
                 }
