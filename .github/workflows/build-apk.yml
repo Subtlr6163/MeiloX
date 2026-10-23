@@ -1,7 +1,7 @@
 name: Build APK (self-signed)
 
-# 无需任何仓库密钥：用自己的 GitHub 账号 fork 后推送，Actions 会自动编出
-# 可直接安装的 release APK，从 Actions 运行页的 Artifacts 下载。
+# 无需任何仓库密钥：fork 后推送任意分支，Actions 自动编出可安装的 release APK，
+# 从运行页的 Artifacts 下载 MeiloX-release。
 on:
   push:
     branches: [ "**" ]
@@ -25,8 +25,29 @@ jobs:
 
       - uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK packages
-        run: sdkmanager "platforms;android-37.0" "build-tools;37.0.0"
+      - name: Install Android SDK / NDK / CMake
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-37.0" \
+            "build-tools;37.0.0" \
+            "ndk;27.1.12297006" \
+            "cmake;3.22.1"
+
+      # 项目自带 gradle.properties 只给了 -Xmx2048m，编 Kotlin + Compose + R8 容易 OOM。
+      # GRADLE_USER_HOME 下的配置优先级高于项目内配置，这里直接盖掉。
+      - name: Raise Gradle memory
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.gradle
+          cat >> ~/.gradle/gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx6144m -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8
+          org.gradle.parallel=false
+          org.gradle.caching=true
+          android.builder.sdkDownload=true
+          EOF
 
       - name: Build release APK
         run: ./gradlew assembleRelease --no-daemon --stacktrace
@@ -34,22 +55,28 @@ jobs:
       - name: Sign APK with a throwaway key
         run: |
           set -euo pipefail
-          UNSIGNED="$(find app/build/outputs/apk/release -maxdepth 1 -name '*.apk' ! -name '*signed*' | head -n1)"
-          echo "Found: $UNSIGNED"
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}}"
+          echo "SDK dir: $SDK"
+          APKSIGNER="$(find "$SDK/build-tools" -maxdepth 2 -name apksigner -type f | sort -V | tail -n1)"
+          echo "apksigner: $APKSIGNER"
+          UNSIGNED="$(find app/build/outputs/apk/release -maxdepth 1 -name '*.apk' | grep -v 'signed' | head -n1)"
+          echo "unsigned: $UNSIGNED"
+          test -n "$UNSIGNED"
           keytool -genkeypair -v \
             -keystore /tmp/meilox.jks \
             -alias meilox \
             -keyalg RSA -keysize 2048 -validity 10950 \
             -storepass meilox -keypass meilox \
             -dname "CN=MeiloX Local Build, OU=Local, O=MeiloX, L=Shenzhen, ST=GD, C=CN"
-          "$ANDROID_HOME/build-tools/37.0.0/apksigner" sign \
+          "$APKSIGNER" sign \
             --ks /tmp/meilox.jks \
             --ks-key-alias meilox \
             --ks-pass pass:meilox \
             --key-pass pass:meilox \
             --out app-release.apk \
             "$UNSIGNED"
-          "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify app-release.apk
+          "$APKSIGNER" verify app-release.apk
+          ls -la app-release.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
