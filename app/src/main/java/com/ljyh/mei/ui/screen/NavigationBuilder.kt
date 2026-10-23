@@ -27,7 +27,9 @@ import com.ljyh.mei.ui.screen.playlist.PlaylistScreen
 import com.ljyh.mei.ui.screen.search.SearchResultScreen
 import com.ljyh.mei.ui.screen.setting.AppearanceSettings
 import com.ljyh.mei.ui.screen.artist.ArtistSongsScreen
+import com.ljyh.mei.ui.screen.artist.ArtistAlbumsScreen
 import com.ljyh.mei.ui.screen.artist.ArtistScreen
+import com.ljyh.mei.ui.screen.artist.ArtistInfoScreen
 import com.ljyh.mei.ui.screen.main.findmusic.FindMusicScreen
 import com.ljyh.mei.ui.screen.setting.ContentsSetting
 import com.ljyh.mei.ui.screen.setting.DownloadManageScreen
@@ -50,6 +52,8 @@ import com.ljyh.mei.ui.screen.social.MessageContactsScreen
 import com.ljyh.mei.ui.screen.listentogether.ListenTogetherScreen
 import com.ljyh.mei.ui.screen.recognition.SongRecognitionScreen
 import com.ljyh.mei.ui.screen.account.NeteaseLoginScreen
+import com.ljyh.mei.ui.screen.account.NeteaseWebLoginScreen
+import com.ljyh.mei.ui.screen.account.PcQrLoginScreen
 import com.ljyh.mei.ui.screen.account.AccountHomeScreen
 import com.ljyh.mei.ui.screen.account.ListeningRankScreen
 import com.ljyh.mei.ui.screen.song.SongWikiScreen
@@ -130,6 +134,13 @@ fun NavGraphBuilder.navigationBuilder(
 
     composable(Screen.NeteaseLogin.route) {
         NeteaseLoginScreen()
+    }
+    composable(Screen.NeteaseWebLogin.route) {
+        NeteaseWebLoginScreen()
+    }
+
+    composable(Screen.PcQrLogin.route) {
+        PcQrLoginScreen()
     }
 
     composable(Screen.AccountHome.route) {
@@ -301,10 +312,24 @@ fun NavGraphBuilder.navigationBuilder(
     }
 
     composable(
+        route = "${Screen.ArtistInfo.route}/{id}",
+        arguments = listOf(navArgument("id") { type = NavType.StringType }),
+    ) {
+        ArtistInfoScreen(id = it.arguments!!.getString("id")!!)
+    }
+
+    composable(
         route = "${Screen.ArtistSongs.route}/{id}",
         arguments = listOf(navArgument("id") { type = NavType.StringType }),
     ) {
         ArtistSongsScreen(id = it.arguments!!.getString("id")!!)
+    }
+
+    composable(
+        route = "${Screen.ArtistAlbums.route}/{id}",
+        arguments = listOf(navArgument("id") { type = NavType.StringType }),
+    ) {
+        ArtistAlbumsScreen(id = it.arguments!!.getString("id")!!)
     }
 
     composable(Screen.History.route) {
@@ -363,6 +388,8 @@ fun navigationEntry(
         route == Screen.ListenTogether.route -> ListenTogetherScreen()
         route == Screen.SongRecognition.route -> SongRecognitionScreen()
         route == Screen.NeteaseLogin.route -> NeteaseLoginScreen()
+        route == Screen.NeteaseWebLogin.route -> NeteaseWebLoginScreen()
+        route == Screen.PcQrLogin.route -> PcQrLoginScreen()
         route == Screen.AccountHome.route -> AccountHomeScreen()
         route == Screen.Test.route -> Test()
         route == Screen.Setting.route -> SettingScreen(scrollBehavior)
@@ -443,8 +470,14 @@ fun navigationEntry(
             route.substringAfter("${Screen.Album.route}/").toLongOrNull()
                 ?.let { AlbumDetailScreen(id = it) }
         }
+        route.startsWith("${Screen.ArtistInfo.route}/") -> {
+            ArtistInfoScreen(id = route.substringAfter("${Screen.ArtistInfo.route}/"))
+        }
         route.startsWith("${Screen.ArtistSongs.route}/") -> {
             ArtistSongsScreen(id = route.substringAfter("${Screen.ArtistSongs.route}/"))
+        }
+        route.startsWith("${Screen.ArtistAlbums.route}/") -> {
+            ArtistAlbumsScreen(id = route.substringAfter("${Screen.ArtistAlbums.route}/"))
         }
         route.startsWith("${Screen.Artist.route}/") -> {
             route.substringAfter("${Screen.Artist.route}/")

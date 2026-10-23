@@ -10,13 +10,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.stringResource
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -24,27 +24,39 @@ import com.ljyh.mei.ui.navigation.MeiNavigator
 import com.ljyh.mei.R
 import androidx.compose.ui.graphics.Color
 import com.ljyh.mei.constants.LibraryStyle
+import com.ljyh.mei.constants.LibraryDefaultPageKey
 import com.ljyh.mei.constants.LibraryStyleKey
-import com.ljyh.mei.utils.rememberEnumPreference
 import com.ljyh.mei.ui.glass.IosListRow
 import com.ljyh.mei.ui.glass.LocalGlassColors
 import com.ljyh.mei.ui.glass.SfIcon
 import com.ljyh.mei.constants.CookieKey
-import com.ljyh.mei.constants.UserAvatarUrlKey
+import com.ljyh.mei.constants.CloudMusicEnabledKey
+import com.ljyh.mei.constants.DownloadsEnabledKey
+import com.ljyh.mei.constants.ListeningHistoryEnabledKey
+import com.ljyh.mei.constants.PodcastsEnabledKey
 import com.ljyh.mei.constants.UserIdKey
-import com.ljyh.mei.constants.UserNicknameKey
-import com.ljyh.mei.constants.UserPhotoKey
-import com.ljyh.mei.data.network.Resource
 import com.ljyh.mei.ui.local.LocalNavController
 import com.ljyh.mei.ui.local.LocalPlayerAwareWindowInsets
-import com.ljyh.mei.ui.model.toAlbum
 import com.ljyh.mei.ui.screen.Screen
 import com.ljyh.mei.ui.component.GlobalProfileAvatarButton
 import com.ljyh.mei.ui.glass.IosPinnedListPage
 import com.ljyh.mei.ui.screen.main.library.component.LibraryMobileLayout
-import com.ljyh.mei.ui.screen.main.library.component.PhotoPickerSheet
 import com.ljyh.mei.ui.navigation.LibraryPage
-import com.ljyh.mei.utils.rememberPreference
+import com.ljyh.mei.ui.navigation.ContentFeature
+import com.ljyh.mei.utils.dataStore
+import com.ljyh.mei.utils.toEnum
+
+internal fun resolveLibraryDefaultPage(
+    value: String,
+    style: LibraryStyle,
+    enabledFeatures: Set<ContentFeature>,
+): LibraryPage? {
+    val page = LibraryPage.entries.firstOrNull { it.name == value } ?: return null
+    if (page.requiredFeature != null && page.requiredFeature !in enabledFeatures) return null
+    return if (style == LibraryStyle.Default && page == LibraryPage.Podcasts) {
+        LibraryPage.Albums
+    } else page
+}
 
 @Composable
 fun LibraryScreen(
@@ -52,135 +64,80 @@ fun LibraryScreen(
     isNavigationTab: Boolean = false,
     category: LibraryPage? = null,
 ) {
-    val libraryStyle by rememberEnumPreference(LibraryStyleKey, LibraryStyle.Default)
-    if (category == null && libraryStyle == LibraryStyle.AppleMusic) {
-        LibraryCategoryList(isNavigationTab)
-        return
+    val context = LocalContext.current
+    val preferenceState by context.dataStore.data.collectAsState(initial = null)
+    val preferences = preferenceState ?: return
+    val libraryStyle = preferences[LibraryStyleKey].toEnum(LibraryStyle.Default)
+    val defaultPagePreference = preferences[LibraryDefaultPageKey].orEmpty()
+    val podcastsEnabled = preferences[PodcastsEnabledKey] ?: true
+    val enabledFeatures = buildSet {
+        if (podcastsEnabled) add(ContentFeature.Podcasts)
+        if (preferences[DownloadsEnabledKey] != false) add(ContentFeature.Downloads)
+        if (preferences[CloudMusicEnabledKey] != false) add(ContentFeature.CloudMusic)
+        if (preferences[ListeningHistoryEnabledKey] != false) add(ContentFeature.ListeningHistory)
     }
+    val defaultPage = resolveLibraryDefaultPage(defaultPagePreference, libraryStyle, enabledFeatures)
     val navController = LocalNavController.current
-    val account by viewModel.account.collectAsState()
-    val photoAlbum by viewModel.photoAlbum.collectAsState()
-    val localPlaylists by viewModel.localPlaylists.collectAsState()
-    val albumList by viewModel.albumList.collectAsState()
-    val userSubcount by viewModel.userSubcount.collectAsState()
-    val networkPlaylists by viewModel.networkPlaylistsState.collectAsState()
-    val likedSongs by viewModel.likedSongs.collectAsState()
-    val likedSongsLoading by viewModel.likedSongsLoading.collectAsState()
-
-    // Preferences
-    val (userId, setUserId) = rememberPreference(UserIdKey, "")
-    val (_, setUserNickname) = rememberPreference(UserNicknameKey, "")
-    val (_, setUserAvatarUrl) = rememberPreference(UserAvatarUrlKey, "")
-    val (userPhoto, setUserPhoto) = rememberPreference(UserPhotoKey, "")
-    val cookie by rememberPreference(CookieKey, defaultValue = "")
-
-    // State
-    var showPhotoPicker by remember { mutableStateOf(false) }
-    var selectedPage by rememberSaveable { mutableStateOf(LibraryPage.Songs) }
-    var subPlaylistCount by remember { mutableIntStateOf(0) }
-
-    val likedPlaylistId = (networkPlaylists as? Resource.Success)?.data?.playlist?.firstOrNull()?.id
-    val visiblePlaylists = remember(localPlaylists, likedPlaylistId) {
-        localPlaylists.filterNot { it.id == likedPlaylistId?.toString() }
-    }
-    val (createdPlaylists, collectedPlaylists) = remember(visiblePlaylists, userId) {
-        if (userId.isEmpty()) Pair(emptyList(), emptyList())
-        else {
-            val (created, collected) = visiblePlaylists.partition { it.author == userId }
-            fun sorted(playlists: List<com.ljyh.mei.data.model.room.Playlist>): List<com.ljyh.mei.data.model.room.Playlist> {
-                val maxLocalPlayCount = playlists.maxOfOrNull { it.localPlayCount } ?: 1
-                val maxServerPlayCount = playlists.maxOfOrNull { it.playCount } ?: 1L
-                val now = System.currentTimeMillis()
-                return playlists.sortedByDescending {
-                    it.sortScore(maxLocalPlayCount, maxServerPlayCount, now)
+    var defaultPageApplied by rememberSaveable { mutableStateOf(false) }
+    var selectedPage by rememberSaveable { mutableStateOf(defaultPage ?: LibraryPage.Songs) }
+    LaunchedEffect(Unit) {
+        if (!defaultPageApplied) {
+            defaultPageApplied = true
+            if (category == null && libraryStyle == LibraryStyle.AppleMusic) {
+                defaultPage?.let { page ->
+                    Screen.LibraryCategory.navigate(navController) { addPath(page.name) }
                 }
             }
-            Pair(sorted(created), sorted(collected))
         }
     }
-
-    // --- 数据同步逻辑 ---
-    LaunchedEffect(userId) {
-        if (userId.isNotEmpty()) {
-            viewModel.syncUserPlaylists(userId)
-            viewModel.getPhotoAlbum(userId)
-            viewModel.getAlbumList()
-            viewModel.getUserSubcount()
-        }
+    if (category == null && libraryStyle == LibraryStyle.AppleMusic) {
+        LibraryCategoryList(isNavigationTab, podcastsEnabled)
+        return
+    }
+    val playlists by viewModel.playlists.collectAsState()
+    val albums by viewModel.albums.collectAsState()
+    val accountId by viewModel.accountId.collectAsState()
+    val likedSongs by viewModel.likedSongs.collectAsState()
+    val likedSongsLoading by viewModel.likedSongsLoading.collectAsState()
+    val likedSongsError by viewModel.likedSongsError.collectAsState()
+    val userId = preferences[UserIdKey].orEmpty()
+    val cookie = preferences[CookieKey].orEmpty()
+    val mergeAlbumPodcasts = libraryStyle == LibraryStyle.Default && category == null
+    val displayedPage = category ?: if (mergeAlbumPodcasts && selectedPage == LibraryPage.Podcasts) {
+        LibraryPage.Albums
+    } else selectedPage
+    val accountMatches = accountId == userId && cookie.isNotBlank()
+    val (createdPlaylists, collectedPlaylists) = remember(playlists.items, accountMatches, userId) {
+        if (accountMatches) playlists.items.partition { it.author == userId }
+        else emptyList<com.ljyh.mei.data.model.room.Playlist>() to emptyList()
     }
 
-    LaunchedEffect(photoAlbum) {
-        if (userPhoto.isEmpty() && photoAlbum is Resource.Success) {
-            (photoAlbum as Resource.Success).data.data.records.firstOrNull()?.imageUrl?.let {
-                setUserPhoto(it)
-            }
-        }
-    }
-    LaunchedEffect(cookie, account) {
-        if (cookie.isNotEmpty() && account !is Resource.Success) viewModel.getUserAccount()
-    }
-    LaunchedEffect(account) {
-        (account as? Resource.Success)
-            ?.data?.profile
-            ?.let { profile ->
-                setUserId(profile.userId.toString())
-                setUserNickname(profile.nickname)
-                setUserAvatarUrl(profile.avatarUrl)
-            }
-    }
-
-    LaunchedEffect(userSubcount) {
-        if (userSubcount is Resource.Success) {
-
-        }
-    }
-
-    LaunchedEffect(likedPlaylistId) {
-        likedPlaylistId?.let(viewModel::getLikedSongs)
-    }
-
-    LaunchedEffect(subPlaylistCount) {
-        if (userId.isNotEmpty() && localPlaylists.size != subPlaylistCount && subPlaylistCount != 0)
-            viewModel.syncUserPlaylists(userId, subPlaylistCount)
-    }
-
-    Box(modifier = Modifier.fillMaxSize()) {
-
-        if (userId.isNotEmpty()) {
-            LibraryMobileLayout(
-                userPhoto = userPhoto,
-                isNavigationTab = isNavigationTab,
-                selectedPage = category ?: selectedPage,
-                isCategoryPage = category != null,
-                onPageSelect = { selectedPage = it },
-                createdPlaylists = createdPlaylists,
-                collectedPlaylists = collectedPlaylists,
-                albums = if (albumList is Resource.Success) (albumList as Resource.Success).data.data.map { it.toAlbum() } else emptyList(),
-                onPlaylistClick = { id->
-                    Screen.PlayList.navigate(navController) { addPath(id) }
-                },
-                onAlbumClick = { id->
-                    Screen.Album.navigate(navController) { addPath(id) }
-                },
-                userId = userId,
-                likedSongs = likedSongs,
-                // Keep the spinner up until the liked-playlist id is known and the
-                // first detail request finishes; otherwise the empty state flashes.
-                likedSongsLoading = networkPlaylists is Resource.Loading ||
-                    (likedPlaylistId != null && likedSongsLoading),
-            )
-
-            if (showPhotoPicker) {
-                PhotoPickerSheet(
-                    photoAlbum = photoAlbum,
-                    onSelect = { setUserPhoto(it); showPhotoPicker = false },
-                    onDismiss = { showPhotoPicker = false }
-                )
-            }
-        } else {
-            // 未登录逻辑
-            EmptyLoginState(navController, isNavigationTab, category)
-        }
+    if (userId.isNotBlank() && cookie.isNotBlank()) {
+        LibraryMobileLayout(
+            userPhoto = "",
+            isNavigationTab = isNavigationTab,
+            selectedPage = displayedPage,
+            isCategoryPage = category != null,
+            mergeAlbumPodcasts = mergeAlbumPodcasts,
+            onPageSelect = { selectedPage = it },
+            createdPlaylists = createdPlaylists,
+            collectedPlaylists = collectedPlaylists,
+            playlistState = if (accountMatches) playlists else LibraryCollectionState(),
+            albumState = if (accountMatches) albums else LibraryCollectionState(),
+            onRefreshPlaylists = viewModel::refreshPlaylists,
+            onLoadMorePlaylists = viewModel::loadMorePlaylists,
+            onRefreshAlbums = viewModel::refreshAlbums,
+            onLoadMoreAlbums = viewModel::loadMoreAlbums,
+            onPlaylistClick = { id -> Screen.PlayList.navigate(navController) { addPath(id) } },
+            onAlbumClick = { id -> Screen.Album.navigate(navController) { addPath(id) } },
+            userId = if (accountMatches) userId else "",
+            likedSongs = if (accountMatches) likedSongs else emptyList(),
+            likedSongsLoading = !accountMatches || likedSongsLoading,
+            likedSongsError = if (accountMatches) likedSongsError else null,
+            onRetryLikedSongs = viewModel::retryLikedSongs,
+        )
+    } else {
+        EmptyLoginState(navController, isNavigationTab, category)
     }
 }
 
@@ -225,7 +182,8 @@ fun EmptyLoginState(
 }
 
 @Composable
-private fun LibraryCategoryList(isNavigationTab: Boolean) {
+private fun LibraryCategoryList(isNavigationTab: Boolean, podcastsEnabled: Boolean) {
+    val categories = LibraryPage.entries.filter { it != LibraryPage.Podcasts || podcastsEnabled }
     val navController = LocalNavController.current
     val colors = LocalGlassColors.current
     val insets = LocalPlayerAwareWindowInsets.current.asPaddingValues()
@@ -239,7 +197,7 @@ private fun LibraryCategoryList(isNavigationTab: Boolean) {
         onNavigateBack = if (isNavigationTab) null else ({ navController.navigateUp() }),
         actions = { if (isNavigationTab) GlobalProfileAvatarButton() },
     ) {
-        LibraryPage.entries.forEachIndexed { index, page ->
+        categories.forEachIndexed { index, page ->
             item(key = "library-category:${page.name}") {
                 IosListRow(
                     title = stringResource(page.titleRes),

@@ -1,6 +1,7 @@
 package com.ljyh.mei.ui.component.player.component
 
 
+import android.os.SystemClock
 import android.widget.Toast
 import androidx.annotation.OptIn
 import androidx.compose.animation.core.Animatable
@@ -11,6 +12,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,6 +26,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
@@ -53,7 +57,6 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextMotion
 import androidx.compose.ui.unit.dp
@@ -67,6 +70,8 @@ import com.ljyh.mei.constants.LyricTextSize
 import com.ljyh.mei.constants.NormalLyricTextBoldKey
 import com.ljyh.mei.constants.NormalLyricTextSizeKey
 import com.ljyh.mei.playback.PlayerConnection
+import com.ljyh.mei.ui.component.sheet.LocalPlayerSheet
+import com.ljyh.mei.ui.component.utils.LifecycleStartedEffect
 import com.ljyh.mei.ui.model.LyricData
 import com.ljyh.mei.ui.model.LyricSource
 import com.ljyh.mei.utils.rememberEnumPreference
@@ -75,17 +80,12 @@ import com.ljyh.mei.utils.setClipboard
 import com.mocharealm.accompanist.lyrics.core.model.ISyncedLine
 import com.mocharealm.accompanist.lyrics.core.model.karaoke.KaraokeLine
 import com.mocharealm.accompanist.lyrics.core.model.synced.SyncedLine
-import com.mocharealm.accompanist.lyrics.ui.composable.lyrics.KaraokeLyricsView
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-
-/**
- * 歌词字体见同包下的顶层 [LyricFontFamily]（Samsung Sharp Sans）。
- */
 
 @OptIn(UnstableApi::class)
 @Composable
@@ -99,6 +99,8 @@ fun LyricScreen(
     onToggleControls: (Boolean) -> Unit
 ) {
     val context = LocalContext.current
+    val sheet = LocalPlayerSheet.current
+    val expanded by remember(sheet) { derivedStateOf { sheet == null || sheet.state.isExpanded } }
     val (normalLyricTextSize, _) = rememberEnumPreference(
         NormalLyricTextSizeKey,
         LyricTextSize.Size28
@@ -109,24 +111,26 @@ fun LyricScreen(
         LyricTextSize.Size18
     )
     val (accompanimentLyricTextBold, _) = rememberPreference(AccompanimentLyricTextBoldKey, true)
+    val manualScroll = remember(lyricData.lyricLine, playerConnection.player) {
+        LyricManualScrollState()
+    }
 
-    // 歌词样式基座：在 @Composable 上下文读取一次，供 remember 缓存派生样式，
-    // 避免每帧重组时重复读取 LocalTextStyle 并新建 TextStyle 对象。
-    val baseTextStyle = LocalTextStyle.current
-
-    LaunchedEffect(controlsVisible) {
-        if (controlsVisible) {
+    LifecycleStartedEffect(controlsVisible, expanded) {
+        if (controlsVisible && expanded) {
             delay(5000)
             onToggleControls(false)
         }
     }
 
 
-    val nestedScrollConnection = remember {
+    val nestedScrollConnection = remember(manualScroll, onToggleControls) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
                 if (source == NestedScrollSource.UserInput) {
                     val delta = available.y
+                    if (delta != 0f) {
+                        manualScroll.onUserScroll(SystemClock.elapsedRealtime())
+                    }
                     if (delta < -10) {
                         onToggleControls(false)
                     } else if (delta > 10) {
@@ -194,79 +198,130 @@ fun LyricScreen(
                     // to animate from. Keep a full window laid out beyond each edge.
                     val keepAliveZone = LocalConfiguration.current.screenHeightDp.dp
                     val keepAliveZonePx = with(LocalDensity.current) { keepAliveZone.roundToPx() }
+                    val lyricOffsetPx = with(LocalDensity.current) { 48.dp.roundToPx() }
                     var animatedPosition by remember(player) { mutableLongStateOf(0L) }
                     var placementGeneration by remember(player) { mutableIntStateOf(0) }
                     val lyricAlpha = remember(player) { Animatable(0f) }
-                    LaunchedEffect(player, keepAliveZonePx) {
-                        // Measure the actual viewport before deciding whether entry may animate.
-                        snapshotFlow { listState.layoutInfo.visibleItemsInfo.isNotEmpty() }
-                            .first { it }
-                        var lastFocusIndex: Int? = null
-                        var initialPositionPending = true
-                        while (true) {
-                            var position = player.currentPosition.coerceAtLeast(0L)
-                            var focusIndex = lyricFocusLineIndex(lines, position.toInt())
-                            var jumped = false
-                            if (focusIndex != lastFocusIndex) {
-                                val layout = listState.layoutInfo
-                                val viewportStart = layout.viewportStartOffset + keepAliveZonePx
-                                val viewportEnd = layout.viewportEndOffset - keepAliveZonePx
-                                val visibleLines = layout.visibleItemsInfo.filter { item ->
-                                    item.index < lines.size && item.size > 0 &&
-                                        item.offset + item.size > viewportStart &&
-                                        item.offset < viewportEnd
-                                }
-                                // Clipped rows and the renderer's keep-alive area do not
-                                // increase the number of lyric lines that fit on screen.
-                                val fullLines = visibleLines.filter { item ->
-                                    item.offset >= viewportStart && item.offset + item.size <= viewportEnd
-                                }
-                                val firstVisibleIndex = (fullLines.firstOrNull() ?: visibleLines.firstOrNull())?.index
-                                if (!listState.isScrollInProgress && firstVisibleIndex != null && shouldSnapLyricScroll(
+                    val focusLineVisible by remember(listState, lines, keepAliveZonePx) {
+                        derivedStateOf {
+                            val focusIndex = lyricFocusLineIndex(lines, animatedPosition.toInt())
+                            val layout = listState.layoutInfo
+                            layout.visibleItemsInfo.any { item ->
+                                item.index == focusIndex && isLyricLineVisible(
+                                    item.offset, item.size, layout.viewportStartOffset,
+                                    layout.viewportEndOffset, keepAliveZonePx,
+                                )
+                            }
+                        }
+                    }
+                    LaunchedEffect(listState, manualScroll) {
+                        listState.interactionSource.interactions.collect { interaction ->
+                            when (interaction) {
+                                is DragInteraction.Start -> manualScroll.onDragStarted(SystemClock.elapsedRealtime())
+                                is DragInteraction.Stop, is DragInteraction.Cancel ->
+                                    manualScroll.onDragStopped(SystemClock.elapsedRealtime())
+                            }
+                        }
+                    }
+                    LifecycleStartedEffect(player, keepAliveZonePx, lyricOffsetPx, manualScroll, expanded) {
+                        if (!expanded) return@LifecycleStartedEffect
+                        try {
+                            // Measure the actual viewport before deciding whether entry may animate.
+                            snapshotFlow { listState.layoutInfo.visibleItemsInfo.isNotEmpty() }
+                                .first { it }
+                            var lastFocusIndex: Int? = null
+                            var initialPositionPending = true
+                            while (true) {
+                                manualScroll.resumeIfIdle(SystemClock.elapsedRealtime(), listState.isScrollInProgress)
+                                var position = player.currentPosition.coerceAtLeast(0L)
+                                var focusIndex = lyricFocusLineIndex(lines, position.toInt())
+                                var jumped = false
+                                if (!manualScroll.isBrowsing && !listState.isScrollInProgress &&
+                                    (focusIndex != lastFocusIndex || manualScroll.returnToPlaybackPending)
+                                ) {
+                                    val layout = listState.layoutInfo
+                                    val viewportStart = layout.viewportStartOffset + keepAliveZonePx
+                                    val viewportEnd = layout.viewportEndOffset - keepAliveZonePx
+                                    val visibleLines = layout.visibleItemsInfo.filter { item ->
+                                        item.index < lines.size && isLyricLineVisible(
+                                            item.offset, item.size, layout.viewportStartOffset,
+                                            layout.viewportEndOffset, keepAliveZonePx,
+                                        )
+                                    }
+                                    // Clipped rows and the renderer's keep-alive area do not
+                                    // increase the number of lyric lines that fit on screen.
+                                    val fullLines = visibleLines.filter { item ->
+                                        item.offset >= viewportStart && item.offset + item.size <= viewportEnd
+                                    }
+                                    val firstVisibleIndex = (fullLines.firstOrNull() ?: visibleLines.firstOrNull())?.index
+                                    val snap = firstVisibleIndex == null || shouldSnapLyricScroll(
                                         lines, firstVisibleIndex, focusIndex, fullLines.size.coerceAtLeast(1),
                                     )
-                                ) {
-                                    jumped = runInterruptibleLyricJump(
+                                    val positioned = runInterruptibleLyricJump(
                                         restoreVisibility = { lyricAlpha.snapTo(1f) },
                                     ) {
-                                        if (lyricAlpha.value > 0f) {
+                                        if (snap && lyricAlpha.value > 0f) {
                                             lyricAlpha.animateTo(0f, tween(120))
                                         }
                                         // Seeking may continue while the old lyrics fade out.
                                         position = player.currentPosition.coerceAtLeast(0L)
                                         focusIndex = lyricFocusLineIndex(lines, position.toInt())
                                         // A gesture may start during the fade. Leave it in control.
-                                        if (!listState.isScrollInProgress) {
-                                            // Reset cached per-line springs while transparent.
-                                            listState.scrollToItem(focusIndex)
-                                            // Publish time before the new renderer can compose.
-                                            animatedPosition = position
-                                            placementGeneration++
+                                        if (!manualScroll.isBrowsing && !listState.isScrollInProgress) {
+                                            if (snap) {
+                                                // Reset cached per-line springs while transparent.
+                                                listState.scrollToItem(focusIndex)
+                                                animatedPosition = position
+                                                placementGeneration++
+                                                jumped = true
+                                            } else {
+                                                val currentLayout = listState.layoutInfo
+                                                val target = currentLayout.visibleItemsInfo.firstOrNull {
+                                                    it.index == focusIndex
+                                                }
+                                                if (target != null) {
+                                                    val anchor = currentLayout.viewportStartOffset +
+                                                        lyricOffsetPx + keepAliveZonePx
+                                                    listState.scrollBy((target.offset - anchor).toFloat())
+                                                } else {
+                                                    listState.scrollToItem(focusIndex)
+                                                }
+                                            }
                                             true
                                         } else {
                                             false
                                         }
                                     }
+                                    if (positioned) {
+                                        lastFocusIndex = focusIndex
+                                        manualScroll.onPlaybackPositioned()
+                                    }
                                 }
-                                lastFocusIndex = focusIndex
+                                animatedPosition = position
+                                if (initialPositionPending || jumped) {
+                                    initialPositionPending = false
+                                    // Keep the positioning frame hidden, then fade in while time
+                                    // updates continue so karaoke highlighting stays responsive.
+                                    withFrameNanos { }
+                                    launch { lyricAlpha.animateTo(1f, tween(180)) }
+                                }
+                                delay(50)
                             }
-                            animatedPosition = position
-                            if (initialPositionPending || jumped) {
-                                initialPositionPending = false
-                                // Keep the positioning frame hidden, then fade in while time
-                                // updates continue so karaoke highlighting stays responsive.
-                                withFrameNanos { }
-                                launch { lyricAlpha.animateTo(1f, tween(180)) }
-                            }
-                            delay(50)
+                        } finally {
+                            // STOP or collapse can interrupt an entry or seek fade while
+                            // the frame clock is paused. Restore the layer before resuming.
+                            withContext(NonCancellable) { lyricAlpha.snapTo(1f) }
                         }
                     }
                     key(placementGeneration, keepAliveZonePx) {
-                        KaraokeLyricsView(
+                        PlayerLyricsView(
                             listState = listState,
+                            isManualScrolling = manualScroll.isBrowsing && listState.isScrollInProgress,
+                            useBlurEffect = !manualScroll.isBrowsing || focusLineVisible,
                             lyrics = lyricData.lyricLine,
                             currentPosition = { animatedPosition.toInt() },
                             onLineClicked = { line ->
+                                manualScroll.onLineSelected()
                                 playerConnection.player.seekTo(line.start.toLong())
                                 onToggleControls(true)
                             },
@@ -300,27 +355,16 @@ fun LyricScreen(
                                     blendMode = BlendMode.Plus
                                     compositingStrategy = CompositingStrategy.Offscreen
                                 },
-                            normalLineTextStyle = remember(normalLyricTextSize, normalLyricTextBold, baseTextStyle) {
-                                baseTextStyle.copy(
-                                    fontFamily = LyricFontFamily,
-                                    fontSize = normalLyricTextSize.text.sp,
-                                    fontWeight = if (normalLyricTextBold) FontWeight.Bold else FontWeight.Normal,
-                                    textMotion = TextMotion.Animated,
-                                )
-                            },
-                            accompanimentLineTextStyle = remember(accompanimentLyricTextSize, accompanimentLyricTextBold, baseTextStyle) {
-                                baseTextStyle.copy(
-                                    fontFamily = LyricFontFamily,
-                                    fontSize = accompanimentLyricTextSize.text.sp,
-                                    fontWeight = if (accompanimentLyricTextBold) FontWeight.Bold else FontWeight.Normal,
-                                    textMotion = TextMotion.Animated,
-                                )
-                            },
-                            phoneticTextStyle = remember(baseTextStyle) {
-                                baseTextStyle.copy(
-                                    fontFamily = LyricFontFamily,
-                                )
-                            },
+                            normalLineTextStyle = LocalTextStyle.current.copy(
+                                fontSize = normalLyricTextSize.text.sp,
+                                fontWeight = if (normalLyricTextBold) FontWeight.Bold else FontWeight.Normal,
+                                textMotion = TextMotion.Animated,
+                            ),
+                            accompanimentLineTextStyle = LocalTextStyle.current.copy(
+                                fontSize = accompanimentLyricTextSize.text.sp,
+                                fontWeight = if (accompanimentLyricTextBold) FontWeight.Bold else FontWeight.Normal,
+                                textMotion = TextMotion.Animated,
+                            ),
                             offset = 48.dp,
                             keepAliveZone = keepAliveZone,
                         )
@@ -387,6 +431,16 @@ internal fun shouldSnapLyricScroll(
     // A screen containing N rows from index I ends at I + N - 1.
     return visibleLineCount > 0 && distance >= visibleLineCount
 }
+
+internal fun isLyricLineVisible(
+    itemOffset: Int,
+    itemSize: Int,
+    viewportStart: Int,
+    viewportEnd: Int,
+    keepAliveZonePx: Int,
+): Boolean = itemSize > 0 &&
+    itemOffset + itemSize > viewportStart + keepAliveZonePx &&
+    itemOffset < viewportEnd - keepAliveZonePx
 
 @Composable
 private fun LyricSourceBadge(

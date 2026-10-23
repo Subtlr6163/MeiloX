@@ -80,9 +80,9 @@ private object SfSymbolTypefaceCache {
     fun get(context: Context, weight: FontWeight): Typeface {
         return weightedTypefaces.getOrPut(weight.weight) {
             val base = baseTypeface ?: requireNotNull(
-                ResourcesCompat.getFont(context.applicationContext, R.font.sf_pro),
+                ResourcesCompat.getFont(context.applicationContext, R.font.sf_symbols),
             ) {
-                "SF Pro font could not be loaded"
+                "SF Symbols font could not be loaded"
             }.also { baseTypeface = it }
             Typeface.create(base, weight.weight, false)
         }

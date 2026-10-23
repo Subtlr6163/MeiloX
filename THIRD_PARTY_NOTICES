@@ -34,6 +34,15 @@ License: https://www.apache.org/licenses/LICENSE-2.0
 The media metadata output follows this public player integration contract:
 https://github.com/Andrea-lyz/ColorOS-Live-Lyrics-Bridge/blob/main/docs/PLAYER_INTEGRATION.md
 
+Accompanist Lyrics UI
+---------------------
+`PlayerLyricsView.kt` adapts the top-level `KaraokeLyricsView` from
+`com.mocharealm.accompanist:lyrics-ui:1.0.19` while reusing its line renderers.
+Scrolling is managed by the player to support timed manual lyric browsing.
+Copyright 2025 6xingyv. Licensed under the Apache License, Version 2.0:
+https://github.com/6xingyv/accompanist-lyrics-ui
+License: https://www.apache.org/licenses/LICENSE-2.0
+
 SuperLyricApi
 -------------
 The `com.github.HChenX:SuperLyricApi:3.4` dependency is Copyright (C)
@@ -49,6 +58,39 @@ is Copyright (c) its respective contributors and is licensed under the Apache
 License, Version 2.0:
 https://github.com/ljyh223/Mei
 License: https://www.apache.org/licenses/LICENSE-2.0
+
+Android Camera Samples
+----------------------
+The camera lifecycle and ImageAnalysis structure used by the PC QR login
+scanner is adapted from the CameraX QR Scanner sample:
+https://github.com/android/camera-samples/tree/main/samples/camerax-qrscanner
+
+Copyright 2026 The Android Open Source Project. It is licensed under the
+Apache License, Version 2.0. The Apache license text is available at:
+https://www.apache.org/licenses/LICENSE-2.0
+
+NetEase login security runtimes
+-------------------------------
+The private PC QR-login compatibility path contains minimized device and
+WatchMan bytecode (`netease-device-sdk.dex`), the official device-ID bytecode
+(`netease-device-id-sdk.dex`), plus the ARM64 native runtimes
+(`libnesdk.so`, `libnetmobsec-4.4.7.so`, `libnetdev-1.0.0.so`, and
+`libAegisSDK.so`) and the URS login/captcha bytecode, key data, and native
+runtimes (`netease-urs-*.dex`, `key_*.dat`, `app_sign_private.dat`,
+`device_info_public.dat`, `error_log_public.dat`,
+`netease_official_signing_certificate.der`, `libursandroidunity.so`, and
+`libnedat.so`) extracted from the official NetEase Cloud Music Android app
+version 9.5.70. These files are
+proprietary NetEase components; no open-source or redistribution license was
+found. They are included only for private interoperability testing and must be
+removed or separately licensed before public distribution.
+
+Bouncy Castle
+-------------
+The URS compatibility path uses Bouncy Castle Provider `bcprov-jdk18on`
+version 1.85.2. Copyright (c) 2000-2026 The Legion of the Bouncy Castle Inc.
+It is distributed under the Bouncy Castle License:
+https://www.bouncycastle.org/license.html
 
 MeloX
 -----
@@ -93,13 +135,13 @@ https://github.com/NeteaseCloudMusicApiEnhanced/api-enhanced/blob/83ee2cda34a20f
 
 Zstd JNI
 --------
-The `com.github.luben:zstd-jni:1.5.7-20` Android archive and JVM runtime JAR
+The `com.github.luben:zstd-jni:1.5.7-23` Android archive and JVM runtime JAR
 provide Zstandard compression. The JNI bindings are Copyright (c) 2015-present
 Luben Karavelov and licensed under the BSD 2-Clause License. The bundled
 Zstandard native library is Copyright (c) 2016-present Facebook, Inc. and
 licensed under the BSD 3-Clause License:
-https://github.com/luben/zstd-jni/tree/v1.5.7-20
-https://github.com/luben/zstd-jni/blob/v1.5.7-20/src/main/native/LICENSE
+https://github.com/luben/zstd-jni/tree/v1.5.7-23
+https://github.com/luben/zstd-jni/blob/v1.5.7-23/src/main/native/LICENSE
 https://opensource.org/licenses/BSD-2-Clause
 https://opensource.org/licenses/BSD-3-Clause
 
@@ -124,7 +166,21 @@ https://github.com/microsoft/onnxruntime
 SF Pro private project resource
 -------------------------------
 SF Pro is an Apple font included in this private, personal-use project as
-`res/font/sf_pro.ttf` so debug and release builds can render the SF Symbols
+`res/font/sf_symbols.ttf` so debug and release builds can render the SF Symbols
 glyphs used by MeloX. It must not be extracted or redistributed separately,
 and public distribution of builds requires a fresh review of Apple's font
 license terms. Apple retains all rights in SF Pro.
+
+Interface font family (app_font_*.ttf)
+--------------------------------------
+The interface fonts shipped as `res/font/app_font_*.ttf` are build-time
+artifacts: the Latin / Greek / Cyrillic glyphs are static instances taken from
+the SF Pro variable font described above (Apple retains all rights in those
+outlines), and the CJK glyphs come from Noto Sans SC, Copyright (c) Google and
+contributors, licensed under the SIL Open Font License 1.1:
+https://scripts.sil.org/OFL
+Source: https://github.com/notofonts/noto-cjk
+The two sources were subsetted and merged with fontTools; each shipped weight
+is a real static cut rather than a synthesised fake bold. Public distribution
+of a build containing these files requires a fresh review of Apple's font
+license terms.

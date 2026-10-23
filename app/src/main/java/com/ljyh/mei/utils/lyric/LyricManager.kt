@@ -79,8 +79,8 @@ class LyricManager @Inject constructor(
     /** Current QQ lyric request, including manually selected songs. */
     private var qqFetchJob: Job? = null
 
-    /** 标记 QQ 源是否已终结（Success 或 Error），防止同一首歌多个 combine 触发重复处理 */
-    private var qqFinalized = false
+    /** Reject suspended merges from an earlier load, including an A -> B -> A switch. */
+    private var loadGeneration = 0L
 
     // ==================== 歌词缓存 ====================
 
@@ -109,10 +109,10 @@ class LyricManager @Inject constructor(
      */
     init {
         combine(netLyricResult, qqLyricResult, amLyricResult) { net, qq, am ->
-            Triple(net, qq, am)
+            loadGeneration to Triple(net, qq, am)
         }.sample(50)
-            .onEach { (net, qq, am) ->
-                mergeAndApply(net, qq, am)
+            .onEach { (generation, sources) ->
+                mergeAndApply(sources.first, sources.second, sources.third, generation)
             }.launchIn(scope)
     }
 
@@ -136,7 +136,7 @@ class LyricManager @Inject constructor(
         currentSongId = songId
         fetchJob?.cancel()
         qqFetchJob?.cancel()
-        qqFinalized = false
+        loadGeneration++
 
         // 重置所有源状态
         netLyricResult.value = Resource.Loading
@@ -145,16 +145,11 @@ class LyricManager @Inject constructor(
         _qqSearchResult.value = Resource.Loading
         lrcFallbackContent = null
 
-        _lyricData.value = createDefaultLyricData("歌词加载中", source = LyricSource.Loading)
-
         lastMetadata = metadata
 
-        // 缓存查找：内存（同步）
-        if (!forceReload) {
-            lyricCache.remove(songId)?.let { cached ->
-                _lyricData.value = cached
-            }
-        }
+        // A memory hit is already displayable; do not emit a loading frame before it.
+        _lyricData.value = (if (!forceReload) lyricCache[songId] else null)
+            ?: createDefaultLyricData("歌词加载中", source = LyricSource.Loading)
 
         // 网络拉取
         fetchJob = scope.launch {
@@ -164,9 +159,18 @@ class LyricManager @Inject constructor(
                     cachedLyricRepository.get(songId).firstOrNull()
                 }
                 if (dbCached != null && currentSongId == songId) {
-                    val data = dbCached.toLyricData()
-                    _lyricData.value = data
-                    lyricCache[songId] = data
+                    dbCached.toLyricData()?.let { data ->
+                        val current = _lyricData.value
+                        val selected = selectLyricUpdate(
+                            current, data,
+                            sourcesFinished = false, alignmentFinished = false,
+                        )
+                        if (selected !== current) {
+                            _lyricData.value = selected
+                            lyricCache[songId] = selected
+                            trimCache()
+                        }
+                    }
                 }
             }
 
@@ -221,6 +225,8 @@ class LyricManager @Inject constructor(
             )
             qqSongRepository.insertSong(qqSong)
             fetchQQLyric(qqSong)
+        } else {
+            qqLyricResult.value = Resource.Error("No matching QQ song")
         }
     }
 
@@ -314,6 +320,8 @@ class LyricManager @Inject constructor(
     private suspend fun fetchNetEaseLyric(id: String) {
         try {
             netLyricResult.value = repository.getLyricV1(id)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Timber.e(e, "NetEase fetch error")
             netLyricResult.value = Resource.Error("NetEase fetch failed")
@@ -328,6 +336,8 @@ class LyricManager @Inject constructor(
     private suspend fun fetchAMLLyric(id: String) {
         try {
             amLyricResult.value = repository.getAMLLyric(id)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Timber.e(e, "AML fetch error")
             amLyricResult.value = Resource.Error("AML fetch failed")
@@ -401,169 +411,106 @@ class LyricManager @Inject constructor(
      * 当 LRC 回退数据到达时，用当前三个源的现有状态重新合并歌词。
      */
     private fun remergeLyrics() {
+        val generation = loadGeneration
         scope.launch {
             mergeAndApply(
                 netLyricResult.value,
                 qqLyricResult.value,
-                amLyricResult.value
+                amLyricResult.value,
+                generation,
             )
         }
     }
 
     // ==================== 合并逻辑 ====================
 
-    /**
-     * 合并三个源的数据并更新 UI
-     *
-     * 流程：
-     * 1. 守卫：全 Loading 且已有歌词 → 跳过
-     * 2. 组装 LyricSourceData 列表
-     * 3. 调用 [mergeLyrics] 按优先级选出最佳
-     * 4. 缓存结果（内存 + Room）
-     * 5. 根据 QQ 源是否终结决定触发 AI（双源 smartMerge / 单源 singleEnhance）
-     */
+    /** Resolve source selection and duet alignment before publishing a single snapshot. */
     private suspend fun mergeAndApply(
         net: Resource<Lyric>,
         qq: Resource<LyricResult>,
-        am: Resource<String>
+        am: Resource<String>,
+        generation: Long,
     ) {
-        val songIdAtStart = currentSongId
-
-        // 守卫：三源全 Loading 且已有有效歌词 → 不覆盖
-        val hasValidLyrics = _lyricData.value.let {
-            it.source != LyricSource.Loading && it.source != LyricSource.Empty
-                    && it.lyricLine.lines.isNotEmpty()
-        }
-        if (hasValidLyrics && net is Resource.Loading && qq is Resource.Loading && am is Resource.Loading) return
+        val songIdAtStart = currentSongId ?: return
+        fun isCurrentSnapshot() = generation == loadGeneration && currentSongId == songIdAtStart
+                && net === netLyricResult.value && qq === qqLyricResult.value
+                && am === amLyricResult.value
+        if (!isCurrentSnapshot()) return
+        val netTerminal = net !is Resource.Loading
+        val qqTerminal = qq !is Resource.Loading
+        val sourcesFinished = netTerminal && qqTerminal && am !is Resource.Loading
+        val alignmentFinished = am is Resource.Success || (netTerminal && qqTerminal)
+        val fallbackContent = lrcFallbackContent
 
         data class MergeResult(
             val lyricData: LyricData,
             val cacheContent: String?,
             val cacheTranslation: String?,
             val cacheParserType: String,
-            val sources: List<LyricSourceData>
         )
 
         val mergeResult = withContext(Dispatchers.IO) {
             val isPureMusic = (net as? Resource.Success)?.data?.pureMusic == true
             val sources = mutableListOf<LyricSourceData>()
-
             (am as? Resource.Success)?.let { sources.add(LyricSourceData.AM(it.data)) }
             (net as? Resource.Success)?.data?.let { sources.add(LyricSourceData.NetEase(it)) }
             (qq as? Resource.Success)?.data?.musicMusichallSongPlayLyricInfoGetPlayLyricInfo?.data?.let { data ->
                 try {
-                    val isQRC = data.qrcT != 0
                     val decoded = data.copy(
                         lyric = QRCUtils.decodeLyric(data.lyric),
                         trans = QRCUtils.decodeLyric(data.trans, true),
-                        roma = QRCUtils.decodeLyric(data.roma)
+                        roma = QRCUtils.decodeLyric(data.roma),
                     )
-                    sources.add(LyricSourceData.QQMusic(decoded, isQRC, lrcFallbackContent))
+                    sources.add(LyricSourceData.QQMusic(decoded, data.qrcT != 0, fallbackContent))
                 } catch (e: Exception) {
                     Timber.e(e, "QRC decoding failed")
                 }
             }
 
-            val lyricData = mergeLyrics(sources, isPureMusic)
-
-            val (cacheContent, cacheTranslation, cacheParserType) = buildCacheInfo(
-                sources,
-                lyricData
-            )
-
-            MergeResult(lyricData, cacheContent, cacheTranslation, cacheParserType, sources)
-        }
-
-        // 歌曲已切换，放弃旧结果
-        if (currentSongId != songIdAtStart) return
-        if (songIdAtStart == null) return
-
-        // 守卫：不拿空结果覆盖已有有效歌词（竞态保护）
-        if (_lyricData.value.lyricLine.lines.isNotEmpty()
-            && mergeResult.lyricData.lyricLine.lines.isEmpty()
-        ) return
-
-        // 守卫：同一源不重复更新 UI
-        val currentSource = _lyricData.value.source
-        val skipUiUpdate =
-            currentSource != LyricSource.Loading && currentSource != LyricSource.Empty
-                    && mergeResult.lyricData.source == currentSource
-        val cacheContent = mergeResult.cacheContent
-
-        if (!skipUiUpdate) {
-            _lyricData.value = mergeResult.lyricData
-            lyricCache[songIdAtStart] = mergeResult.lyricData
-            trimCache()
-
-            if (cacheContent != null) {
-                cachedLyricRepository.insert(
-                    CachedLyric(
-                        songId = songIdAtStart,
-                        content = cacheContent,
-                        translation = mergeResult.cacheTranslation,
-                        isVerbatim = mergeResult.lyricData.isVerbatim,
-                        isPureMusic = mergeResult.lyricData.isPureMusic,
-                        sourceName = mergeResult.lyricData.source.name,
-                        parserType = mergeResult.cacheParserType,
-                        updatedAt = System.currentTimeMillis()
-                    )
-                )
-            }
-        }
-
-        // ===== 本地对唱合并（仅在 QQ 源终结后触发一次） =====
-        val amSuccess = am as? Resource.Success
-        if (amSuccess != null) return
-
-        val netSuccess = net as? Resource.Success
-        val qqSuccess = qq as? Resource.Success
-        val qqTerminal = qq is Resource.Success || qq is Resource.Error
-
-        if (qqTerminal && !qqFinalized) {
-            qqFinalized = true
-
-            // 仅在有对唱标记的网易云歌词时触发本地对唱解析
-            val neteaseData = netSuccess?.data
-            val lrcText = neteaseData?.lrc?.lyric?.takeIf { it.isNotBlank() }
-            val hasDuet = lrcText != null && duetDetector.isDuetLikely(lrcText)
-            Timber.tag(TAG)
-                .d("duet check: hasLrc=${lrcText != null}, isDuet=$hasDuet, lrcLen=${lrcText?.length}")
-            if (hasDuet) {
-                val netease = LyricSourceData.NetEase(neteaseData)
-                val qqParsed = qqSuccess?.let { parseQQSource(it) }
-                val dueted = if (qqParsed != null) {
-                    duetDetector.mergeWithDuet(netease, qqParsed)
-                } else {
-                    duetDetector.singleDuet(netease)
-                }
-                if (dueted != null) {
-                    _lyricData.value = dueted
-                    lyricCache[songIdAtStart] = dueted
+            var lyricData = mergeLyrics(sources, isPureMusic)
+            // Role detection needs NetEase's timeline even when QQ supplies the words.
+            // Finish it before any UI update or suspending cache write.
+            if (netTerminal && qqTerminal && am !is Resource.Success) {
+                val netease = sources.filterIsInstance<LyricSourceData.NetEase>().firstOrNull()
+                val lrcText = netease?.lyric?.lrc?.lyric
+                if (netease != null && !lrcText.isNullOrBlank() && duetDetector.isDuetLikely(lrcText)) {
+                    val qqSource = sources.filterIsInstance<LyricSourceData.QQMusic>().firstOrNull()
+                    val dueted = if (qqSource != null) {
+                        duetDetector.mergeWithDuet(netease, qqSource)
+                    } else {
+                        duetDetector.singleDuet(netease)
+                    }
+                    if (dueted != null && dueted.lyricLine.lines.isNotEmpty()) lyricData = dueted
                 }
             }
-
+            val (content, translation, parserType) = buildCacheInfo(sources, lyricData)
+            MergeResult(lyricData, content, translation, parserType)
         }
-    }
 
-    /**
-     * 从 QQ Resource.Success 中构建 LyricSourceData.QQMusic
-     *
-     * 解码 QRC 加密字段，提取 lyric、trans、roma 和 isQRC 标记。
-     */
-    private fun parseQQSource(qq: Resource.Success<LyricResult>): LyricSourceData.QQMusic? {
-        val data = qq.data.musicMusichallSongPlayLyricInfoGetPlayLyricInfo?.data ?: return null
-        return try {
-            val isQRC = data.qrcT != 0
-            val decoded = data.copy(
-                lyric = QRCUtils.decodeLyric(data.lyric),
-                trans = QRCUtils.decodeLyric(data.trans, true),
-                roma = QRCUtils.decodeLyric(data.roma)
+        if (!isCurrentSnapshot()) return
+        val current = _lyricData.value
+        val selected = selectLyricUpdate(
+            current, mergeResult.lyricData, sourcesFinished, alignmentFinished,
+        )
+        if (selected === current) return
+
+        _lyricData.value = selected
+        if (selected.source == LyricSource.Loading || selected.source == LyricSource.Empty) return
+        lyricCache[songIdAtStart] = selected
+        trimCache()
+        val content = mergeResult.cacheContent ?: return
+        cachedLyricRepository.insert(
+            CachedLyric(
+                songId = songIdAtStart,
+                content = content,
+                translation = mergeResult.cacheTranslation,
+                isVerbatim = selected.isVerbatim,
+                isPureMusic = selected.isPureMusic,
+                sourceName = selected.source.name,
+                parserType = mergeResult.cacheParserType,
+                updatedAt = System.currentTimeMillis(),
             )
-            LyricSourceData.QQMusic(decoded, isQRC, lrcFallbackContent)
-        } catch (e: Exception) {
-            Timber.e(e, "parseQQSource failed")
-            null
-        }
+        )
     }
 
     private var lastMetadata: MediaMetadata? = null
@@ -606,10 +553,10 @@ class LyricManager @Inject constructor(
             lastMetadata = metadata
             fetchJob?.cancel()
             qqFetchJob?.cancel()
-            qqFinalized = false
-            netLyricResult.value = Resource.Loading
+            loadGeneration++
+            netLyricResult.value = Resource.Error("Manual QQ selection")
             qqLyricResult.value = Resource.Loading
-            amLyricResult.value = Resource.Loading
+            amLyricResult.value = Resource.Error("Manual QQ selection")
             lrcFallbackContent = null
             _lyricData.value = createDefaultLyricData("歌词加载中", source = LyricSource.Loading)
 
@@ -625,6 +572,7 @@ class LyricManager @Inject constructor(
         qqFetchJob?.cancel()
         preloadJob?.cancel()
         currentSongId = null
+        loadGeneration++
     }
 
     // ==================== 歌词预加载 ====================
@@ -642,8 +590,13 @@ class LyricManager @Inject constructor(
         preloadJob?.cancel()
         preloadJob = scope.launch {
             val result = preloader.preload(metadata)
-            if (result != null) {
-                lyricCache[songId] = result
+            if (result != null && result.source != LyricSource.Empty
+                && result.source != LyricSource.Loading && result.lyricLine.lines.isNotEmpty()
+            ) {
+                // A late preload must not replace an already aligned foreground cache.
+                lyricCache[songId] = lyricCache[songId]?.let { existing ->
+                    selectLyricUpdate(existing, result, sourcesFinished = false, alignmentFinished = false)
+                } ?: result
                 trimCache()
             }
         }
@@ -658,74 +611,70 @@ class LyricManager @Inject constructor(
         }
     }
 
-    /**
-     * 从合并源和结果中提取 Room 持久化所需信息
-     *
-     * @return Triple(原始歌词文本, 翻译文本, 解析器类型)
-     *   对逐字歌词（TTML/YRC/QRC），第一项为 null 表示不缓存
-     */
-    private fun buildCacheInfo(
-        sources: List<LyricSourceData>,
-        lyricData: LyricData
-    ): Triple<String?, String?, String> {
-        return when (lyricData.source) {
-            LyricSource.AM -> Triple(null, null, "TTML")
-            LyricSource.NetEaseCloudMusic -> {
-                val netease = sources.filterIsInstance<LyricSourceData.NetEase>().firstOrNull()
-                if (lyricData.isVerbatim) {
-                    Triple(null, null, "YRC")
-                } else {
-                    val lrc = netease?.lyric?.lrc?.lyric?.takeIf { it.isNotBlank() }
-                    val translation = netease?.lyric?.tlyric?.lyric?.takeIf { it.isNotBlank() }
-                    Triple(lrc, translation, "LRC")
-                }
-            }
+}
 
-            LyricSource.QQMusic -> {
-                val qq = sources.filterIsInstance<LyricSourceData.QQMusic>().firstOrNull()
+/** Returns raw text and its matching parser for persistent lyric caching. */
+internal fun buildCacheInfo(
+    sources: List<LyricSourceData>,
+    lyricData: LyricData
+): Triple<String?, String?, String> {
+    return when (lyricData.source) {
+        LyricSource.AM -> Triple(null, null, "TTML")
+        LyricSource.NetEaseCloudMusic -> {
+            val netease = sources.filterIsInstance<LyricSourceData.NetEase>().firstOrNull()
+            if (lyricData.isVerbatim) {
+                Triple(null, null, "YRC")
+            } else {
+                val lrc = netease?.lyric?.lrc?.lyric?.takeIf { it.isNotBlank() }
+                val translation = netease?.lyric?.tlyric?.lyric?.takeIf { it.isNotBlank() }
+                Triple(lrc, translation, "LRC")
+            }
+        }
+
+        LyricSource.QQMusic -> {
+            val qq = sources.filterIsInstance<LyricSourceData.QQMusic>().firstOrNull()
+            val translation = qq?.lyric?.trans?.takeIf { it.isNotBlank() }
+            if (lyricData.isVerbatim) {
+                // QRC must retain its word timestamps, never the LRC fallback.
+                Triple(qq?.lyric?.lyric?.takeIf { it.isNotBlank() }, translation, "QRC")
+            } else {
                 val lrc = qq?.lrcContent?.takeIf { it.isNotBlank() }
                     ?: qq?.lyric?.lyric?.takeIf { it.isNotBlank() }
-                val translation = qq?.lyric?.trans?.takeIf { it.isNotBlank() }
-                if (lyricData.isVerbatim) {
-                    Triple(lrc, translation, "QRC")
-                } else {
-                    Triple(lrc, translation, "LRC")
-                }
+                Triple(lrc, translation, "LRC")
             }
-
-            else -> Triple(null, null, "LRC")
         }
+
+        else -> Triple(null, null, "LRC")
     }
+}
 
-    /**
-
-     * 从 Room 缓存恢复 [LyricData]
-     *
-     * 根据 parserType 选择对应的解析器：
-     * - TTML → TTMLParser
-     * - YRC  → YRCParser
-     * - QRC  → QRCParser (decoded trans)
-     * - LRC  → LRCParser (default)
-     */
-    fun CachedLyric.toLyricData(): LyricData = LyricData(
-        isVerbatim = isVerbatim,
+/** Restores cached lyrics, including legacy LRC entries incorrectly tagged as QRC. */
+internal fun CachedLyric.toLyricData(): LyricData? {
+    var restoredVerbatim = isVerbatim
+    val lyrics = when (parserType) {
+        "TTML" -> TTMLParser().parse(content)
+        "YRC" -> YRCParser.parse(content, translation)
+        "QRC" -> {
+            // Cache text and translation have already been decoded before insertion.
+            val qrc = QRCParser.parse(content, translation)
+            if (qrc.lines.isNotEmpty()) {
+                qrc
+            } else {
+                restoredVerbatim = false
+                LRCParser.parse(content, translation)
+            }
+        }
+        else -> LRCParser.parse(content, translation)
+    }
+    if (lyrics.lines.isEmpty()) return null
+    return LyricData(
+        isVerbatim = restoredVerbatim,
         isPureMusic = isPureMusic,
         source = try {
             LyricSource.valueOf(sourceName)
-        } catch (_: Exception) {
+        } catch (_: IllegalArgumentException) {
             LyricSource.Empty
         },
-        lyricLine = when (parserType) {
-            "TTML" -> TTMLParser().parse(content)
-            "YRC" -> YRCParser.parse(content, translation ?: "")
-            "QRC" -> {
-                val decoded = translation?.let { QRCUtils.decodeLyric(it) } ?: ""
-                QRCParser.parse(content, decoded)
-            }
-
-            else -> LRCParser.parse(content, translation)
-        }
+        lyricLine = lyrics
     )
-
-
 }

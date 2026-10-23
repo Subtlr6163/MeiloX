@@ -27,7 +27,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.stringResource
 import com.ljyh.mei.R
-import com.ljyh.mei.ui.component.player.component.LyricFontFamily
 import com.ljyh.mei.ui.glass.SfIcon
 import com.ljyh.mei.ui.glass.SfSymbol
 
@@ -66,8 +65,7 @@ fun Title(
                 text = title,
                 style = titleStyle.copy(
                     shadow = shadowStyle,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = LyricFontFamily,
+                    fontWeight = FontWeight.Bold
                 ),
                 color = Color.White,
                 maxLines = 1,
@@ -77,8 +75,7 @@ fun Title(
                 text = subTitle,
                 style = subTitleStyle.copy(
                     shadow = shadowStyle,
-                    color = Color.White.copy(alpha = 0.7f),
-                    fontFamily = LyricFontFamily,
+                    color = Color.White.copy(alpha = 0.7f)
                 ),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,

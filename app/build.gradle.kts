@@ -1,5 +1,13 @@
 @file:Suppress("UnstableApiUsage")
 
+import java.io.ByteArrayOutputStream
+import java.io.File
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.provider.ValueSource
+import org.gradle.api.provider.ValueSourceParameters
+import org.gradle.process.ExecOperations
+import javax.inject.Inject
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -10,19 +18,91 @@ plugins {
 
 }
 
+abstract class SourceBuildMetadata : ValueSource<String, SourceBuildMetadata.Parameters> {
+    interface Parameters : ValueSourceParameters {
+        val sourceDirectory: DirectoryProperty
+    }
 
+    @get:Inject
+    abstract val execOperations: ExecOperations
 
+    override fun obtain(): String {
+        val sourceDirectory = parameters.sourceDirectory.get().asFile
+        fun git(vararg arguments: String): String? = runCatching {
+            val output = ByteArrayOutputStream()
+            val result = execOperations.exec {
+                workingDir(sourceDirectory)
+                commandLine(listOf("git") + arguments)
+                environment.keys.removeAll { it.startsWith("GIT_") }
+                standardOutput = output
+                errorOutput = ByteArrayOutputStream()
+                isIgnoreExitValue = true
+            }
+            output.toString(Charsets.UTF_8.name()).trim().takeIf { result.exitValue == 0 }
+        }.getOrNull()
+
+        // Archives nested in another checkout must not inherit that checkout's identity.
+        val isSourceCheckout = git("rev-parse", "--show-toplevel")?.let { checkoutPath ->
+            runCatching { File(checkoutPath).canonicalFile == sourceDirectory.canonicalFile }
+                .getOrDefault(false)
+        } ?: false
+        val commitSha = if (isSourceCheckout) git("rev-parse", "HEAD").orEmpty() else ""
+        val commitEpoch = if (commitSha.isNotEmpty()) {
+            git("show", "-s", "--format=%ct", "HEAD")?.toLongOrNull()?.takeIf { it > 0 }
+        } else null
+        val sourceDirty = if (commitSha.isNotEmpty()) {
+            git("status", "--porcelain=v1", "--untracked-files=normal")?.isNotEmpty() ?: true
+        } else true
+        val buildNumber = commitEpoch ?: (System.currentTimeMillis() / 1_000).coerceAtLeast(1)
+        return "$buildNumber\n$commitSha\n$sourceDirty"
+    }
+}
+
+val sourceBuildMetadata = providers.of(SourceBuildMetadata::class) {
+    parameters.sourceDirectory.set(rootProject.layout.projectDirectory)
+}.get().lines()
+val buildNumber = sourceBuildMetadata[0].toLong()
+val buildCommitSha = sourceBuildMetadata[1].ifBlank {
+    providers.gradleProperty("mei.buildCommitSha").orElse("").get().trim()
+}.takeIf { it.matches(Regex("[0-9a-fA-F]{40}|[0-9a-fA-F]{64}")) }.orEmpty().lowercase()
+val buildSourceDirty = sourceBuildMetadata[2].toBoolean()
+val isCanonicalCi = providers.environmentVariable("GITHUB_REPOSITORY").orElse("").get()
+    .equals("NEORUAA/MeiloX", ignoreCase = true) &&
+    providers.environmentVariable("GITHUB_WORKFLOW_REF").orElse("").get().substringBefore('@')
+        .equals("NEORUAA/MeiloX/.github/workflows/main.yml", ignoreCase = true)
+val ciRunNumber = if (isCanonicalCi) providers.gradleProperty("mei.ciRunNumber")
+    .orElse(providers.environmentVariable("GITHUB_RUN_NUMBER"))
+    .orElse("0")
+    .get().toLong().also { require(it >= 0) { "CI run number must not be negative." } } else 0L
+val ciRunAttempt = if (isCanonicalCi) providers.gradleProperty("mei.ciRunAttempt")
+    .orElse(providers.environmentVariable("GITHUB_RUN_ATTEMPT"))
+    .orElse(if (ciRunNumber > 0) "1" else "0")
+    .get().toInt().also {
+        require(if (ciRunNumber > 0) it > 0 else it == 0) { "CI run attempt must match the run number." }
+    } else 0
 
 android {
     namespace = "com.ljyh.mei"
     compileSdk = 37
+    ndkVersion = "27.1.12297006"
+    useLibrary("android.test.mock")
+    testBuildType = providers.gradleProperty("mei.instrumentationBuildType").orElse("debug").get()
     defaultConfig {
-        applicationId = "com.neoruaa.meilox"
+        applicationId = providers.gradleProperty("mei.applicationId")
+            .orElse("com.neoruaa.meilox")
+            .get()
         minSdk = 33
         targetSdk = 37
-        versionCode = 11
-        versionName = "1.54.6"
+        versionCode = 16
+        versionName = "1.55.1"
+        buildConfigField("long", "BUILD_NUMBER", "${buildNumber}L")
+        buildConfigField("String", "BUILD_COMMIT_SHA", "\"$buildCommitSha\"")
+        buildConfigField("boolean", "BUILD_SOURCE_DIRTY", buildSourceDirty.toString())
+        buildConfigField("long", "CI_RUN_NUMBER", "${ciRunNumber}L")
+        buildConfigField("int", "CI_RUN_ATTEMPT", ciRunAttempt.toString())
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        manifestPlaceholders["mei_build_id"] =
+            "number=$buildNumber;sha=$buildCommitSha;dirty=$buildSourceDirty;ci=$ciRunNumber.$ciRunAttempt"
         manifestPlaceholders["superlyricapi_version_name"] = "3.4"
         manifestPlaceholders["superlyricapi_version_code"] = "34"
         ndk {
@@ -30,15 +110,21 @@ android {
             abiFilters += "arm64-v8a"
         }
     }
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
 
     buildTypes {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
+                "proguard-rules.pro",
+                "netease-sdk-rules.pro"
             )
         }
     }
@@ -56,12 +142,6 @@ android {
         // entries at install time instead of mmap'ing them directly from the APK.
         jniLibs.useLegacyPackaging = true
         dex.useLegacyPackaging = true
-    }
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
-        }
     }
 }
 
@@ -85,6 +165,7 @@ kotlin {
 dependencies {
 
     implementation(libs.androidx.core.ktx)
+    implementation(libs.bcprov.jdk18on)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
@@ -95,6 +176,10 @@ dependencies {
     implementation(libs.androidx.activity.ktx)
     implementation(libs.androidx.navigation.runtime.ktx)
     implementation(libs.androidx.navigation.compose)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
+    implementation(libs.mlkit.barcode.scanning)
     implementation(libs.miuix.navigation3.ui.android)
     implementation(libs.androidx.navigation3.runtime)
     implementation(libs.media3)
@@ -103,11 +188,14 @@ dependencies {
     implementation(libs.annotations)
     implementation(libs.androidx.core.animation)
     implementation(libs.androidx.compose.material3.window.size.class1)
-    implementation("com.github.luben:zstd-jni:1.5.7-20@aar")
+    // Android needs the AAR's JNI libraries; the default artifact is a desktop JVM JAR.
+    implementation(variantOf(libs.zstd.jni) { artifactType("aar") })
     testImplementation(libs.junit)
-    testRuntimeOnly("com.github.luben:zstd-jni:1.5.7-20")
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:${libs.versions.kotlinxCoroutinesGuava.get()}")
+    testRuntimeOnly(libs.zstd.jni)
+    testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(libs.androidx.junit)
+    // Use the public input service instead of removed InputManager reflection on API 37.
+    androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.ui.test.junit4)
     debugImplementation(libs.androidx.ui.tooling)
@@ -168,8 +256,8 @@ dependencies {
     // 歌词组件
     implementation(libs.lyrics.core)
     implementation(libs.lyrics.ui)
-    implementation("io.github.proify.lyricon:provider:0.1.70")
-    implementation("com.github.HChenX:SuperLyricApi:3.4")
+    implementation(libs.provider)
+    implementation(libs.superlyricapi)
     implementation(libs.zoomable)
     implementation(libs.timber)
     implementation(libs.compose.cloudy)
@@ -187,3 +275,21 @@ dependencies {
 //        }
 //    }
 //}
+
+val verifyNoDexAssets by tasks.registering {
+    group = "verification"
+    description = "Reject executable dex files in application assets."
+    val assets = layout.projectDirectory.dir("src/main/assets")
+    inputs.dir(assets)
+    doLast {
+        assets.asFile.walkTopDown().filter { it.isFile }.forEach { asset ->
+            val header = asset.inputStream().use { it.readNBytes(4) }
+            val executable = header.contentEquals(byteArrayOf(100, 101, 120, 10)) ||
+                header.contentEquals(byteArrayOf(99, 100, 101, 120))
+            check(!asset.extension.equals("dex", ignoreCase = true) && !executable) {
+                "Executable dex assets are forbidden: ${asset.relativeTo(assets.asFile)}"
+            }
+        }
+    }
+}
+tasks.named("preBuild") { dependsOn(verifyNoDexAssets) }

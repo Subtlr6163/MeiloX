@@ -1,174 +1,82 @@
-<div align="center">
+# MeiloX 字体修复 · 改动说明
 
-# [MeiloX](https://github.com/NEORUAA/MeiloX)
+## 一、为什么原来「一点都不像」
 
-<img src="./screenshot/logo.png" width="120px" style="border-radius:12px"/>
+仓库里只有一个 `res/font/sf_pro.ttf`，它是 SF Pro **可变字体**。代码里这样注册的：
 
-### 一个基于 Mei 改造的高仿 Apple Music 风格网易云音乐 Android 客户端
+```kotlin
+val AppFontFamily = FontFamily(Font(R.font.sf_pro, FontWeight.Normal))
+```
 
-![Android](https://img.shields.io/badge/Platform-Android-green?logo=android)
-![Jetpack Compose](https://img.shields.io/badge/UI-Jetpack%20Compose-blue)
-![License](https://img.shields.io/badge/License-GPLv3-orange)
-![Status](https://img.shields.io/badge/Development-In%20Progress-yellow)
+三个致命问题叠在一起：
 
-</div>
+1. **只注册了一个字重**。整份排版里所有 `FontWeight.SemiBold / Bold` 请求，最终都由 Android 拿 Regular 字形做**合成加粗**（描边描出来的假粗体），笔画发虚、字腔糊掉 —— 这是「不像」最大的元凶。可变字体自带的 `wght`(1–1000) 和 `opsz`(Text/Display) 轴完全没被用上。
+2. **这份 SF Pro 里一个中文字形都没有**。实测 cmap 里 CJK 区（U+4E00–9FFF）命中数为 **0**，所以界面上全部中文 100% 回落到安卓系统黑体，中英混排风格割裂。
+3. **默认字距是 1sp**。SF Pro 本身已带 Apple 的 tracking，再叠 1sp 让每个标签都被拉散。
 
----
+## 二、修法
 
-## 项目简介
+用 fontTools 在构建前把字体处理成**静态字重实例**，再合并中文字形：
 
-MeiloX 是一个基于 [Mei](https://github.com/ljyh223/Mei) 改造的第三方网易云音乐客户端，使用 **Jetpack Compose** 构建，尝试把 iOS 27 的层次感、液态玻璃和沉浸式播放器体验带到 Android 上。
+| 步骤 | 做法 |
+| --- | --- |
+| 取真实字重 | 从可变字体轴实例化 `wght=400/500/600/700`，`opsz=17(Text)` 与 `opsz=28(Display)` 两套光学尺寸 |
+| 补中文 | Noto Sans SC（思源黑体，SIL OFL 1.1）同样取 400/500/600/700 真实字重 |
+| 合并 | 拉丁/希腊/西里尔取 SF Pro，**中文取 Noto**，合并成一个文件一个字重；统一 upem 到 2048，竖直度量取两者较大值避免行高裁切 |
+| 瘦身 | 拉丁子集 ~133KB；中文子集保留 GB2312 全部汉字 + 标点/假名/注音/全角等约 9100 字 |
 
-项目重点放在三个方向：
+最终每个字重文件约 2.5MB，共 6 个（Regular / Medium / Semibold / Bold / Display Regular / Display Bold）。
 
-- 用 iOS 风格的页面结构重新组织网易云音乐内容；
-- 用 Liquid Glass、动态背景和专辑封面让播放过程更有沉浸感；
-- 保留网易云音乐的搜索、歌单、歌词和个人资料等使用习惯。
+SF Symbols 图标字单独拆成 `sf_symbols.ttf`（仅 PUA U+100000–103FFF，1.9MB），供 `SfSymbol.kt` 使用。
 
-> MeiloX 是非官方的个人开源项目，不隶属于网易云音乐或 Apple；项目本身不提供音乐资源，音乐内容及相关版权归其权利人所有。
+### 体积账
 
-## 功能概览
+删掉了原本 25MB 的 `sf_pro.ttf`，换上 6×2.5MB + 1.9MB ≈ 16.9MB。**APK 体积不增反降**。
 
-- 网易云音乐 Cookie 登录与账号信息展示；
-- 搜索歌曲、专辑、歌手和歌单；
-- 播放队列、随机播放、循环播放和定时停止；
-- 播放历史、喜欢的音乐、歌单管理和本地收藏；
-- 专辑详情、歌手主页、每日推荐及 FM 播放；
-- 逐字歌词与多语言歌词展示；
-- Apple Music 风格全屏播放器、迷你播放器和歌词浮窗；
-- 浅色/深色主题、动态专辑背景和 Liquid Glass 交互效果。
+## 三、改了哪些文件
 
-功能仍在持续调整中，实际可用范围会随版本和网易云音乐接口状态变化。
+```
+app/src/main/res/font/
+  ├─ app_font_regular.ttf          ← 新增
+  ├─ app_font_medium.ttf           ← 新增
+  ├─ app_font_semibold.ttf         ← 新增
+  ├─ app_font_bold.ttf             ← 新增
+  ├─ app_font_display_regular.ttf  ← 新增
+  ├─ app_font_display_bold.ttf     ← 新增
+  ├─ sf_symbols.ttf                ← 新增（图标）
+  └─ sf_pro.ttf                    ← 删除（25MB 可变字体）
 
----
+app/src/main/java/com/ljyh/mei/ui/theme/Type.kt            ← 重写：四档真实字重 + Display 光学尺寸
+app/src/main/java/com/ljyh/mei/ui/glass/SfSymbol.kt        ← 改：图标字体指向 sf_symbols.ttf
+app/src/main/java/com/ljyh/mei/constants/PreferenceKeys.kt ← 改：默认字距 1f → 0f
+THIRD_PARTY_NOTICES                                        ← 补：字体来源与许可声明
+.github/workflows/build-apk.yml                            ← 新增：免密钥构建签名工作流
+```
 
-## 本分支修改记录
+`IosTypography` 的语义映射（largeTitle / title2 / headline / body / subheadline / caption）保持原样，不需要动 —— 它们读的是 `MaterialTheme.typography`，换掉底层 `AppFontFamily` 后自动生效，**歌词、设置页、播放器全量覆盖**。
 
-本分支在原版基础上做了以下定制修改，均为个人使用向调整，未改动原项目的功能逻辑与数据结构。
+## 四、怎么拿到 release APK
 
-### 1. 全局字体更换为三星 One UI 字体（Samsung Sharp Sans）
+项目自带的工作流 `main.yml` 依赖 `secrets.SIGNING_KEY`，fork 后没有这个密钥会直接失败。所以我另加了一个 `build-apk.yml`，**不需要任何密钥**，自己生成一次性签名：
 
-- **新增字体资源**：`app/src/main/res/font/samsung_sharp_sans_regular.ttf`、`samsung_sharp_sans_bold.ttf`，来源为三星官方仓库 [SamsungInternet/OneUI-Web](https://github.com/SamsungInternet/OneUI-Web)；
-- **新增共享字体定义**：`LyricFont.kt`（顶层 `LyricFontFamily`，含 Regular + Bold 两个字重），所有歌词/歌名位置统一引用；
-- **全局主题字体**：`Theme.kt` 中 `SfProFamily` 的定义由 `sf_pro.ttf` 改为三星字体，所有 `MaterialTheme.typography.*` 样式全局生效；
-- **iOS 风格组件字体**：`GlassTokens.kt` 中 `IosTypography.fontFamily` 同步改为三星字体；
-- **歌词界面**：全屏歌词（`LyricScreen.kt`）、悬浮画中画歌词（`FloatingLyricsPip.kt`）、Liquid 歌词特效（`LiquidLyricsViews.kt`，含列表 / EVA / TEXT PV / Skyline 四种视图）全部使用三星字体；
-- **歌名文字**：播放页歌名与歌手副标题（`Title.kt`）、歌单/歌曲列表行歌名（`TrackItem.kt`）使用三星字体；
-- **图标例外**：`SfSymbol.kt` 的 SF Symbols **图标字形**保留 `sf_pro` 不变——图标字体替换会导致图标显示为方块；
-- **中文渲染**：三星字体仅含拉丁字形，中文等非拉丁字符由系统按 fallback 链自动选择字体，这与三星 One UI 在中文设备上的真实渲染行为一致。
+1. Fork `NEORUAA/MeiloX`
+2. 把本压缩包里的文件按上面的目录结构覆盖进去（记得删掉 `app/src/main/res/font/sf_pro.ttf`）
+3. 推送到任意分支
+4. Actions → `Build APK (self-signed)` → 运行结束后在 **Artifacts** 里下载 `MeiloX-release`
 
-### 2. 性能优化
+本地构建同理：
 
-- **构建改为 Release 模式**：开启 R8 代码压缩、资源收缩与 Baseline Profile 编译，APK 体积从 Debug 版约 64MB 降至约 20MB，运行流畅度与上游发布版一致；
-- **Release 签名**：`app/build.gradle.kts` 中为 release 构建启用 debug 签名（`signingConfig = signingConfigs.getByName("debug")`），产物可直接安装；
-- **歌词样式缓存**：`LyricScreen.kt` / `LiquidLyricsViews.kt` 中原本每次重组都会新建的 `LocalTextStyle.current.copy(...)` / `MaterialTheme.typography.*.copy(...)` 改为 `remember` 缓存，仅在字号/字重等参数变化时重建，减少逐帧对象分配。
+```bash
+./gradlew assembleRelease
+```
 
-### 修改文件清单
+要求 JDK 21 + Android SDK platform 37 + build-tools 37.0.0 + NDK 27.1.12297006（项目含 beatnet native 代码）。
 
-| 文件 | 修改内容 |
-|---|---|
-| `app/src/main/java/com/ljyh/mei/ui/theme/Theme.kt` | 全局默认字体改为 Samsung Sharp Sans |
-| `app/src/main/java/com/ljyh/mei/ui/glass/GlassTokens.kt` | `IosTypography.fontFamily` 改为三星字体 |
-| `app/src/main/java/com/ljyh/mei/ui/component/player/component/LyricFont.kt` | 新增：共享字体定义 `LyricFontFamily` |
-| `app/src/main/java/com/ljyh/mei/ui/component/player/component/LyricScreen.kt` | 全屏歌词三行样式使用三星字体 + remember 缓存 |
-| `app/src/main/java/com/ljyh/mei/ui/component/player/FloatingLyricsPip.kt` | 悬浮画中画歌词使用三星字体 |
-| `app/src/main/java/com/ljyh/mei/ui/component/player/component/LiquidLyricsViews.kt` | 四种 Liquid 歌词视图使用三星字体 + 样式缓存 |
-| `app/src/main/java/com/ljyh/mei/ui/component/player/component/applemusic/Title.kt` | 播放页歌名/副标题使用三星字体 |
-| `app/src/main/java/com/ljyh/mei/ui/component/item/TrackItem.kt` | 歌单/歌曲列表行歌名使用三星字体 |
-| `app/src/main/res/font/samsung_sharp_sans_regular.ttf` | 新增：三星 Regular 字体 |
-| `app/src/main/res/font/samsung_sharp_sans_bold.ttf` | 新增：三星 Bold 字体 |
-| `app/build.gradle.kts` | Release 构建启用 debug 签名以便直接安装 |
+## 五、可回退项
 
-## 歌词共享
+- **默认字距改回**：`PreferenceKeys.kt` 的 `DefaultInterfaceLetterSpacing` 改回 `1f`。设置里「界面字距」仍可在 0–3sp 间手动调。
+- **中文想换回系统字体**：删掉各 `app_font_*.ttf` 里的中文字形即可，或把 `AppFontFamily` 的第一个 `Font` 换成只含拉丁的 `sf_pro` 子集。
 
-已接入 [Lyricon Provider](https://tomakino.github.io/lyricon/zh-cn/developer/provider/) 和 [SuperLyricApi](https://github.com/HChenX/SuperLyricApi) SDK，用于共享歌词、逐字时间、翻译及播放状态。
+## 六、许可提醒
 
-「设置 → 歌词设置 → 歌词共享」中的「启用歌词共享」默认开启。
-
-## 开源致谢
-
-MeiloX 的界面、歌词和底层能力受以下项目启发或直接使用其开源组件，感谢所有贡献者：
-
-- [Mei](https://github.com/ljyh223/Mei)：上游 Android 项目与基础能力；
-- [MeloX](https://github.com/youshen2/MeloX)：iOS 版参考实现与产品方向；
-- [amll-ttml-db](https://github.com/Steve-xmh/amll-ttml-db)：高质量逐字歌词数据；
-- [accompanist-lyrics-ui](https://github.com/6xingyv/accompanist-lyrics-ui)：歌词模型与渲染组件；
-- [Lyricon](https://github.com/tomakino/lyricon)：词幕 Provider SDK；
-- [SuperLyricApi](https://github.com/HChenX/SuperLyricApi)：歌词共享 SDK；
-- [AndroidLiquidGlass / Backdrop](https://github.com/Kyant0/AndroidLiquidGlass)：Compose Multiplatform 流体玻璃效果。
-
-## 许可证与第三方声明
-
-MeiloX 主体代码以 [GNU General Public License v3](LICENSE) 发布。MeiloX 是 Mei 的衍生项目，相关上游代码和参考实现仍受其原始版权与许可证约束；第三方库、模型、脚本、字体和视觉素材不因 MeiloX 使用 GPLv3 就自动转为 GPLv3。
-
-重点声明如下：
-
-- [Mei](https://github.com/ljyh223/Mei) 的上游代码遵循 Apache License 2.0；
-- [MeloX](https://github.com/youshen2/MeloX) 的相关参考代码遵循其项目的 GPLv3 条款；
-- [AndroidLiquidGlass / Backdrop](https://github.com/Kyant0/AndroidLiquidGlass) 相关依赖遵循 Apache License 2.0；
-- [amll-ttml-db](https://github.com/Steve-xmh/amll-ttml-db) 与 [accompanist-lyrics-ui](https://github.com/6xingyv/accompanist-lyrics-ui) 遵循各自仓库公布的许可证和署名要求；
-- BeatNet 模型、音频指纹运行时、ONNX Runtime、PV Tool 衍生内容及其它随项目分发的组件，遵循其各自的许可证、版权声明和再分发限制。
-
-完整的来源、版权归属、许可证链接和特殊再分发要求请阅读 [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES)。其中 `res/font/sf_pro.ttf` 仅作为个人项目资源使用；请勿从构建产物中单独提取或再分发，公开发布构建版本前请重新核对 Apple 的字体许可条款。
-
-## 软件界面预览
-
-以下预览来自 [`screenshot/2026-08-22`](./screenshot/2026-08-22/)，同时展示浅色、深色和播放器界面。
-
-### 浅色界面
-
-<table>
-  <tr>
-    <td><img src="./screenshot/2026-08-22/light_Screenshot_2026-08-22-09-47-44-801_com.neoruaa.meilox.jpg" width="200" alt="Light mode 01"></td>
-    <td><img src="./screenshot/2026-08-22/light_Screenshot_2026-08-22-10-31-11-383_com.neoruaa.meilox.jpg" width="200" alt="Light mode 07"></td>
-    <td><img src="./screenshot/2026-08-22/light_Screenshot_2026-08-22-10-06-44-461_com.neoruaa.meilox.jpg" width="200" alt="Light mode 04"></td>
-    <td><img src="./screenshot/2026-08-22/light_Screenshot_2026-08-22-10-05-43-651_com.neoruaa.meilox.jpg" width="200" alt="Light mode 02"></td>
-  </tr>
-  <tr>
-    <td><img src="./screenshot/2026-08-22/light_Screenshot_2026-08-22-10-13-55-779_com.neoruaa.meilox.jpg" width="200" alt="Light mode 05"></td>
-    <td><img src="./screenshot/2026-08-22/light_Screenshot_2026-08-22-10-14-22-986_com.neoruaa.meilox.jpg" width="200" alt="Light mode 06"></td>
-    <td><img src="./screenshot/2026-08-22/light_Screenshot_2026-08-22-10-06-04-617_com.neoruaa.meilox.jpg" width="200" alt="Light mode 03"></td>
-    <td><img src="./screenshot/2026-08-22/light_Screenshot_2026-08-22-10-33-30-925_com.neoruaa.meilox.jpg" width="200" alt="Light mode 08"></td>
-  </tr>
-</table>
-
-### 深色界面
-
-<table>
-  <tr>
-    <td><img src="./screenshot/2026-08-22/dark_Screenshot_2026-08-22-10-17-19-250_com.neoruaa.meilox.jpg" width="200" alt="Dark mode 02"></td>
-    <td><img src="./screenshot/2026-08-22/dark_Screenshot_2026-08-22-10-28-56-966_com.neoruaa.meilox.jpg" width="200" alt="Dark mode 07"></td>
-    <td><img src="./screenshot/2026-08-22/dark_Screenshot_2026-08-22-10-19-07-140_com.neoruaa.meilox.jpg" width="200" alt="Dark mode 06"></td>
-    <td><img src="./screenshot/2026-08-22/dark_Screenshot_2026-08-22-10-17-04-531_com.neoruaa.meilox.jpg" width="200" alt="Dark mode 01"></td>
-  </tr>
-  <tr>
-    <td><img src="./screenshot/2026-08-22/dark_Screenshot_2026-08-22-10-17-59-681_com.neoruaa.meilox.jpg" width="200" alt="Dark mode 04"></td>
-    <td><img src="./screenshot/2026-08-22/dark_Screenshot_2026-08-22-10-34-42-884_com.neoruaa.meilox.jpg" width="200" alt="Dark mode 08"></td>
-    <td><img src="./screenshot/2026-08-22/dark_Screenshot_2026-08-22-10-17-30-088_com.neoruaa.meilox.jpg" width="200" alt="Dark mode 03"></td>
-    <td><img src="./screenshot/2026-08-22/dark_Screenshot_2026-08-22-10-18-09-075_com.neoruaa.meilox.jpg" width="200" alt="Dark mode 05"></td>
-  </tr>
-</table>
-
-### 播放器与歌词
-
-<table>
-  <tr>
-    <td><img src="./screenshot/2026-08-22/player_Screenshot_2026-08-22-10-12-05-012_com.neoruaa.meilox.jpg" width="200" alt="Player 02"></td>
-    <td><img src="./screenshot/2026-08-22/player_Screenshot_2026-08-22-10-11-20-597_com.neoruaa.meilox.jpg" width="200" alt="Player 01"></td>
-    <td><img src="./screenshot/2026-08-22/player_Screenshot_2026-08-22-10-16-34-746_com.neoruaa.meilox.jpg" width="200" alt="Player 03"></td>
-    <td><img src="./screenshot/2026-08-22/player_Screenshot_2026-08-22-10-16-52-289_com.neoruaa.meilox.jpg" width="200" alt="Player 04"></td>
-    <td><img src="./screenshot/2026-08-22/player_Screenshot_2026-08-22-10-21-10-403_com.neoruaa.meilox.jpg" width="200" alt="Player 05"></td>
-  </tr>
-</table>
-
-## 免责声明
-
-本项目仅用于学习、研究和个人使用。使用本项目访问网易云音乐服务时，请遵守当地法律法规、网易云音乐服务条款及相关版权要求。项目维护者不对第三方服务的可用性、账号状态或音乐内容承担责任。
-
-如果你发现侵权内容、许可证遗漏或不准确的第三方声明，欢迎通过 [Issues](https://github.com/NEORUAA/MeiloX/issues) 联系维护者。
-
-<div align="center">
-
-Made with Jetpack Compose · MeiloX
-
-</div>
+`app_font_*.ttf` 中的拉丁字形来自 SF Pro，Apple 保留全部权利；中文字形来自 Noto Sans SC（SIL OFL 1.1）。**公开发布构建版本前请重新核对 Apple 的字体许可条款**，`THIRD_PARTY_NOTICES` 已补充对应声明。
