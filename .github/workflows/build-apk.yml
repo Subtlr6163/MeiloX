@@ -23,18 +23,37 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      - uses: android-actions/setup-android@v3
+      # 根因：v3 默认安装 "tools platform-tools"，而 legacy `tools` 包已被 Google
+      # 从 SDK 仓库下架（2026-09-15 起停止服务），sdkmanager 必然以 exit 1 失败：
+      #   Warning: Failed to find package 'tools'
+      # v4 已移除该默认项，只装 platform-tools，并自行装好 cmdline-tools 加进 PATH。
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
 
-      - name: Install Android SDK / NDK / CMake
+      - name: Install Android SDK components
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager --install \
-            "platform-tools" \
-            "platforms;android-37.0" \
-            "build-tools;37.0.0" \
-            "ndk;27.1.12297006" \
-            "cmake;3.22.1"
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "SDK dir: $SDK"
+          SM=""
+          for c in "$(command -v sdkmanager || true)" \
+                   "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+                   "$SDK/cmdline-tools/bin/sdkmanager"; do
+            if [ -n "$c" ] && [ -x "$c" ]; then SM="$c"; break; fi
+          done
+          if [ -z "$SM" ]; then
+            echo "::error::找不到 sdkmanager"; ls -R "$SDK/cmdline-tools" | head -40; exit 1
+          fi
+          echo "sdkmanager: $SM"
+          yes | "$SM" --licenses > /dev/null 2>&1 || true
+          # 逐包安装：单个包解析失败只告警，交由 AGP 的 sdkDownload 兜底
+          for pkg in "platforms;android-37.0" "build-tools;37.0.0" \
+                     "ndk;27.1.12297006" "cmake;3.22.1"; do
+            echo ">>> installing $pkg"
+            "$SM" --install "$pkg" || echo "::warning::$pkg 安装失败，交由 AGP 自动下载兜底"
+          done
+          echo ">>> installed:"; "$SM" --list_installed || true
 
       # 项目自带 gradle.properties 只给了 -Xmx2048m，编 Kotlin + Compose + R8 容易 OOM。
       # GRADLE_USER_HOME 下的配置优先级高于项目内配置，这里直接盖掉。
@@ -55,11 +74,11 @@ jobs:
       - name: Sign APK with a throwaway key
         run: |
           set -euo pipefail
-          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}}"
-          echo "SDK dir: $SDK"
-          APKSIGNER="$(find "$SDK/build-tools" -maxdepth 2 -name apksigner -type f | sort -V | tail -n1)"
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          APKSIGNER="$(find "$SDK/build-tools" -maxdepth 2 -name apksigner -type f 2>/dev/null | sort -V | tail -n1)"
+          if [ -z "$APKSIGNER" ]; then echo "::error::找不到 apksigner"; exit 1; fi
           echo "apksigner: $APKSIGNER"
-          UNSIGNED="$(find app/build/outputs/apk/release -maxdepth 1 -name '*.apk' | grep -v 'signed' | head -n1)"
+          UNSIGNED="$(find app/build/outputs/apk/release -maxdepth 1 -name '*.apk' | grep -v signed | head -n1)"
           echo "unsigned: $UNSIGNED"
           test -n "$UNSIGNED"
           keytool -genkeypair -v \
