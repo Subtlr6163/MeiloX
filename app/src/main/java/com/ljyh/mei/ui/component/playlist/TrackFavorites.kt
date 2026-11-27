@@ -13,9 +13,11 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.ljyh.mei.data.model.MediaMetadata
+import com.ljyh.mei.source.api.TrackRef
+import com.ljyh.mei.source.api.TrackRefCodec
 import com.ljyh.mei.ui.component.player.PlayerViewModel
-import com.ljyh.mei.ui.glass.LocalGlassColors
-import com.ljyh.mei.ui.glass.SfIcon
+import io.github.neoruaa.glasmio.core.LocalGlassColors
+import io.github.neoruaa.glasmio.icons.SfIcon
 
 @Composable
 internal fun rememberFavoriteTrackIds(
@@ -23,23 +25,30 @@ internal fun rememberFavoriteTrackIds(
     enabled: Boolean = true,
 ): Set<String> {
     if (!enabled) return emptySet()
+    val refs = remember(tracks) {
+        tracks.asSequence().filter { !it.isLocal && !it.isPodcast }.map { it.trackRef }.toSet()
+    }
+    return rememberSourceFavoriteTrackIds(refs)
+}
+
+@Composable
+internal fun rememberFavoriteTrackIds(ids: Set<Long>, enabled: Boolean = true): Set<String> {
+    if (!enabled) return emptySet()
+    val refs = remember(ids) { ids.filter { it > 0L }.mapNotNull { TrackRefCodec.decode(it.toString()) }.toSet() }
+    return rememberSourceFavoriteTrackIds(refs)
+}
+
+@Composable
+private fun rememberSourceFavoriteTrackIds(refs: Set<TrackRef>): Set<String> {
     val viewModel: PlayerViewModel = hiltViewModel()
     val likes by viewModel.songLikes.collectAsStateWithLifecycle()
-    val account by viewModel.songLikeAccount.collectAsStateWithLifecycle()
     val generation by viewModel.songLikeGeneration.collectAsStateWithLifecycle()
-    val ids = remember(tracks) {
-        tracks.asSequence()
-            .filter { !it.isLocal && !it.isPodcast && it.id > 0 }
-            .map { it.id }
-            .toSet()
+    LaunchedEffect(refs, generation) {
+        if (refs.isNotEmpty()) viewModel.ensureSourceLikes(refs)
     }
-    LaunchedEffect(ids, account, generation) {
-        val currentAccount = account ?: return@LaunchedEffect
-        if (ids.isNotEmpty()) viewModel.ensureSongLikes(ids, currentAccount.sessionFingerprint)
-    }
-    return remember(likes, account) {
-        if (account == null) emptySet()
-        else likes.filterValues { it }.keys.toSet()
+    return remember(likes, refs) {
+        val keys = refs.map { TrackRefCodec.mediaId(it) }.toSet()
+        likes.filter { (key, liked) -> liked && key in keys }.keys
     }
 }
 
@@ -47,15 +56,20 @@ internal fun rememberFavoriteTrackIds(
 internal fun FavoriteTrackStar(
     modifier: Modifier = Modifier,
     tint: Color = LocalGlassColors.current.secondaryContent,
+    luminosityBlend: Boolean = true,
 ) {
     SfIcon(
         systemName = "star.fill",
         contentDescription = null,
-        modifier = modifier.graphicsLayer {
-            blendMode = BlendMode.Luminosity
-            compositingStrategy = CompositingStrategy.Offscreen
+        modifier = if (luminosityBlend) {
+            modifier.graphicsLayer {
+                blendMode = BlendMode.Luminosity
+                compositingStrategy = CompositingStrategy.Offscreen
+            }
+        } else {
+            modifier
         },
         tint = tint,
-        size = 12.dp,
+        size = 11.dp,
     )
 }

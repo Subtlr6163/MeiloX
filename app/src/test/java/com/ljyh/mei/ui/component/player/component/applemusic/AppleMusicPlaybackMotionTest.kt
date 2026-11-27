@@ -5,6 +5,7 @@ import androidx.compose.animation.core.TargetBasedAnimation
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.runtime.BroadcastFrameClock
 import androidx.media3.common.C
+import com.ljyh.mei.ui.component.player.miniPlayerSwipeDirection
 import com.ljyh.mei.ui.component.player.state.playerProgressDuration
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
@@ -14,6 +15,29 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class AppleMusicPlaybackMotionTest {
+    @Test fun metadataReturnsFromOffscreenQueueToTheControlTitle() {
+        val album = androidx.compose.ui.geometry.Offset(0f, 72f)
+        for (queueTop in listOf(-600f, -42f, 0f, 800f)) {
+            val header = androidx.compose.ui.geometry.Offset(0f, 48f + queueTop)
+            assertEquals(header, appleMusicInfoOffset(album, header, 1f, true, androidx.compose.ui.geometry.Offset.Zero))
+            assertEquals(album, appleMusicInfoOffset(album, header, 0f, true, androidx.compose.ui.geometry.Offset.Zero))
+            val halfway = appleMusicInfoOffset(album, header, 0.5f, true, androidx.compose.ui.geometry.Offset.Zero)
+            assertEquals((album.y + header.y) / 2f, halfway.y, 0f)
+        }
+    }
+
+    @Test fun miniMetadataSwipeUsesVelocityOrHalfTheActualTitleViewport() {
+        assertEquals(0, miniPlayerSwipeDirection(-99f, 200, 0f))
+        assertEquals(1, miniPlayerSwipeDirection(-100f, 200, 0f))
+        assertEquals(-1, miniPlayerSwipeDirection(100f, 200, 0f))
+        assertEquals(0, miniPlayerSwipeDirection(-149f, 300, 0f))
+        assertEquals(1, miniPlayerSwipeDirection(-150f, 300, 0f))
+        assertEquals(1, miniPlayerSwipeDirection(-5f, 200, -500f))
+        assertEquals(-1, miniPlayerSwipeDirection(5f, 200, 500f))
+        assertEquals(-1, miniPlayerSwipeDirection(-120f, 200, 600f))
+        assertEquals(0, miniPlayerSwipeDirection(-50f, 0, -800f))
+    }
+
     @Test fun progressUsesMetadataUntilTheCurrentSourceReportsItsDuration() {
         assertEquals(222_000L, playerProgressDuration(C.TIME_UNSET, 222_000L))
         assertEquals(222_000L, playerProgressDuration(0L, 222_000L))
@@ -53,6 +77,15 @@ class AppleMusicPlaybackMotionTest {
         assertEquals(1f, end.moving.alpha, 0f)
         assertEquals(0f, end.exiting.alpha, 0f)
 
+        // Both visible triangles must keep advancing through the former held sample.
+        for (millis in 101..160) {
+            val previous = frame(millis - 1)
+            val current = frame(millis)
+            assertTrue("Moving triangle stopped at ${millis}ms", current.moving.position > previous.moving.position)
+            assertTrue("Entering triangle stopped at ${millis}ms", current.entering.position > previous.entering.position)
+            assertTrue(current.entering.scale > previous.entering.scale)
+        }
+
         for (millis in 0..AppleMusicSkipDurationMillis) {
             val pose = frame(millis)
             assertEquals(1f, pose.moving.alpha, 0f)
@@ -62,6 +95,62 @@ class AppleMusicPlaybackMotionTest {
                 assertTrue(triangle.alpha in 0f..1f)
             }
         }
+    }
+
+    @Test fun skipHandoffPreservesContinuousShrinkGrowthAndVelocity() {
+        fun frame(millis: Float) = appleMusicSkipFrame(millis / AppleMusicSkipDurationMillis)
+        fun values(frame: AppleMusicSkipFrame) = listOf(frame.entering, frame.moving, frame.exiting)
+            .flatMap { listOf(it.position, it.scale, it.alpha) }
+
+        for (millis in 1..260) {
+            val previous = frame((millis - 1).toFloat())
+            val current = frame(millis.toFloat())
+            assertTrue(current.entering.scale >= previous.entering.scale)
+            assertTrue(current.entering.alpha >= previous.entering.alpha)
+            if (millis <= 100) {
+                assertTrue(current.exiting.scale < previous.exiting.scale)
+                assertTrue(current.exiting.alpha < previous.exiting.alpha)
+            }
+        }
+        for (millis in listOf(20f, 40f, 60f, 80f, 100f, 160f, 200f, 260f, 320f, 420f)) {
+            val before = values(frame(millis - 0.1f))
+            val at = values(frame(millis))
+            val after = values(frame(millis + 0.1f))
+            at.indices.forEach { component ->
+                val incoming = (at[component] - before[component]) / 0.1f
+                val outgoing = (after[component] - at[component]) / 0.1f
+                assertEquals("Velocity changed at ${millis}ms, component $component", incoming, outgoing, 0.0003f)
+            }
+        }
+    }
+
+    @Test fun skipRepeatedClickKeepsCurrentPoseAndCycleSpeed() = runBlocking {
+        val clock = BroadcastFrameClock()
+        var time = 0L
+        suspend fun frames(count: Int) {
+            repeat(count) {
+                repeat(3) { yield() }
+                clock.sendFrame(time)
+                time += 10_000_000L
+                repeat(3) { yield() }
+            }
+        }
+        val baseline = AppleMusicSkipMotion()
+        val repeated = AppleMusicSkipMotion()
+        val baselineJob = launch(clock) { baseline.animateTo(1) }
+        val initial = launch(clock) { repeated.animateTo(1) }
+        frames(12)
+        initial.cancelAndJoin()
+        val interrupted = repeated.travel.value
+        val extended = launch(clock) { repeated.animateTo(2) }
+        repeat(3) { yield() }
+        assertEquals(interrupted, repeated.travel.value, 0f)
+        frames(10)
+        assertEquals(baseline.travel.value, repeated.travel.value, 0.025f)
+        frames(120)
+        baselineJob.join()
+        extended.join()
+        assertEquals(2f, repeated.travel.value, 0f)
     }
 
     @Test fun playPauseOverlapsDuringContractionInBothDirectionsAndReversesContinuously() = runBlocking {

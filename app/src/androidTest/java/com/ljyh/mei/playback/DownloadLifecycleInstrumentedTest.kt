@@ -3,6 +3,9 @@ package com.ljyh.mei.playback
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import android.app.Notification
+import android.app.NotificationManager
+import androidx.core.app.NotificationManagerCompat
 import android.content.Context
 import android.net.Uri
 import android.os.Looper
@@ -11,18 +14,30 @@ import android.util.Log
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.datasource.DataSpec
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import com.ljyh.mei.data.model.room.DownloadStatus
 import com.ljyh.mei.data.model.room.DownloadTask
 import com.ljyh.mei.data.model.room.Song
 import com.ljyh.mei.data.model.room.SourceType
 import com.ljyh.mei.di.AppDatabase
+import com.ljyh.mei.source.api.TrackRef
+import com.ljyh.mei.source.api.TrackRefCodec
+import com.ljyh.mei.source.api.AudioResource
+import com.ljyh.mei.source.api.SourceErrorCode
+import com.ljyh.mei.source.api.SourceException
+import com.ljyh.mei.source.script.ScriptAudioDataSource
+import com.ljyh.mei.source.script.ScriptAudioResources
+import com.ljyh.mei.source.script.ScriptNetworkPolicy
 import com.ljyh.mei.utils.DownloadManager
 import com.ljyh.mei.utils.DownloadLyrics
 import com.ljyh.mei.utils.ImageUtils
 import com.ljyh.mei.utils.SongMate
 import com.ljyh.mei.utils.detectAudioFileFormat
+import dagger.hilt.android.EntryPointAccessors
 import java.io.File
 import java.net.ServerSocket
 import java.net.Socket
@@ -40,7 +55,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
+import okhttp3.Dns
 import org.jaudiotagger.audio.AudioFileIO
 import org.jaudiotagger.tag.FieldKey
 import org.junit.Assert.*
@@ -142,7 +159,122 @@ class DownloadLifecycleInstrumentedTest {
         }
     }
 
+    @Test fun scriptDownloadCancellationClosesHeadersAndBodyWithoutWaitingForTimeout() = runBlocking {
+        for (sendHeaders in listOf(false, true)) {
+            StalledAudio(sendHeaders).use { server ->
+                val pluginId = "org.meilox.download-cancel-${UUID.randomUUID()}"
+                val file = File.createTempFile("script-download-cancel-", ".wav", context.cacheDir)
+                val policy = scriptAudioPolicy(server.url)
+                val resource = ScriptAudioResources.register(pluginId,
+                    AudioResource("https://api.example.com/audio", "standard"), policy, context.cacheDir)
+                val job = async(Dispatchers.IO) { downloadScriptAudio(context, resource.uri, file) {} }
+                try {
+                    assertTrue(server.entered.await(5, TimeUnit.SECONDS))
+                    if (sendHeaders) withTimeout(3_000) { while (file.length() == 0L) delay(10) }
+                    withTimeout(3_000) { job.cancelAndJoin() }
+                    assertTrue(server.closed.await(3, TimeUnit.SECONDS))
+                    assertFalse(file.exists())
+                } finally {
+                    job.cancelAndJoin()
+                    ScriptAudioResources.remove(pluginId)
+                    file.delete()
+                }
+            }
+        }
+    }
+
+    @Test fun closingAQueuedScriptAudioOpenDoesNotWaitForOrCancelItsPeer() = runBlocking {
+        StalledAudio(sendHeaders = false).use { server ->
+            val pluginId = "org.meilox.queued-audio-${UUID.randomUUID()}"
+            val policy = scriptAudioPolicy(server.url)
+            policy.audioClient.dispatcher.maxRequests = 1
+            policy.audioClient.dispatcher.maxRequestsPerHost = 1
+            val resource = ScriptAudioResources.register(pluginId,
+                AudioResource("https://api.example.com/audio", "standard"), policy, context.cacheDir)
+            val first = ScriptAudioDataSource()
+            val second = ScriptAudioDataSource()
+            val spec = DataSpec.Builder().setUri(resource.uri).build()
+            val peer = async(Dispatchers.IO) { runCatching { first.open(spec) } }
+            var queued: kotlinx.coroutines.Deferred<Result<Long>>? = null
+            try {
+                assertTrue(server.entered.await(5, TimeUnit.SECONDS))
+                val waiting = async(Dispatchers.IO) { runCatching { second.open(spec) } }
+                queued = waiting
+                withTimeout(3_000) { while (policy.audioClient.dispatcher.queuedCallsCount() != 1) delay(10) }
+                second.close()
+                val error = withTimeout(3_000) { waiting.await().exceptionOrNull() }
+                assertTrue(error is SourceException && error.code == SourceErrorCode.CANCELLED)
+                assertFalse(peer.isCompleted)
+                assertEquals(1L, server.closed.count)
+            } finally {
+                second.close()
+                first.close()
+                queued?.cancelAndJoin()
+                peer.cancelAndJoin()
+                ScriptAudioResources.remove(pluginId)
+            }
+        }
+    }
+
+    @Test fun resumedSourceDownloadLoadsItsInstalledPluginBeforeResolving(): Unit = runBlocking {
+        assumeTrue(com.ljyh.mei.source.script.ScriptRuntime(InstrumentationRegistry.getInstrumentation().targetContext).supported)
+        assumeNoOtherDownloads()
+        val sources = EntryPointAccessors.fromApplication(context, DownloadSourceEntryPoint::class.java)
+        val plugins = sources.sourcePlugins()
+        plugins.loadInstalled()
+        val pluginId = "org.meilox.download-startup-${UUID.randomUUID()}"
+        val ref = TrackRef(pluginId, "recording")
+        val songId = TrackRefCodec.storageKey(ref)
+        val directory = File(context.filesDir, "music-sources/$pluginId")
+        val db = AppDatabase.getDatabase(context)
+        var requestId: String? = null
+        try {
+            File(directory, "assets").mkdirs()
+            File(directory, "manifest.json").writeText("""{"id":"$pluginId","name":"Download startup fixture",
+                "author":"Tests","version":"1","apiVersion":1,"capabilities":["playback.resolve"],
+                "permissions":{"network":[]}}""".trimIndent())
+            File(directory, "index.js").writeText("""globalThis.sourcePlugin = {'playback.resolve': function() {
+                return {uri:'asset://recording.flac',quality:'standard',contentId:'download-startup-fixture',cachePolicy:'ALLOW'};
+            }};""".trimIndent())
+            InstrumentationRegistry.getInstrumentation().context.assets.open("download-tags/blank.flac").use { input ->
+                File(directory, "assets/recording.flac").outputStream().use { input.copyTo(it) }
+            }
+            assertNull("A persisted plugin must start absent from the live registry", sources.sourceRouter().registry.provider(pluginId))
+            DownloadManager.enqueue(context, listOf(SongDownloadInfo(
+                songId, null, "Download startup fixture", listOf("Fixture"), "Fixture", "", 0,
+                quality = "standard", originTrackRef = ref,
+            )), "Lifecycle fixture", downloadPath = "Music/MeiloX-test-fixtures")
+            requestId = db.downloadDao().getBySongId(songId)?.requestId
+            val completed = withTimeout(30_000) {
+                while (true) {
+                    val task = checkNotNull(db.downloadDao().getBySongId(songId))
+                    check(task.status != DownloadStatus.FAILED) { "The installed source was not restored before download resolution" }
+                    if (task.status == DownloadStatus.COMPLETED) return@withTimeout task
+                    delay(50)
+                }
+                @Suppress("UNREACHABLE_CODE") error("Download did not complete")
+            }
+            assertEquals(pluginId, completed.actualAudioProviderId)
+            assertEquals(ref, completed.resolvedTrackRef?.let(TrackRefCodec::decode))
+            assertNotNull(sources.sourceRouter().registry.provider(pluginId))
+            assertEquals(pluginId, db.songDao().getById(songId)?.providerId)
+            assertNotNull(db.songDao().getById(songId)?.path)
+            awaitWorkFinished(checkNotNull(requestId))
+            awaitDownloadNotificationCleared()
+        } finally {
+            withContext(NonCancellable) {
+                requestId?.let { androidx.work.WorkManager.getInstance(context).cancelWorkById(UUID.fromString(it)).result.get() }
+                db.songDao().getById(songId)?.path?.let { context.contentResolver.delete(Uri.parse(it), null, null) }
+                db.downloadDao().delete(songId)
+                db.songDao().deleteById(songId)
+                if (plugins.installed.value.any { it.manifest.id == pluginId }) plugins.uninstall(pluginId)
+                directory.deleteRecursively()
+            }
+        }
+    }
+
     @Test fun pausingARealWorkerKeepsItsRowPausedAndDoesNotPublish() = runBlocking {
+        assumeNoOtherDownloads()
         val songId = "download-fixture-${UUID.randomUUID()}"
         val db = AppDatabase.getDatabase(context)
         StalledAudio().use { server ->
@@ -151,6 +283,7 @@ class DownloadLifecycleInstrumentedTest {
                     "Download cancellation fixture", listOf("Fixture"), "Fixture", "", 0, "wav")),
                     "Lifecycle fixture", downloadPath = "Music/MeiloX-test-fixtures")
                 assertTrue(server.entered.await(15, TimeUnit.SECONDS))
+                val requestId = checkNotNull(db.downloadDao().getBySongId(songId)).requestId
                 DownloadManager.pauseSong(context, songId)
                 withTimeout(5_000) {
                     while (db.downloadDao().getBySongId(songId)?.status != DownloadStatus.PAUSED) delay(30)
@@ -159,6 +292,8 @@ class DownloadLifecycleInstrumentedTest {
                 delay(200)
                 assertEquals(DownloadStatus.PAUSED, db.downloadDao().getBySongId(songId)?.status)
                 assertNull(db.songDao().getSong(songId).first()?.path)
+                awaitWorkFinished(requestId)
+                awaitDownloadNotificationCleared()
             } finally {
                 db.downloadDao().getBySongId(songId)?.requestId?.let {
                     androidx.work.WorkManager.getInstance(context).cancelWorkById(UUID.fromString(it)).result.get()
@@ -208,6 +343,7 @@ class DownloadLifecycleInstrumentedTest {
     }
 
     @Test fun deletingARealWorkerCancelsItsReadAndCannotPublishAfterRemoval() = runBlocking {
+        assumeNoOtherDownloads()
         val songId = "delete-worker-fixture-${UUID.randomUUID()}"
         val db = AppDatabase.getDatabase(context)
         var requestId: String? = null
@@ -225,6 +361,8 @@ class DownloadLifecycleInstrumentedTest {
                 delay(200)
                 assertNull(db.downloadDao().getBySongId(songId))
                 assertNull(db.songDao().getSong(songId).first()?.path)
+                awaitWorkFinished(checkNotNull(requestId))
+                awaitDownloadNotificationCleared()
             } finally {
                 requestId?.let {
                     androidx.work.WorkManager.getInstance(context).cancelWorkById(UUID.fromString(it)).result.get()
@@ -372,6 +510,143 @@ class DownloadLifecycleInstrumentedTest {
         }
     }
 
+    @Test fun failedWorkerClearsItsProgressNotification() = runBlocking {
+        assumeNoOtherDownloads()
+        val songId = "notification-failure-${UUID.randomUUID()}"
+        val db = AppDatabase.getDatabase(context)
+        var requestId: String? = null
+        try {
+            DownloadManager.enqueue(context, listOf(SongDownloadInfo(songId, null,
+                "Notification failure fixture", listOf("Fixture"), "Fixture", "", 0)), "Lifecycle fixture")
+            requestId = checkNotNull(db.downloadDao().getBySongId(songId)).requestId
+            awaitWorkFinished(requestId)
+            assertEquals(DownloadStatus.FAILED, db.downloadDao().getBySongId(songId)?.status)
+            awaitDownloadNotificationCleared()
+        } finally {
+            requestId?.let { androidx.work.WorkManager.getInstance(context).cancelWorkById(UUID.fromString(it)).result.get() }
+            db.downloadDao().delete(songId)
+            db.songDao().deleteById(songId)
+        }
+    }
+
+    @Test fun finishingOneConcurrentWorkerKeepsTheOtherNotificationUntilItStops() = runBlocking {
+        assumeTrue(NotificationManagerCompat.from(context).areNotificationsEnabled())
+        assumeNoOtherDownloads()
+        val db = AppDatabase.getDatabase(context)
+        val songIds = listOf("notification-first-${UUID.randomUUID()}", "notification-second-${UUID.randomUUID()}")
+        val requests = mutableListOf<String>()
+        StalledAudio().use { first -> StalledAudio().use { second ->
+            try {
+                DownloadManager.enqueue(context, songIds.zip(listOf(first, second)).map { (songId, server) ->
+                    SongDownloadInfo(songId, server.url, "Concurrent notification fixture", listOf("Fixture"), "Fixture", "", 0, "wav")
+                }, "Lifecycle fixture", downloadPath = "Music/MeiloX-test-fixtures")
+                requests += songIds.map { checkNotNull(db.downloadDao().getBySongId(it)).requestId }
+                assertTrue(first.entered.await(15, TimeUnit.SECONDS))
+                assertTrue(second.entered.await(15, TimeUnit.SECONDS))
+                withTimeout(5_000) {
+                    while (downloadNotification()?.extras?.getInt(Notification.EXTRA_PROGRESS_MAX) != 2) delay(30)
+                }
+                DownloadManager.pauseSong(context, songIds[0])
+                awaitWorkFinished(requests[0])
+                withTimeout(5_000) {
+                    while (downloadNotification()?.extras?.getInt(Notification.EXTRA_PROGRESS_MAX) != 1) delay(30)
+                }
+                val remaining = checkNotNull(downloadNotification())
+                assertTrue(remaining.flags and Notification.FLAG_ONGOING_EVENT != 0)
+                assertFalse(remaining.extras.getBoolean(Notification.EXTRA_PROGRESS_INDETERMINATE))
+                assertEquals(DownloadStatus.DOWNLOADING, db.downloadDao().getBySongId(songIds[1])?.status)
+                DownloadManager.pauseSong(context, songIds[1])
+                awaitWorkFinished(requests[1])
+                awaitDownloadNotificationCleared()
+            } finally {
+                requests.forEach { androidx.work.WorkManager.getInstance(context).cancelWorkById(UUID.fromString(it)).result.get() }
+                songIds.forEach { songId -> db.downloadDao().delete(songId); db.songDao().deleteById(songId) }
+            }
+        } }
+    }
+
+    @Test fun bulkDownloadsStartAnotherTransferOnlyAfterASlotFreesUp() = runBlocking {
+        assumeNoOtherDownloads()
+        val db = AppDatabase.getDatabase(context)
+        val workManager = WorkManager.getInstance(context)
+        val songIds = List(6) { "bulk-download-fixture-${UUID.randomUUID()}" }
+        val servers = songIds.map { StalledAudio() }
+        val parallelLimit = 3
+        try {
+            val songs = songIds.zip(servers).map { (songId, server) ->
+                SongDownloadInfo(songId, server.url, "Bulk download fixture", listOf("Fixture"), "Fixture", "", 0, "wav")
+            }
+            DownloadManager.enqueue(context, songs, "Lifecycle fixture", downloadPath = "Music/MeiloX-test-fixtures")
+            val requestIds = songIds.map { songId ->
+                UUID.fromString(checkNotNull(db.downloadDao().getBySongId(songId)).requestId)
+            }.toSet()
+            withTimeout(10_000) {
+                workManager.getWorkInfosByTagFlow("download").first { work ->
+                    work.count { it.id in requestIds && it.state == WorkInfo.State.RUNNING } == songIds.size
+                }
+                while (servers.count { it.entered.count == 0L } < parallelLimit) delay(20)
+            }
+            assertNull("More than three transfers started while all slots were occupied", withTimeoutOrNull(1_000) {
+                while (servers.count { it.entered.count == 0L } <= parallelLimit) delay(20)
+            })
+
+            val pausedIndex = servers.indexOfFirst { it.entered.count == 0L }
+            val pausedId = songIds[pausedIndex]
+            DownloadManager.pauseSong(context, pausedId)
+            assertTrue(servers[pausedIndex].closed.await(5, TimeUnit.SECONDS))
+            withTimeout(5_000) {
+                while (servers.count { it.entered.count == 0L } <= parallelLimit) delay(20)
+            }
+            assertEquals(parallelLimit + 1, servers.count { it.entered.count == 0L })
+            assertEquals(DownloadStatus.PAUSED, db.downloadDao().getBySongId(pausedId)?.status)
+        } finally {
+            try {
+                withContext(NonCancellable) {
+                    songIds.forEach { songId ->
+                        db.downloadDao().getBySongId(songId)?.requestId?.let {
+                            workManager.cancelWorkById(UUID.fromString(it)).result.get(5, TimeUnit.SECONDS)
+                        }
+                        db.downloadDao().delete(songId)
+                        db.songDao().deleteById(songId)
+                    }
+                }
+            } finally {
+                servers.forEach { it.close() }
+            }
+        }
+    }
+
+    private fun assumeNoOtherDownloads() {
+        val pending = androidx.work.WorkManager.getInstance(context).getWorkInfosByTag("download").get()
+        assumeTrue("Download notification fixtures need an idle download queue", pending.none { !it.state.isFinished })
+    }
+
+    private fun scriptAudioPolicy(url: String): ScriptNetworkPolicy {
+        val policy = ScriptNetworkPolicy(listOf("api.example.com"))
+        val field = ScriptNetworkPolicy::class.java.getDeclaredField("client").apply { isAccessible = true }
+        val base = field.get(policy) as OkHttpClient
+        field.set(policy, base.newBuilder().dns(Dns.SYSTEM).addInterceptor { chain ->
+            // The fixture alone routes an already-approved host to its loopback server.
+            chain.proceed(chain.request().newBuilder().url(url).build())
+        }.build())
+        return policy
+    }
+
+    private suspend fun awaitWorkFinished(requestId: String) {
+        val manager = androidx.work.WorkManager.getInstance(context)
+        withTimeout(20_000) {
+            while (manager.getWorkInfoById(UUID.fromString(requestId)).get()?.state?.isFinished != true) delay(30)
+        }
+    }
+
+    private fun downloadNotification(): Notification? =
+        context.getSystemService(NotificationManager::class.java).activeNotifications
+            .firstOrNull { it.id == DownloadWorker.NOTIFICATION_ID }?.notification
+
+    private suspend fun awaitDownloadNotificationCleared() {
+        withTimeout(5_000) { while (downloadNotification() != null) delay(30) }
+    }
+
     private class FixtureAudio(private val file: File) : AutoCloseable {
         private val listener = ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1"))
         @Volatile private var socket: Socket? = null
@@ -405,7 +680,7 @@ class DownloadLifecycleInstrumentedTest {
         override fun close() { socket?.close(); listener.close(); thread.join(1_000) }
     }
 
-    private class StalledAudio : AutoCloseable {
+    private class StalledAudio(private val sendHeaders: Boolean = true) : AutoCloseable {
         private val listener = ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1"))
         private var socket: Socket? = null
         val entered = CountDownLatch(1)
@@ -422,7 +697,7 @@ class DownloadLifecycleInstrumentedTest {
                         val b = input.read(); if (b < 0) return@Thread
                         tail = (tail + b.toChar()).takeLast(4)
                     }
-                    client.getOutputStream().apply {
+                    if (sendHeaders) client.getOutputStream().apply {
                         write("HTTP/1.1 200 OK\r\nContent-Length: 65536\r\nContent-Type: audio/wav\r\n\r\n".toByteArray())
                         write(ByteArray(1024)); flush()
                     }

@@ -36,14 +36,15 @@ class HistoryMergeTest {
     }
 
     @Test
-    fun duplicateSongKeepsEntryWithLatestPlaybackTime() {
+    fun duplicateSongKeepsLatestPlaybackTimeAndRemoteAlternateVersion() {
         val result = mergeHistoryEntries(
-            remote = listOf(entry(2, "cloud-2", 400_000)),
+            remote = listOf(entry(2, "cloud-2", 400_000, hasAlternateVersion = true)),
             local = listOf(entry(1, "local-1", 300_000), entry(2, "local-2", 500_000)),
         )
 
         assertEquals(listOf(2L, 1L), result.map { it.song.id })
         assertEquals("local-2", result.first().key)
+        assertEquals(listOf(true, false), result.map { it.song.hasAlternateVersion })
     }
 
     @Test
@@ -93,7 +94,7 @@ class HistoryMergeTest {
         assertEquals(listOf("local-new"), result.map(ListeningHistoryEntry::key))
     }
 
-    private fun entry(id: Long, key: String, playedAt: Long? = null) = ListeningHistoryEntry(
+    private fun entry(id: Long, key: String, playedAt: Long? = null, hasAlternateVersion: Boolean = false) = ListeningHistoryEntry(
         key = key,
         song = MediaMetadata(
             id = id,
@@ -102,6 +103,7 @@ class HistoryMergeTest {
             artists = listOf(MediaMetadata.Artist(id, "Artist $id")),
             duration = 180_000,
             album = MediaMetadata.Album(id, "Album $id"),
+            hasAlternateVersion = hasAlternateVersion,
         ),
         playedAt = playedAt,
     )

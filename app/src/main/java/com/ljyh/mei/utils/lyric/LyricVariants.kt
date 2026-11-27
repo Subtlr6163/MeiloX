@@ -50,12 +50,16 @@ internal fun buildLyricVariants(
             }
         }
     }
+    sources.filterIsInstance<LyricSourceData.Provider>().firstOrNull()?.let { source ->
+        addVersion(LyricSource.Provider, false) { LRCParser.parse(source.lyric.text, source.lyric.translation) }
+    }
 }
 
 internal fun lyricVariantOf(data: LyricData): LyricVariant? = when (data.source) {
     LyricSource.AM -> LyricVariant.AppleMusic
     LyricSource.NetEaseCloudMusic -> if (data.isVerbatim) LyricVariant.NeteaseYrc else LyricVariant.NeteaseLrc
     LyricSource.QQMusic -> if (data.isVerbatim) LyricVariant.QqQrc else LyricVariant.QqLrc
+    LyricSource.Provider -> LyricVariant.ProviderLrc
     LyricSource.Empty, LyricSource.Loading -> null
 }
 

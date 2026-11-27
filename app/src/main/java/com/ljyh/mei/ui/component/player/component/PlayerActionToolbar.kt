@@ -39,15 +39,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import androidx.media3.common.util.UnstableApi
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kyant.capsule.ContinuousRoundedRectangle
 import com.ljyh.mei.constants.PlayerActionKey
 import com.ljyh.mei.constants.PlayerStyle
 import com.ljyh.mei.constants.PlayerStyleKey
 import com.ljyh.mei.playback.PlayMode
 import com.ljyh.mei.playback.SleepTimerState
-import com.ljyh.mei.ui.glass.SfIcon
+import io.github.neoruaa.glasmio.icons.SfIcon
 import com.ljyh.mei.ui.local.LocalPlayerConnection
 import com.ljyh.mei.ui.model.PlayerAction
+import com.ljyh.mei.ui.model.availableFor
 import com.ljyh.mei.utils.TimeUtils.makeTimeString
 import com.ljyh.mei.utils.rememberPreference
 import com.ljyh.mei.utils.rememberEnumPreference
@@ -65,10 +67,17 @@ fun PlayerActionToolbar(
     onSleepTimerClick: () -> Unit,
     onAddToPlaylistClick: () -> Unit,
     onDownloadClick: () -> Unit,
+    horizontalArrangement: Arrangement.Horizontal = Arrangement.SpaceEvenly,
     onMoreClick: () -> Unit
 ) {
     val playerConnection = LocalPlayerConnection.current ?: return
     val context = LocalContext.current
+    val currentMetadata by playerConnection.mediaMetadata.collectAsState()
+    val registry = playerConnection.service.sourceRouter.registry
+    val sourceRevision by registry.revision.collectAsStateWithLifecycle()
+    val owner = remember(registry, currentMetadata?.trackRef, sourceRevision) {
+        currentMetadata?.trackRef?.providerId?.let(registry::provider)
+    }
     val playerStyle by rememberEnumPreference(PlayerStyleKey, PlayerStyle.AppleMusic)
     val pressedAlpha = if (playerStyle == PlayerStyle.AppleMusic) 0.6f else 0.3f
 
@@ -95,34 +104,21 @@ fun PlayerActionToolbar(
     Spacer(Modifier.height(16.dp))
 
     Row(
-        horizontalArrangement = Arrangement.SpaceEvenly,
+        horizontalArrangement = horizontalArrangement,
         verticalAlignment = Alignment.CenterVertically,
         // Apply shared opacity after the lyrics cutout has been composed.
         modifier = modifier.fillMaxWidth()
             .then(if (playerStyle == PlayerStyle.AppleMusic) Modifier.alpha(0.5f) else Modifier)
     ) {
 
-        actions.forEach { action ->
+        actions.filter { it.availableFor(currentMetadata, owner) }.forEach { action ->
             when (action) {
                 PlayerAction.PLAY_MODE -> {
-                    ShadowedIconButton(
+                    PlayerPlayModeButton(
+                        playMode = playMode,
                         pressedAlpha = pressedAlpha,
-                        onClick = { playerConnection.switchPlayMode() }
-                    ) {
-                        val systemName = when (playMode) {
-                            PlayMode.REPEAT_MODE_ONE -> "repeat.1"
-                            PlayMode.REPEAT_MODE_ALL -> "repeat"
-                            PlayMode.SHUFFLE_MODE_ALL -> "shuffle"
-                        }
-                        AnimatedContent(targetState = systemName, label = "PlayModeIcon") { target ->
-                            SfIcon(
-                                target,
-                                stringResource(com.ljyh.mei.R.string.player_action_play_mode),
-                                tint = Color.White,
-                                weight = FontWeight.Medium,
-                            )
-                        }
-                    }
+                        onClick = { playerConnection.switchPlayMode() },
+                    )
                 }
 
                 PlayerAction.QUEUE -> {
@@ -249,7 +245,35 @@ fun PlayerActionToolbar(
 }
 
 @Composable
-private fun PlayerPageActionButton(
+internal fun PlayerPlayModeButton(
+    playMode: PlayMode,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    pressedAlpha: Float = 0.3f,
+) {
+    ShadowedIconButton(
+        modifier = modifier,
+        pressedAlpha = pressedAlpha,
+        onClick = onClick,
+    ) {
+        val systemName = when (playMode) {
+            PlayMode.REPEAT_MODE_ONE -> "repeat.1"
+            PlayMode.REPEAT_MODE_ALL -> "repeat"
+            PlayMode.SHUFFLE_MODE_ALL -> "shuffle"
+        }
+        AnimatedContent(targetState = systemName, label = "PlayModeIcon") { target ->
+            SfIcon(
+                target,
+                stringResource(com.ljyh.mei.R.string.player_action_play_mode),
+                tint = Color.White,
+                weight = FontWeight.Medium,
+            )
+        }
+    }
+}
+
+@Composable
+internal fun PlayerPageActionButton(
     systemName: String,
     contentDescription: String,
     isSelected: Boolean,
@@ -257,29 +281,34 @@ private fun PlayerPageActionButton(
     iconSize: Dp = 24.dp,
     iconWeight: FontWeight = FontWeight.Medium,
     pressedAlpha: Float = 0.3f,
+    enabled: Boolean = true,
+    showSelectedBackground: Boolean = true,
+    modifier: Modifier = Modifier,
 ) {
+    val selectedBackground = isSelected && showSelectedBackground
     ShadowedIconButton(
-        modifier = Modifier.semantics { selected = isSelected },
+        modifier = modifier.semantics { selected = isSelected },
         onClick = onClick,
+        enabled = enabled,
         pressedAlpha = pressedAlpha,
-        dimOnPress = !isSelected,
+        dimOnPress = !selectedBackground,
     ) {
         Box(
             modifier = Modifier
                 .size(36.dp)
                 .then(
-                    if (isSelected) Modifier.graphicsLayer {
+                    if (selectedBackground) Modifier.graphicsLayer {
                         // Keep the glyph cutout inside the button background.
                         compositingStrategy = CompositingStrategy.Offscreen
                     } else Modifier
                 )
-                .background(if (isSelected) Color.White else Color.Transparent, CircleShape),
+                .background(if (selectedBackground) Color.White else Color.Transparent, CircleShape),
             contentAlignment = Alignment.Center,
         ) {
             SfIcon(
                 systemName = systemName,
                 contentDescription = contentDescription,
-                modifier = if (isSelected) Modifier.graphicsLayer {
+                modifier = if (selectedBackground) Modifier.graphicsLayer {
                     blendMode = BlendMode.DstOut
                     compositingStrategy = CompositingStrategy.Offscreen
                 } else Modifier,

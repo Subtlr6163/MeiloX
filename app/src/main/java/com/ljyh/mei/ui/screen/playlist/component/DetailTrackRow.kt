@@ -1,5 +1,16 @@
 package com.ljyh.mei.ui.screen.playlist.component
 
+import com.ljyh.mei.ui.component.item.trackRowPressIndication
+import com.ljyh.mei.ui.component.playlist.songListDividerColor
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.foundation.layout.height
+import com.ljyh.mei.ui.component.copyNameActions
+import com.ljyh.mei.ui.component.item.AlternateVersionBadge
+import com.ljyh.mei.ui.component.item.MediaRowName
+import com.ljyh.mei.ui.component.item.PortraitMediaRow
+import com.ljyh.mei.ui.component.item.TrackMenuTrigger
+import com.ljyh.mei.ui.component.item.trackAlternateVersionAction
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -19,10 +30,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -30,32 +37,33 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.layout.boundsInWindow
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.ljyh.mei.ui.component.utils.rememberDeviceInfo
 import com.kyant.capsule.ContinuousRoundedRectangle
 import com.ljyh.mei.R
 import com.ljyh.mei.constants.DetailPageHorizontalPadding
-import com.ljyh.mei.constants.CommonImageRadius
+import com.ljyh.mei.constants.songListCoverCornerRadius
+import com.ljyh.mei.constants.songListCoverSize
 import com.ljyh.mei.data.model.MediaMetadata
+import com.ljyh.mei.data.model.supportsNeteaseSongActions
 import com.ljyh.mei.ui.component.playlist.PlayingImageView
-import com.ljyh.mei.ui.component.playlist.AnimatedSoundWave
+import com.ljyh.mei.ui.component.playlist.TrackPlaybackWave
 import com.ljyh.mei.ui.component.playlist.FavoriteTrackStar
-import com.ljyh.mei.ui.glass.LocalGlassColors
-import com.ljyh.mei.ui.glass.SfIcon
-import com.ljyh.mei.ui.glass.SfSymbol
+import io.github.neoruaa.glasmio.core.LocalGlassColors
+import io.github.neoruaa.glasmio.glass.GlasmioMenuAnchorState
+import io.github.neoruaa.glasmio.icons.SfIcon
+import io.github.neoruaa.glasmio.icons.SfSymbol
+import com.ljyh.mei.utils.TimeUtils.formatDuration
 import com.ljyh.mei.utils.smallImage
 
-private val DetailTrackArtworkSize = 48.dp
 private val DetailTrackMoreButtonSize = 44.dp
 private val DetailTrackMoreIconSize = 16.dp
 private val DetailTrackIndicatorWidth = 18.dp
@@ -72,13 +80,55 @@ internal fun DetailTrackRow(
     onClick: () -> Unit,
     selected: Boolean?,
     onMoreClick: ((Rect) -> Unit)?,
+    showDuration: Boolean = false,
+    menuAnchorState: GlasmioMenuAnchorState? = null,
 ) {
     val colors = LocalGlassColors.current
+    val compactRows = rememberDeviceInfo().isLandscape
+    val artworkSize = songListCoverSize(compactRows)
+    val highlightTitle = showArtwork && isCurrentTrack && track.supportsNeteaseSongActions
+    val artist = if (showArtwork) track.artists.joinToString(" / ") { it.name } else ""
+    val copyNamesOnLongPress = selected == null
+    if (!compactRows && showArtwork && selected == null) {
+        PortraitMediaRow(
+            image = track.coverUrl.smallImage(), title = track.title,
+            artist = artist,
+            detail = if (showDuration) formatDuration(track.duration) else "",
+            onClick = onClick, modifier = Modifier, album = null, suffix = null,
+            suffixColor = null, favorite = isFavorite, showDivider = false,
+            onMore = onMoreClick, navigationArrow = false, footer = null,
+            isCurrentTrack = highlightTitle,
+            fullWidthTrackPress = true,
+            menuAnchorState = menuAnchorState,
+            trackRef = track.trackRef,
+            copyNamesOnLongPress = true,
+            hasAlternateVersion = track.hasAlternateVersion,
+        )
+        return
+    }
+
+    val alternateVersionAction = trackAlternateVersionAction(track.trackRef, track.title, track.hasAlternateVersion)
+    val rowIndication = trackRowPressIndication()
     val numberWidth = if (showArtwork) 0.dp else albumTrackNumberWidth()
     val numberColumnWidth = maxOf(numberWidth, DetailTrackIndicatorWidth)
-    val favoriteOffset = -(DetailPageHorizontalPadding + DetailTrackFavoriteSize) / 2
-    var menuAnchor by remember { mutableStateOf(Rect.Zero) }
-    Box(Modifier.fillMaxWidth()) {
+    val favoriteOffset = -(DetailPageHorizontalPadding + DetailTrackFavoriteSize) / 2 +
+        if (compactRows) 0.dp else 2.dp
+    val moreButtonOffset = if (compactRows) -8.dp else 8.dp
+    Box(
+        Modifier.fillMaxWidth().copyNameActions(
+            trackName = track.title,
+            artistName = artist,
+            enabled = copyNamesOnLongPress,
+        ).then(
+            if (selected == null) Modifier.clickable(
+                interactionSource = null, indication = rowIndication, onClick = alternateVersionAction?.onRowClick ?: onClick,
+            )
+            else Modifier.selectable(
+                selected = selected, interactionSource = null, indication = rowIndication,
+                role = Role.Checkbox, onClick = onClick,
+            )
+        ),
+    ) {
         if (isFavorite) {
             FavoriteTrackStar(
                 modifier = Modifier.align(Alignment.CenterStart).offset(x = favoriteOffset),
@@ -88,12 +138,8 @@ internal fun DetailTrackRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = if (showArtwork) 64.dp else 52.dp)
-                .then(
-                    if (selected == null) Modifier.clickable(onClick = onClick)
-                    else Modifier.selectable(selected = selected, role = Role.Checkbox, onClick = onClick)
-                )
-                .padding(vertical = 8.dp),
+                .heightIn(min = if (showArtwork) { 56.dp } else 52.dp)
+                .padding(vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (selected != null) {
@@ -110,9 +156,10 @@ internal fun DetailTrackRow(
                 PlayingImageView(
                     imageUrl = track.coverUrl.smallImage(),
                     isPlaying = false,
+                    trackRef = track.trackRef,
                     modifier = Modifier
-                        .size(DetailTrackArtworkSize)
-                        .clip(ContinuousRoundedRectangle(CommonImageRadius)),
+                        .size(artworkSize)
+                        .clip(ContinuousRoundedRectangle(songListCoverCornerRadius(compactRows))),
                 )
             } else {
                 Box(
@@ -125,13 +172,7 @@ internal fun DetailTrackRow(
                             contentAlignment = Alignment.Center,
                         ) {
                             if (isPlaying) {
-                                AnimatedSoundWave(
-                                    modifier = Modifier.size(width = DetailTrackIndicatorWidth, height = 12.dp),
-                                    barCount = 5,
-                                    barColor = colors.secondaryContent,
-                                    barWidth = 2.dp,
-                                    barSpacing = 2.dp,
-                                )
+                                TrackPlaybackWave(colors.secondaryContent)
                             } else {
                                 Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                                     repeat(5) {
@@ -158,53 +199,75 @@ internal fun DetailTrackRow(
                 modifier = Modifier.weight(1f).detailInkBlend(),
                 verticalArrangement = Arrangement.Center,
             ) {
-                Text(
+                MediaRowName(
                     text = track.title,
-                    color = colors.content,
+                    color = if (highlightTitle) colors.accent else colors.content,
                     style = MaterialTheme.typography.bodyLarge.copy(
-                        fontSize = 17.sp,
-                        lineHeight = 22.sp,
+                        fontSize = if (compactRows) 16.sp else 15.sp,
+                        lineHeight = if (compactRows) 22.sp else 20.sp,
                         fontWeight = FontWeight.Normal,
                     ),
+                    copyAction = R.string.track_action_copy_name.takeIf { copyNamesOnLongPress },
                     maxLines = if (showArtwork) 1 else 2,
-                    overflow = TextOverflow.Ellipsis,
                 )
-                if (showArtwork) {
-                    Text(
-                        text = track.artists.joinToString(" / ") { it.name },
-                        color = colors.secondaryContent,
-                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp, lineHeight = 18.sp),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                if (showArtwork || alternateVersionAction != null) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (alternateVersionAction != null) {
+                            AlternateVersionBadge(onClick = alternateVersionAction.onBadgeClick)
+                        }
+                        if (showArtwork) MediaRowName(
+                            text = artist,
+                            color = colors.secondaryContent,
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontSize = if (compactRows) 13.sp else 12.sp,
+                                lineHeight = if (compactRows) 18.sp else 17.sp,
+                            ),
+                            copyAction = R.string.artist_action_copy_name.takeIf { copyNamesOnLongPress },
+                        )
+                    }
                 }
             }
+            if (showDuration) {
+                Text(
+                    text = formatDuration(track.duration),
+                    modifier = Modifier.padding(start = 16.dp).detailInkBlend(),
+                    color = colors.secondaryContent,
+                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = if (compactRows) 16.sp else 17.sp),
+                    maxLines = 1, softWrap = false,
+                )
+            }
             onMoreClick?.let { onMore ->
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(if (compactRows && !showArtwork && showDuration) 12.dp else 8.dp))
                 Box(
                     modifier = Modifier.width(DetailTrackMoreButtonSize),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(DetailTrackMoreButtonSize)
-                            .offset(x = (DetailTrackMoreButtonSize - DetailTrackMoreIconSize) / 2)
-                            .onGloballyPositioned { menuAnchor = it.boundsInWindow() }
-                            .clip(CircleShape)
-                            .clickable(
-                                role = Role.Button,
-                                onClickLabel = stringResource(R.string.more_actions_title),
-                                onClick = { onMore(menuAnchor) },
+                    TrackMenuTrigger(menuAnchorState, onMore) { trigger, openMenu ->
+                        Box(
+                            modifier = Modifier
+                                .size(DetailTrackMoreButtonSize)
+                                .offset(x = moreButtonOffset)
+                                .clip(CircleShape)
+                                .then(trigger)
+                                .clickable(
+                                    interactionSource = null, indication = null,
+                                    role = Role.Button,
+                                    onClickLabel = stringResource(R.string.more_actions_title),
+                                    onClick = openMenu,
+                                )
+                                .detailInkBlend(),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            SfIcon(
+                                symbol = SfSymbol.Ellipsis,
+                                contentDescription = stringResource(R.string.more_actions_title),
+                                tint = colors.secondaryContent,
+                                size = if (compactRows && !showArtwork) 18.dp else DetailTrackMoreIconSize,
                             )
-                            .detailInkBlend(),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        SfIcon(
-                            symbol = SfSymbol.Ellipsis,
-                            contentDescription = stringResource(R.string.more_actions_title),
-                            tint = colors.secondaryContent,
-                            size = DetailTrackMoreIconSize,
-                        )
+                        }
                     }
                 }
             }
@@ -218,16 +281,24 @@ internal fun DetailTrackDivider(
     selectionMode: Boolean = false,
     fullWidth: Boolean = false,
 ) {
-    val colors = LocalGlassColors.current
+    val dividerColor = songListDividerColor()
+    val compactRows = rememberDeviceInfo().isLandscape
+    val artworkSize = songListCoverSize(compactRows)
     val leadingInset = if (fullWidth) 0.dp else {
-        (if (showArtwork) DetailTrackArtworkSize else maxOf(albumTrackNumberWidth(), DetailTrackIndicatorWidth)) +
+        (if (showArtwork) artworkSize else maxOf(albumTrackNumberWidth(), DetailTrackIndicatorWidth)) +
             12.dp +
             (if (selectionMode) 36.dp else 0.dp)
     }
+    if (!compactRows && !fullWidth) {
+        Box(Modifier.fillMaxWidth().padding(start = leadingInset).height(0.dp).drawBehind {
+            drawLine(dividerColor, Offset.Zero, Offset(size.width, 0f), strokeWidth = 0.5.dp.toPx())
+        })
+        return
+    }
     HorizontalDivider(
-        modifier = Modifier.padding(start = leadingInset).detailInkBlend(),
+        modifier = Modifier.padding(start = leadingInset),
         thickness = 0.5.dp,
-        color = colors.content.copy(alpha = 0.16f),
+        color = dividerColor,
     )
 }
 

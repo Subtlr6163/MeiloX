@@ -1,9 +1,7 @@
 package com.ljyh.mei.ui.screen.cloud
 
-import android.content.Intent
+import com.ljyh.mei.ui.navigation.meiloxHeaderAction
 import android.net.Uri
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,7 +24,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -38,20 +35,22 @@ import coil3.compose.AsyncImage
 import com.kyant.capsule.ContinuousRoundedRectangle
 import com.ljyh.mei.R
 import com.ljyh.mei.data.model.MediaMetadata
-import com.ljyh.mei.data.model.melox.CloudMusicPage
-import com.ljyh.mei.data.model.melox.CloudSong
+import com.ljyh.mei.source.shared.OnlineCloudPage as CloudMusicPage
+import com.ljyh.mei.source.shared.OnlineCloudSong as CloudSong
+import com.ljyh.mei.data.model.toMediaMetadata
 import com.ljyh.mei.data.model.toMediaItem
-import com.ljyh.mei.data.repository.MeloXRepository
+import com.ljyh.mei.source.shared.SharedOnlineRepository
+import com.ljyh.mei.source.shared.SharedOnlineSession
 import com.ljyh.mei.playback.queue.ListQueue
-import com.ljyh.mei.ui.component.GlobalProfileAvatarButton
-import com.ljyh.mei.ui.glass.GlassButton
-import com.ljyh.mei.ui.glass.GlassIconButton
-import com.ljyh.mei.ui.glass.GlassCard
-import com.ljyh.mei.ui.glass.GlassEmphasis
-import com.ljyh.mei.ui.glass.IosListRow
-import com.ljyh.mei.ui.glass.IosPinnedListPage
-import com.ljyh.mei.ui.glass.SfIcon
-import com.ljyh.mei.ui.glass.SfSymbol
+import com.ljyh.mei.ui.component.AutomaticPagination
+import com.ljyh.mei.ui.component.globalProfileHeaderAction
+import io.github.neoruaa.glasmio.ui.GlasmioButton
+import io.github.neoruaa.glasmio.ui.GlasmioCard
+import io.github.neoruaa.glasmio.glass.GlassEmphasis
+import com.ljyh.mei.ui.component.item.GroupedSongRow
+import com.ljyh.mei.ui.navigation.MeiloXPinnedListPage
+import io.github.neoruaa.glasmio.icons.SfIcon
+import io.github.neoruaa.glasmio.icons.SfSymbol
 import com.ljyh.mei.ui.local.LocalNavController
 import com.ljyh.mei.ui.local.LocalPlayerAwareWindowInsets
 import com.ljyh.mei.ui.local.LocalPlayerConnection
@@ -70,7 +69,7 @@ import kotlinx.coroutines.launch
 data class CloudMusicUiState(
     val isLoading: Boolean = true,
     val page: CloudMusicPage? = null,
-    val deletingIds: Set<Long> = emptySet(),
+    val deletingIds: Set<String> = emptySet(),
     val isUploading: Boolean = false,
     val uploadProgress: Float = 0f,
     val error: String? = null,
@@ -81,15 +80,30 @@ data class CloudMusicUiState(
 @HiltViewModel
 class CloudMusicViewModel internal constructor(
     private val loadPage: suspend (Int) -> CloudMusicPage,
-    private val deleteSong: suspend (Long) -> Unit,
+    private val deleteSong: suspend (String) -> Unit,
     private val uploadSong: suspend (Uri, (Long, Long) -> Unit) -> Unit,
+    private val pickAndUpload: suspend () -> Unit = { throw com.ljyh.mei.source.api.SourceException(com.ljyh.mei.source.api.SourceErrorCode.UNSUPPORTED) },
+    private val loadFreshPage: suspend (Int) -> CloudMusicPage = loadPage,
 ) : ViewModel() {
     @Inject
-    constructor(repository: MeloXRepository) : this(
-        { offset -> repository.cloudSongs(offset = offset) },
-        repository::deleteCloudSong,
-        repository::uploadCloudSong,
+    constructor(repository: SharedOnlineRepository, savedStateHandle: androidx.lifecycle.SavedStateHandle) : this(
+        repository.screen("cloud-music", savedStateHandle["providerId"]),
     )
+    internal constructor(repository: SharedOnlineSession) : this(
+        { offset -> repository.cloudSongs(offset = offset, limit = if (offset == 0) 30 else 200) },
+        repository::deleteCloudSong,
+        { _, _ -> repository.uploadCloudSong() },
+        repository::uploadCloudSong,
+        { offset -> repository.cloudSongs(offset = offset, limit = if (offset == 0) 30 else 200, refresh = true) },
+    ) {
+        viewModelScope.launch { repository.sessionChanges.collect { owner ->
+            if (owner.isBlank()) synchronized(lock) {
+                readRevision++; uploadRevision++
+                readJob?.cancel()
+                _state.value = CloudMusicUiState(isLoading = false)
+            }
+        } }
+    }
 
     private val _state = MutableStateFlow(CloudMusicUiState())
     val state = _state.asStateFlow()
@@ -98,9 +112,11 @@ class CloudMusicViewModel internal constructor(
     private var readJob: Job? = null
     private var uploadRevision = 0L
 
-    init { refresh() }
+    init { startRead(refresh = false) }
 
-    fun refresh() {
+    fun refresh() = startRead(refresh = true)
+
+    private fun startRead(refresh: Boolean) {
         val job = synchronized(lock) {
             val expected = ++readRevision
             readJob?.cancel()
@@ -110,7 +126,7 @@ class CloudMusicViewModel internal constructor(
                 loadMoreError = null,
                 error = null,
             )
-            viewModelScope.launch(start = CoroutineStart.LAZY) { readPage(expected, 0, append = false) }
+            viewModelScope.launch(start = CoroutineStart.LAZY) { readPage(expected, 0, append = false, refresh = refresh) }
                 .also { readJob = it }
         }
         job.start()
@@ -120,7 +136,7 @@ class CloudMusicViewModel internal constructor(
         val job = synchronized(lock) {
             val current = _state.value
             val page = current.page ?: return
-            if (current.isLoading || current.isLoadingMore || !page.hasMore) return
+            if (current.isLoading || current.isLoadingMore || current.error != null || !page.hasMore) return
             val expected = ++readRevision
             _state.value = current.copy(isLoadingMore = true, loadMoreError = null)
             viewModelScope.launch(start = CoroutineStart.LAZY) {
@@ -130,23 +146,27 @@ class CloudMusicViewModel internal constructor(
         job.start()
     }
 
-    private suspend fun readPage(expected: Long, offset: Int, append: Boolean) {
+    private suspend fun readPage(expected: Long, offset: Int, append: Boolean, refresh: Boolean = false) {
         try {
-            val incoming = loadPage(offset)
+            val incoming = if (refresh) loadFreshPage(offset) else loadPage(offset)
             currentCoroutineContext().ensureActive()
             publishRead(expected) { current ->
                 if (append) current.withCloudPage(incoming)
                 else current.copy(
                     isLoading = false,
-                    page = incoming.copy(songs = incoming.songs.distinctBy(CloudSong::id)),
+                    page = incoming.copy(
+                        songs = incoming.songs.distinctBy(CloudSong::id),
+                        hasMore = incoming.hasMore && incoming.nextOffset > offset,
+                    ),
                 )
             }
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
             publishRead(expected) { current ->
-                if (append) current.copy(isLoadingMore = false, loadMoreError = error.message)
-                else current.copy(isLoading = false, error = error.message)
+                val message = error.message?.takeIf(String::isNotBlank) ?: error.toString()
+                if (append) current.copy(isLoadingMore = false, loadMoreError = message)
+                else current.copy(isLoading = false, error = message)
             }
         } finally {
             synchronized(lock) {
@@ -191,6 +211,7 @@ class CloudMusicViewModel internal constructor(
     }
 
     fun upload(uri: Uri) = upload { progress -> uploadSong(uri, progress) }
+    fun upload() = upload { _ -> pickAndUpload() }
 
     internal fun upload(operation: suspend ((Long, Long) -> Unit) -> Unit) {
         val job = synchronized(lock) {
@@ -240,17 +261,8 @@ fun CloudMusicScreen(
     val bottom = LocalPlayerAwareWindowInsets.current.asPaddingValues().calculateBottomPadding()
     val songs = state.page?.songs.orEmpty()
     val cloudTitle = stringResource(R.string.cloud_music)
-    val context = LocalContext.current
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) {
-            runCatching {
-                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            viewModel.upload(uri)
-        }
-    }
 
-    IosPinnedListPage(
+    MeiloXPinnedListPage(
         title = cloudTitle,
         subtitle = state.page?.let { page ->
             stringResource(R.string.cloud_music_quota, formatBytes(page.usedSize), formatBytes(page.maxSize))
@@ -259,13 +271,20 @@ fun CloudMusicScreen(
         verticalArrangement = Arrangement.spacedBy(0.dp),
         onNavigateBack = if (isNavigationTab) null else ({ navController.navigateUp() }),
         actions = {
-            GlassIconButton(onClick = { picker.launch(arrayOf("audio/*")) }, enabled = !state.isUploading) {
-                SfIcon("arrow.up.circle.fill", stringResource(R.string.cloud_upload), size = 18.dp)
-            }
-            GlassIconButton(onClick = viewModel::refresh) {
-                SfIcon(SfSymbol.ArrowClockwise, stringResource(R.string.refresh), size = 18.dp)
-            }
-            if (isNavigationTab) GlobalProfileAvatarButton()
+            listOfNotNull(
+                meiloxHeaderAction(
+                    key = "cloud.upload",
+                    contentDescription = stringResource(R.string.cloud_upload),
+                    onClick = { viewModel.upload() },
+                    enabled = !state.isUploading,
+                ) { SfIcon("arrow.up.circle.fill", null, size = 18.dp) },
+                meiloxHeaderAction(
+                    key = "cloud.refresh",
+                    contentDescription = stringResource(R.string.refresh),
+                    onClick = viewModel::refresh,
+                ) { SfIcon(SfSymbol.ArrowClockwise, null, size = 18.dp) },
+                if (isNavigationTab) globalProfileHeaderAction() else null,
+            )
         },
     ) {
         var hasPreviousContent = false
@@ -273,16 +292,18 @@ fun CloudMusicScreen(
         val hasErrorContent = state.error != null
         if (state.isUploading) {
             item {
-                GlassCard(
+                GlasmioCard(
                     Modifier.fillMaxWidth().padding(
                         top = 10.dp,
                         bottom = if (hasLoadingContent || hasErrorContent || songs.isNotEmpty()) 10.dp else 0.dp,
                     ),
                 ) {
                     Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(progress = { state.uploadProgress }, modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                        if (state.uploadProgress > 0f) CircularProgressIndicator(progress = { state.uploadProgress }, modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                        else CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
                         Text(
-                            stringResource(R.string.cloud_upload_progress, (state.uploadProgress * 100).toInt()),
+                            if (state.uploadProgress > 0f) stringResource(R.string.cloud_upload_progress, (state.uploadProgress * 100).toInt())
+                            else stringResource(R.string.cloud_upload),
                             modifier = Modifier.padding(start = 12.dp),
                         )
                     }
@@ -325,8 +346,9 @@ fun CloudMusicScreen(
                 contentType = "cloud-song",
                 firstItemTopPadding = if (hasPreviousContent) 0.dp else 10.dp,
             ) { song, index ->
-                IosListRow(
+                GroupedSongRow(
                     title = song.name,
+                    artist = song.artist,
                     subtitle = listOf(song.artist, song.album)
                         .filter(String::isNotBlank)
                         .joinToString(" · "),
@@ -340,7 +362,7 @@ fun CloudMusicScreen(
                         )
                     },
                     trailing = {
-                        GlassButton(
+                        GlasmioButton(
                             onClick = { viewModel.delete(song) },
                             enabled = song.id !in state.deletingIds,
                             emphasis = GlassEmphasis.Regular,
@@ -358,26 +380,37 @@ fun CloudMusicScreen(
         }
         if (state.page?.hasMore == true || state.isLoadingMore || state.loadMoreError != null) {
             item(key = "cloud-pagination") {
-                CloudMusicPaginationFooter(state, viewModel::loadMore)
+                CloudMusicPaginationFooter(state, viewModel::loadMore, ownerKey = viewModel)
             }
         }
     }
 }
 
 @Composable
-internal fun CloudMusicPaginationFooter(state: CloudMusicUiState, onLoadMore: () -> Unit) {
+internal fun CloudMusicPaginationFooter(
+    state: CloudMusicUiState,
+    onLoadMore: () -> Unit,
+    ownerKey: Any? = null,
+) {
+    val nextOffset = state.page?.takeIf { it.hasMore && !state.isLoading && state.error == null }?.nextOffset
+    val error = state.loadMoreError
+    if (nextOffset == null && !state.isLoadingMore && error == null) return
+
     Column(
         Modifier.fillMaxWidth().padding(vertical = 18.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        if (state.isLoadingMore) {
-            CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
-        } else {
-            state.loadMoreError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            GlassButton(onClick = onLoadMore, enabled = !state.isLoading) {
-                Text(stringResource(if (state.loadMoreError != null) R.string.retry else R.string.library_load_more))
+        if (error != null) {
+            Text(error, color = MaterialTheme.colorScheme.error)
+            GlasmioButton(onClick = onLoadMore, enabled = !state.isLoading) {
+                Text(stringResource(R.string.retry))
             }
+        } else {
+            if (nextOffset != null && !state.isLoadingMore) {
+                AutomaticPagination(ownerKey to nextOffset, onLoadMore)
+            }
+            CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
         }
     }
 }
@@ -385,20 +418,17 @@ internal fun CloudMusicPaginationFooter(state: CloudMusicUiState, onLoadMore: ()
 internal fun CloudMusicUiState.withCloudPage(incoming: CloudMusicPage): CloudMusicUiState {
     val songs = (page?.songs.orEmpty() + incoming.songs).distinctBy(CloudSong::id)
     return copy(
-        page = incoming.copy(songs = songs, count = maxOf(page?.count ?: 0, incoming.count, songs.size)),
+        page = incoming.copy(
+            songs = songs,
+            count = maxOf(page?.count ?: 0, incoming.count, songs.size),
+            hasMore = incoming.hasMore && incoming.nextOffset > (page?.nextOffset ?: 0),
+        ),
         isLoadingMore = false,
         loadMoreError = null,
     )
 }
 
-private fun CloudSong.asMediaMetadata() = MediaMetadata(
-    id = id,
-    title = name,
-    coverUrl = coverUrl.orEmpty(),
-    artists = listOf(MediaMetadata.Artist(artist.hashCode().toLong(), artist)),
-    duration = durationMs,
-    album = MediaMetadata.Album(album.hashCode().toLong(), album),
-)
+private fun CloudSong.asMediaMetadata() = track.toMediaMetadata()
 
 private fun formatBytes(value: Long): String = when {
     value >= 1_073_741_824 -> "%.1f GB".format(value / 1_073_741_824.0)

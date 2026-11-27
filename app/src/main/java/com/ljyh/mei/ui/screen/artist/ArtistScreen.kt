@@ -1,8 +1,24 @@
 package com.ljyh.mei.ui.screen.artist
 
-import androidx.annotation.OptIn
+import com.ljyh.mei.ui.component.item.trackPressViewport
+import com.ljyh.mei.ui.component.home.homeArtworkBorder
+import com.ljyh.mei.ui.component.item.FixedCardCaption
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.onSizeChanged
+import com.ljyh.mei.ui.component.item.HomeSongColumn
+import com.ljyh.mei.constants.HomeSongRowSpacing
+import com.ljyh.mei.ui.component.item.HomeSongListRow
+import com.ljyh.mei.constants.homePlaylistCardSize
+import com.ljyh.mei.constants.homeCardSpacing
+import com.ljyh.mei.constants.HomeSongNextPagePeek
+import com.ljyh.mei.data.model.mediaId
+import com.ljyh.mei.data.model.MediaMetadata
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -20,37 +36,41 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.dropShadow
 import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.Paint
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.shadow.Shadow
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.nativePaint
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onLayoutRectChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -59,412 +79,254 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.DpOffset
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
-import androidx.media3.common.util.UnstableApi
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
-import com.kyant.backdrop.backdrops.rememberCanvasBackdrop
+import coil3.compose.AsyncImagePainter
+import coil3.compose.rememberAsyncImagePainter
+import coil3.request.ImageRequest
+import coil3.request.crossfade
+import coil3.size.Precision
+import coil3.size.Scale
+import io.github.neoruaa.glasmio.glass.render.backdrops.rememberCanvasBackdrop
 import com.kyant.capsule.ContinuousRoundedRectangle
 import com.kyant.shapes.Capsule
+import com.ljyh.mei.AppContext
 import com.ljyh.mei.R
 import com.ljyh.mei.constants.DetailPageHorizontalPadding
-import com.ljyh.mei.data.model.api.ArtistDetail
-import com.ljyh.mei.data.model.toMediaItem
-import com.ljyh.mei.data.model.toMediaMetadata
-import com.ljyh.mei.data.network.Resource
-import com.ljyh.mei.playback.queue.ListQueue
-import com.ljyh.mei.ui.component.item.Track
+import com.ljyh.mei.source.core.AppleArtistLogo
+import com.ljyh.mei.source.core.displayUrl
+import com.ljyh.mei.ui.component.CopyNamePopover
 import com.ljyh.mei.ui.component.playlist.CoverBackground
 import com.ljyh.mei.ui.component.playlist.FavoriteTrackStar
 import com.ljyh.mei.ui.component.playlist.rememberCoverBackground
-import com.ljyh.mei.ui.component.playlist.rememberFavoriteTrackIds
-import com.ljyh.mei.ui.component.player.OverlayState
-import com.ljyh.mei.ui.component.shimmer.ListItemPlaceHolder
 import com.ljyh.mei.ui.component.shimmer.ShimmerHost
 import com.ljyh.mei.ui.component.shimmer.TextPlaceholder
-import com.ljyh.mei.ui.glass.GlassButton
-import com.ljyh.mei.ui.glass.IosListRow
-import com.ljyh.mei.ui.glass.IosPageHorizontalPadding
-import com.ljyh.mei.ui.glass.IosPinnedPage
-import com.ljyh.mei.ui.glass.IosTypography
-import com.ljyh.mei.ui.glass.LocalGlassColors
-import com.ljyh.mei.ui.glass.LocalGlassBackdrop
-import com.ljyh.mei.ui.glass.LocalBlurBackdrop
-import com.ljyh.mei.ui.glass.defaultGlassColors
-import com.ljyh.mei.ui.glass.SfIcon
-import com.ljyh.mei.ui.glass.SfSymbol
-import com.ljyh.mei.ui.local.LocalNavController
-import com.ljyh.mei.ui.local.LocalPlayerAwareWindowInsets
-import com.ljyh.mei.ui.local.LocalPlayerConnection
+import com.ljyh.mei.ui.local.LocalColorfulPageBackgrounds
 import com.ljyh.mei.ui.local.LocalPageAppearance
-import com.ljyh.mei.ui.model.Album
-import com.ljyh.mei.ui.model.toAlbum
-import com.ljyh.mei.ui.screen.Screen
-import com.ljyh.mei.ui.screen.playlist.component.StandaloneTrackActionOverlay
+import com.ljyh.mei.ui.local.LocalPlayerAwareWindowInsets
+import com.ljyh.mei.ui.navigation.MeiloXPinnedPage
 import com.ljyh.mei.ui.theme.LocalAccentSeedColor
 import com.ljyh.mei.ui.theme.MusicTheme
-import com.ljyh.mei.utils.color.ColorExtractionUtils
+import io.github.neoruaa.glasmio.core.IosTypography
+import io.github.neoruaa.glasmio.core.swipeBackExcluded
+import io.github.neoruaa.glasmio.scaffold.glasmioHorizontalEdgeToEdge
+import io.github.neoruaa.glasmio.scaffold.glasmioHorizontalContentPadding
+import io.github.neoruaa.glasmio.core.LocalGlassColors
+import io.github.neoruaa.glasmio.core.defaultGlassColors
+import io.github.neoruaa.glasmio.glass.GlasmioMenuAnchorState
+import io.github.neoruaa.glasmio.glass.LocalGlassBackdrop
+import io.github.neoruaa.glasmio.icons.SfIcon
+import io.github.neoruaa.glasmio.icons.SfSymbol
+import io.github.neoruaa.glasmio.ui.GlasmioButton
+import io.github.neoruaa.glasmio.ui.GlasmioTooltip
 import kotlinx.coroutines.CancellationException
-import java.util.UUID
 
+private val ArtistSongCoverSize = com.ljyh.mei.constants.LandscapeSongCoverSize
+private val ArtistPopularSongsHeight = ArtistSongCoverSize * 3 + HomeSongRowSpacing * 2
+private val ArtistCardStrokeWidth = 0.5.dp
+private val ArtistCardStrokeColor = Color.White.copy(alpha = 0.15f)
+private val ArtistLogoMaxWidth = 288.dp
+private val ArtistLogoMaxHeight = 96.dp
 
-@OptIn(UnstableApi::class, ExperimentalMaterial3Api::class)
+/** The original artist detail layout, shared by every source. */
 @Composable
-fun ArtistScreen(
-    id: String,
-    viewModel: ArtistViewModel = hiltViewModel(key = "artist:$id"),
+internal fun ArtistDetailPageLayout(
+    title: String,
+    background: CoverBackground,
+    coverUrl: String,
+    scrollState: androidx.compose.foundation.lazy.LazyListState,
+    landscape: Boolean,
+    popularSongsHeightPx: Int,
+    onBack: () -> Unit,
+    header: @Composable (PaddingValues) -> Unit,
+    latestRelease: (@Composable () -> Unit)?,
+    songSection: @Composable () -> Unit,
+    popularSongs: (@Composable (Dp) -> Unit)?,
+    albumSection: @Composable () -> Unit,
+    isArtistUnavailable: Boolean = false,
+    footer: androidx.compose.foundation.lazy.LazyListScope.() -> Unit = {},
 ) {
-    val navController = LocalNavController.current
-    val playerConnection = LocalPlayerConnection.current
-
-    val artistDetail by viewModel.artistDetail.collectAsState()
-    val artistAlbums by viewModel.artistAlbums.collectAsState()
-    // Lazy content and its derived tracks must capture the same response snapshot.
-    val artistSongs = viewModel.artistSongs.collectAsState().value
-    val followMutation by viewModel.followMutation.collectAsState()
-    val confirmedFollowed by viewModel.confirmedFollowed.collectAsState()
-    val isFollowed = resolveArtistFollowed(id, artistSongs, artistAlbums, confirmedFollowed)
-    var currentOverlay by remember(id) { mutableStateOf<OverlayState>(OverlayState.None) }
-    val onAllSongsClick = { navController.navigate("${Screen.ArtistSongs.route}/$id") }
-    val onAllAlbumsClick = { navController.navigate("${Screen.ArtistAlbums.route}/$id") }
-    val onInfoClick = { navController.navigate("${Screen.ArtistInfo.route}/$id") }
-    val artistData = (artistDetail as? Resource.Success)?.data?.data
-    val isArtistUnavailable = artistDetail is Resource.Success && artistData?.artist == null
-    val heroCover = artistData?.artist?.let { artist ->
-        artist.cover.takeIf(String::isNotBlank) ?: artist.avatar
-    }.orEmpty()
-    val hotSongs = (artistSongs as? Resource.Success)?.data?.hotSongs.orEmpty()
-    val hotTracks = remember(hotSongs) { hotSongs.map { it.toMediaMetadata() } }
-    val favoriteTrackIds = rememberFavoriteTrackIds(hotTracks)
-
-    val scrollState = rememberLazyListState()
-    LaunchedEffect(id) {
-        viewModel.loadArtistIfNeeded(id)
-    }
-
-    ArtistCoverTheme(
-        route = "${Screen.Artist.route}/$id",
-        coverUrl = heroCover,
-        viewModel = viewModel,
-    ) { background ->
-        val separatorColor = LocalGlassColors.current.content.copy(alpha = 0.16f)
-        val headerAccent = remember(background.seedColor, background.color, background.endColor) {
-            ColorExtractionUtils.detailAccentColor(
-                // Neutral artwork or unavailable extraction must not inherit another cover's accent.
-                seedColor = background.seedColor ?: Color.Gray,
-                backgroundColor = background.color,
-                backgroundEndColor = background.endColor,
-            )
-        }
-        BoxWithConstraints(Modifier.fillMaxSize()) {
-            // The square hero follows the actual page width, including split-screen resizing.
-            val heroHeightPx = with(LocalDensity.current) { maxWidth.toPx() }
-            val topBarCollapseProgress by remember(scrollState, heroHeightPx) {
-                derivedStateOf {
-                    if (scrollState.firstVisibleItemIndex > 0) 1f
-                    else (scrollState.firstVisibleItemScrollOffset / (heroHeightPx * 0.6f).coerceAtLeast(1f))
-                        .coerceIn(0f, 1f)
-                }
-            }
-            IosPinnedPage(
-                title = artistData?.artist?.name.orEmpty(),
-                bottomPadding = LocalPlayerAwareWindowInsets.current.asPaddingValues().calculateBottomPadding(),
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        // The hero and the glass collapse follow the actual available page width.
+        val heroHeightPx = with(LocalDensity.current) { if (landscape) 400.dp.toPx() else maxWidth.toPx() }
+        val topBarCollapseProgress by remember(scrollState, heroHeightPx) { derivedStateOf {
+            if (scrollState.firstVisibleItemIndex > 0) 1f else
+                (scrollState.firstVisibleItemScrollOffset / (heroHeightPx * 0.6f).coerceAtLeast(1f)).coerceIn(0f, 1f)
+        } }
+        val blurDistancePx = with(LocalDensity.current) { 56.dp.toPx() }
+        val topBarBlurProgress by remember(scrollState, blurDistancePx) { derivedStateOf {
+            if (scrollState.firstVisibleItemIndex > 0) 1f else
+                (scrollState.firstVisibleItemScrollOffset / blurDistancePx).coerceIn(0f, 1f)
+        } }
+        val latestArtworkHeight = with(LocalDensity.current) { popularSongsHeightPx.toDp() }.takeIf { it > 0.dp }
+            ?: ArtistPopularSongsHeight
+        val latestTextWidth = with(LocalDensity.current) { 120.sp.toDp() }
+        val latestMinimumWidth = latestArtworkHeight + DetailPageHorizontalPadding * 2 + 16.dp + latestTextWidth
+        val latestPaneWidth = maxOf(maxWidth * 0.31f, latestMinimumWidth.coerceAtMost(maxWidth * 0.55f))
+        val popularViewportWidth = if (latestRelease != null) maxWidth - latestPaneWidth else maxWidth
+        val showPortraitCover = !landscape && coverUrl.isNotBlank() && !isArtistUnavailable
+        var viewportTop by remember { mutableIntStateOf(0) }
+        var headerTop by remember { mutableIntStateOf(0) }
+            MeiloXPinnedPage(
+                title = title,
+                bottomPadding =
+                    LocalPlayerAwareWindowInsets.current.asPaddingValues().calculateBottomPadding(),
                 collapseProgress = topBarCollapseProgress,
-                onNavigateBack = navController::popBackStack,
+                topBarBlurProgress = topBarBlurProgress,
+                onNavigateBack = onBack,
                 backgroundColor = background.color,
                 backgroundBrush = background.brush,
             ) { contentPadding ->
                 if (isArtistUnavailable) {
                     ArtistUnavailableState(
-                        onNavigateBack = navController::popBackStack,
-                        modifier = Modifier.fillMaxSize().padding(
-                            top = contentPadding.calculateTopPadding(),
-                            bottom = contentPadding.calculateBottomPadding(),
-                        ),
+                        onNavigateBack = onBack,
+                        modifier =
+                            Modifier.fillMaxSize()
+                                .padding(
+                                    top = contentPadding.calculateTopPadding(),
+                                    bottom = contentPadding.calculateBottomPadding(),
+                                ),
                     )
                 } else {
+                    if (topBarBlurProgress > 0f) {
+                        // The scroll-edge fade isolates the foreground in an offscreen layer.
+                        // Give the header buttons the same gradient to blend against there.
+                        Box(Modifier.matchParentSize().background(background.brush))
+                    }
+                    // Keep the portrait artwork full bleed, including behind the window caption.
+                    val listPadding = PaddingValues(
+                        top = if (landscape) contentPadding.calculateTopPadding() else 0.dp,
+                        bottom = contentPadding.calculateBottomPadding(),
+                    )
+                    if (showPortraitCover) {
+                        // The list's overscroll layer clips at its translated edges.
+                        Box(
+                            Modifier.matchParentSize().clipToBounds()
+                                .onLayoutRectChanged(throttleMillis = 0, debounceMillis = 0) {
+                                    viewportTop = it.positionInRoot.y
+                                },
+                        ) {
+                            ArtistPortraitCover(
+                                cover = coverUrl,
+                                modifier = Modifier.graphicsLayer {
+                                    val offset = (headerTop - viewportTop).toFloat()
+                                    alpha = if (scrollState.firstVisibleItemIndex == 0) 1f else 0f
+                                    translationY = offset
+                                    transformOrigin = TransformOrigin(0.5f, 1f)
+                                    val scale = 1f + offset.coerceAtLeast(0f) / size.height.coerceAtLeast(1f)
+                                    scaleX = scale
+                                    scaleY = scale
+                                },
+                            )
+                        }
+                    }
                     LazyColumn(
                         state = scrollState,
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(
-                            bottom = contentPadding.calculateBottomPadding(),
-                        ),
+                        // Keep the vertical list's cross-axis clip at the screen edges too.
+                        modifier = (if (landscape) Modifier.fillMaxSize().glasmioHorizontalEdgeToEdge()
+                            else Modifier.fillMaxSize()).trackPressViewport(),
+                        contentPadding = if (landscape) glasmioHorizontalContentPadding(listPadding) else listPadding,
                     ) {
                         // --- 1. Hero + Info Header ---
                         item {
-                            when (val detail = artistDetail) {
-                                is Resource.Success -> {
-                                    val data = detail.data.data
-                                    val artist = data?.artist
-                                    if (artist != null) {
-                                        ArtistHeader(
-                                            artist = artist,
-                                            cover = heroCover,
-                                            accent = headerAccent,
-                                            canPlayHotSongs = playerConnection != null && hotSongs.isNotEmpty(),
-                                            onInfoClick = onInfoClick,
-                                            onPlayHotSongs = {
-                                                if (hotSongs.isNotEmpty()) {
-                                                    playerConnection?.playQueue(
-                                                        ListQueue(
-                                                            UUID.randomUUID().toString(),
-                                                            artist.name,
-                                                            hotSongs.map { song ->
-                                                                song.id.toString() to song.toMediaMetadata().toMediaItem()
-                                                            },
-                                                            0,
-                                                        ),
-                                                        shuffle = false,
-                                                    )
-                                                }
-                                            },
-                                            isFollowed = isFollowed == true,
-                                            isFollowLoading = isFollowed == null || followMutation is Resource.Loading,
-                                            onFollowClick = {
-                                                isFollowed?.let { followed ->
-                                                    viewModel.setArtistFollowed(artist.id.toLong(), !followed)
-                                                }
-                                            },
-                                        )
-                                    } else {
-                                        ErrorItem(detail.data.message ?: "Unable to load artist")
-                                    }
-                                }
-                                is Resource.Loading -> ArtistHeaderShimmer()
-                                is Resource.Error -> {
-                                    Box(Modifier.padding(top = contentPadding.calculateTopPadding())) {
-                                        ErrorItem(detail.message)
-                                    }
-                                }
+                            if (showPortraitCover) {
+                                Box(
+                                    Modifier.onLayoutRectChanged(throttleMillis = 0, debounceMillis = 0) {
+                                        headerTop = it.positionInRoot.y
+                                    },
+                                ) { header(contentPadding) }
+                            } else {
+                                header(contentPadding)
                             }
                         }
 
-                        // --- 2. Hot Songs ---
-                        item { SectionTitle(stringResource(R.string.artist_hot_songs)) }
-
-                        when (val songsResource = artistSongs) {
-                            is Resource.Success -> {
-                                val songs = songsResource.data.hotSongs.orEmpty()
-                                val visibleSongs = songs.take(10)
-                                itemsIndexed(visibleSongs, key = { _, song -> song.id }) { index, song ->
-                                    val track = hotTracks[index]
-                                    Column(
-                                        modifier = Modifier.padding(
-                                            horizontal = DetailPageHorizontalPadding - IosPageHorizontalPadding,
-                                        ),
+                        if (landscape) {
+                            if (latestRelease != null || popularSongs != null) {
+                                item(key = "artist-landscape-sections") {
+                                    Row(
+                                        Modifier.fillMaxWidth().glasmioHorizontalEdgeToEdge().swipeBackExcluded()
+                                            .horizontalScroll(rememberScrollState())
+                                            .padding(glasmioHorizontalContentPadding(PaddingValues(0.dp))),
+                                        verticalAlignment = Alignment.Top,
                                     ) {
-                                        Box {
-                                            Track(
-                                                track = track,
-                                                detailInkBlend = true,
-                                                onClick = {
-                                                    val allIds = songs.map {
-                                                        it.id.toString() to it.toMediaMetadata().toMediaItem()
-                                                    }
-                                                    playerConnection?.onTrackClicked(
-                                                        trackId = song.id.toString(),
-                                                        buildQueue = {
-                                                            ListQueue(
-                                                                UUID.randomUUID().toString(),
-                                                                "Hot Songs",
-                                                                allIds,
-                                                                songs.indexOf(song)
-                                                            )
-                                                        }
-                                                    )
-                                                },
-                                                onMoreClick = { currentOverlay = OverlayState.TrackActionMenu(track, it) }
-                                            )
-                                            if (
-                                                track.id > 0 && !track.isLocal && !track.isPodcast &&
-                                                track.id.toString() in favoriteTrackIds
-                                            ) {
-                                                FavoriteTrackStar(
-                                                    modifier = Modifier.align(Alignment.CenterStart)
-                                                        .offset(x = IosPageHorizontalPadding - DetailPageHorizontalPadding / 2f - 6.dp),
-                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                )
-                                            }
+                                        if (latestRelease != null) {
+                                            Column(Modifier.width(latestPaneWidth)) { latestRelease() }
                                         }
-                                        if (index < visibleSongs.lastIndex) {
-                                            HorizontalDivider(
-                                                modifier = Modifier.padding(
-                                                    start = IosPageHorizontalPadding + 64.dp,
-                                                    end = IosPageHorizontalPadding,
-                                                )
-                                                    .graphicsLayer {
-                                                        blendMode = BlendMode.Luminosity
-                                                        compositingStrategy = CompositingStrategy.Offscreen
-                                                    },
-                                                thickness = 0.5.dp,
-                                                color = separatorColor,
-                                            )
-                                        }
+                                        popularSongs?.invoke(popularViewportWidth)
                                     }
                                 }
                             }
-                            is Resource.Loading -> items(5) {
-                                ShimmerHost {
-                                    ListItemPlaceHolder(
-                                        modifier = Modifier.padding(horizontal = DetailPageHorizontalPadding - 12.dp),
-                                    )
-                                }
+                            item(key = "artist-albums") {
+                                Column(Modifier.padding(top = 16.dp)) { albumSection() }
                             }
-                            is Resource.Error -> item { ErrorItem(songsResource.message) }
+                        } else {
+                            if (latestRelease != null) item(key = "artist-latest-release") { latestRelease() }
+                            item(key = "artist-songs") { songSection() }
+                            item(key = "artist-albums") { albumSection() }
                         }
-
-                        val songCount = artistData?.artist?.musicSize
-                            ?: (artistSongs as? Resource.Success)?.data?.artist?.musicSize
-                        if (songCount != null) {
-                            item(key = "all-artist-songs") {
-                                IosListRow(
-                                    title = stringResource(R.string.artist_all_songs_count, songCount),
-                                    modifier = Modifier.padding(
-                                        horizontal = DetailPageHorizontalPadding - IosPageHorizontalPadding,
-                                    ).drawBehind {
-                                        drawLine(
-                                            color = separatorColor,
-                                            start = Offset(IosPageHorizontalPadding.toPx(), 0f),
-                                            end = Offset(size.width - IosPageHorizontalPadding.toPx(), 0f),
-                                            strokeWidth = 0.5.dp.toPx(),
-                                            blendMode = BlendMode.Luminosity,
-                                        )
-                                    },
-                                    showTopSeparator = false,
-                                    onClick = onAllSongsClick,
-                                    trailing = {
-                                        SfIcon(
-                                            "chevron.forward",
-                                            null,
-                                            modifier = Modifier.padding(start = 8.dp),
-                                            size = 12.dp,
-                                            tint = LocalGlassColors.current.secondaryContent,
-                                        )
-                                    },
-                                )
-                            }
-                        }
-
-                        // --- 3. Albums ---
-                        item { SectionTitle(stringResource(R.string.artist_albums)) }
-
-                        when (val albumsResource = artistAlbums) {
-                            is Resource.Success -> {
-                                val albums = albumsResource.data.hotAlbums.orEmpty()
-                                item {
-                                    LazyRow(
-                                        contentPadding = PaddingValues(horizontal = DetailPageHorizontalPadding),
-                                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                                    ) {
-                                        items(albums, key = { it.id }) { hotAlbum ->
-                                            AlbumCard(
-                                                album = hotAlbum.toAlbum(),
-                                                onClick = {
-                                                    navController.navigate("${Screen.Album.route}/$it")
-                                                }
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                            is Resource.Loading -> item {
-                                LazyRow(
-                                    contentPadding = PaddingValues(horizontal = DetailPageHorizontalPadding),
-                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                                ) {
-                                    items(4) { ShimmerHost { AlbumCardShimmer() } }
-                                }
-                            }
-                            is Resource.Error -> item { ErrorItem(albumsResource.message) }
-                        }
-
-                        val albumCount = artistData?.artist?.albumSize
-                            ?: (artistAlbums as? Resource.Success)?.data?.artist?.albumSize
-                        if (albumCount != null) {
-                            item(key = "all-artist-albums") {
-                                IosListRow(
-                                    title = stringResource(R.string.artist_all_albums_count, albumCount),
-                                    modifier = Modifier.padding(
-                                        horizontal = DetailPageHorizontalPadding - IosPageHorizontalPadding,
-                                    ).padding(top = 10.dp).drawBehind {
-                                        drawLine(
-                                            color = separatorColor,
-                                            start = Offset(IosPageHorizontalPadding.toPx(), 0f),
-                                            end = Offset(size.width - IosPageHorizontalPadding.toPx(), 0f),
-                                            strokeWidth = 0.5.dp.toPx(),
-                                            blendMode = BlendMode.Luminosity,
-                                        )
-                                    },
-                                    showTopSeparator = false,
-                                    onClick = onAllAlbumsClick,
-                                    trailing = {
-                                        SfIcon(
-                                            "chevron.forward",
-                                            null,
-                                            modifier = Modifier.padding(start = 8.dp),
-                                            size = 12.dp,
-                                            tint = LocalGlassColors.current.secondaryContent,
-                                        )
-                                    },
-                                )
-                            }
-                        }
+                        footer()
                     }
                 }
             }
-            StandaloneTrackActionOverlay(
-                overlay = currentOverlay,
-                onDismiss = { currentOverlay = OverlayState.None },
-                onUpdateOverlay = { currentOverlay = it },
-            )
-        }
     }
 }
 
 @Composable
-private fun ArtistCoverTheme(
+internal fun ArtistDetailTheme(
     route: String,
     coverUrl: String,
-    viewModel: ArtistViewModel,
+    artwork: com.ljyh.mei.ui.screen.playlist.DetailArtworkViewModel = hiltViewModel(),
     content: @Composable (CoverBackground) -> Unit,
 ) {
-    var coverIsDark by remember(viewModel, coverUrl) {
-        mutableStateOf(viewModel.getCachedCoverIsDark(coverUrl) ?: false)
+    val colorfulBackgrounds = LocalColorfulPageBackgrounds.current
+    var coverIsDark by remember(artwork, coverUrl) {
+        mutableStateOf(artwork.getCachedCoverIsDark(coverUrl))
     }
-    LaunchedEffect(viewModel, coverUrl) {
-        if (coverUrl.isBlank()) return@LaunchedEffect
+    LaunchedEffect(artwork, coverUrl, colorfulBackgrounds) {
+        if (!colorfulBackgrounds || coverUrl.isBlank()) return@LaunchedEffect
         try {
-            viewModel.getCoverIsDarkOrExtract(coverUrl)?.let { coverIsDark = it }
+            artwork.getCoverIsDarkOrExtract(coverUrl)?.let { coverIsDark = it }
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
-            // Unavailable artwork uses a stable light appearance, independent of app mode.
+            // Keep the app appearance while artwork brightness is unavailable.
         }
     }
 
+    val isDark = (if (colorfulBackgrounds) coverIsDark else null) ?: LocalGlassColors.current.isDark
     val setPageAppearance = LocalPageAppearance.current
-    val appearanceOwner = remember(viewModel, route) { Any() }
-    DisposableEffect(route, appearanceOwner, coverIsDark, setPageAppearance) {
-        setPageAppearance(route, appearanceOwner, coverIsDark)
+    val appearanceOwner = remember(artwork, route) { Any() }
+    DisposableEffect(route, appearanceOwner, isDark, setPageAppearance) {
+        setPageAppearance(route, appearanceOwner, isDark)
         onDispose { setPageAppearance(route, appearanceOwner, null) }
     }
 
-    val accentSeed = LocalAccentSeedColor.current ?: defaultGlassColors(coverIsDark).accent
-    MusicTheme(seedColor = accentSeed, isDark = coverIsDark) {
-        val colors = defaultGlassColors(coverIsDark, MaterialTheme.colorScheme.primary)
+    val accentSeed = LocalAccentSeedColor.current ?: defaultGlassColors(isDark).accent
+    MusicTheme(seedColor = accentSeed, isDark = isDark) {
+        val colors = defaultGlassColors(isDark, MaterialTheme.colorScheme.primary)
         CompositionLocalProvider(LocalGlassColors provides colors) {
             val background = rememberCoverBackground(
                 coverUrl = coverUrl,
-                getCachedColor = viewModel::getCachedColor,
-                getOrExtractColor = viewModel::getOrExtractColor,
-                ownerKey = viewModel,
+                getCachedColor = artwork::getCachedColor,
+                getOrExtractColor = artwork::getOrExtractColor,
+                ownerKey = artwork,
             )
-            // Body controls and their popups sample the cover-local surface, not the app theme.
+            // Body controls use the cover-local surface. Menus inherit the rendered page backdrop.
             val backdropBrush = rememberUpdatedState(background.brush)
-            val backdrop = rememberCanvasBackdrop { drawRect(brush = backdropBrush.value) }
+            val backdropPaint = remember { Paint() }
+            val backdrop = rememberCanvasBackdrop {
+                backdropBrush.value.applyTo(size, backdropPaint, 1f)
+                // Fill the blur outsets too, including negative coordinates at the top and left.
+                drawContext.canvas.nativeCanvas.drawPaint(backdropPaint.nativePaint)
+            }
             CompositionLocalProvider(
                 LocalGlassBackdrop provides backdrop,
-                LocalBlurBackdrop provides backdrop,
             ) {
                 content(background)
             }
@@ -501,7 +363,7 @@ private fun ArtistUnavailableState(
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(top = 6.dp),
         )
-        GlassButton(
+        GlasmioButton(
             onClick = onNavigateBack,
             modifier = Modifier.padding(top = 20.dp),
         ) {
@@ -510,12 +372,37 @@ private fun ArtistUnavailableState(
     }
 }
 
-
 // ─── Artist Hero ─────────────────────────────────────────────────────────────
 
 @Composable
-private fun ArtistHeader(
-    artist: ArtistDetail.Data.Artist,
+private fun ArtistPortraitCover(cover: String, modifier: Modifier) {
+    AsyncImage(
+        model = cover,
+        contentDescription = null,
+        contentScale = ContentScale.Crop,
+        modifier = Modifier.fillMaxWidth().aspectRatio(1f)
+            .then(modifier)
+            .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+            .drawWithContent {
+                drawContent()
+                // Fade into the same artwork-derived gradient as the rest of the page.
+                drawRect(
+                    brush = Brush.verticalGradient(
+                        0f to Color.Black,
+                        0.45f to Color.Black,
+                        0.70f to Color.Black.copy(alpha = 0.45f),
+                        1f to Color.Transparent,
+                    ),
+                    blendMode = BlendMode.DstIn,
+                )
+            },
+    )
+}
+
+@Composable
+internal fun ArtistDetailHeader(
+    name: String,
+    subtitle: String = "",
     cover: String,
     accent: Color,
     canPlayHotSongs: Boolean,
@@ -524,118 +411,201 @@ private fun ArtistHeader(
     onInfoClick: () -> Unit,
     onPlayHotSongs: () -> Unit,
     onFollowClick: () -> Unit,
+    landscape: Boolean = false,
+    canFollow: Boolean = true,
+    artistLogo: AppleArtistLogo? = null,
 ) {
     val colors = LocalGlassColors.current
-    val subtitle = remember(artist) {
-        (artist.transNames + artist.alias.filterIsInstance<String>())
-            .map(String::trim)
-            .filter { it.isNotEmpty() && !it.equals(artist.name, ignoreCase = true) }
-            .distinct()
-            .joinToString(" · ")
-    }
     val playHotSongsLabel = stringResource(R.string.artist_play_hot_songs)
 
-    BoxWithConstraints(
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        AsyncImage(
-            model = cover,
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(1f)
-                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-                .drawWithContent {
-                    drawContent()
-                    // Reveal the same page gradient beneath the image to avoid a solid seam.
-                    drawRect(
-                        brush = Brush.verticalGradient(
-                            0f to Color.Black,
-                            0.45f to Color.Black,
-                            0.70f to Color.Black.copy(alpha = 0.45f),
-                            1f to Color.Transparent,
-                        ),
-                        blendMode = BlendMode.DstIn,
-                    )
-                },
-        )
-
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(top = (maxWidth - 64.dp).coerceAtLeast(0.dp)),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text(
-                text = artist.name,
-                style = IosTypography.title2,
-                color = colors.content,
-                textAlign = TextAlign.Center,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(horizontal = DetailPageHorizontalPadding).padding(top = 8.dp),
-            )
-            if (subtitle.isNotBlank()) {
-                Text(
-                    text = subtitle,
-                    style = IosTypography.subheadline,
-                    color = colors.secondaryContent,
-                    textAlign = TextAlign.Center,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = DetailPageHorizontalPadding).padding(top = 7.dp),
+    ArtistHeroLayout(
+        landscape = landscape,
+        image = { imageModifier ->
+            if (landscape) {
+                AsyncImage(
+                    model = cover,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = imageModifier,
                 )
+            } else {
+                Spacer(imageModifier.fillMaxWidth().aspectRatio(1f))
             }
-
-            Row(
-                modifier = Modifier.padding(top = 18.dp, bottom = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(24.dp),
-                verticalAlignment = Alignment.CenterVertically,
+        },
+        information = { heroWidth ->
+            val availableWidth = heroWidth - DetailPageHorizontalPadding * 2
+            val logo = artistLogo?.takeIf { it.width > 0 && it.height > 0 && availableWidth > 0.dp }
+            val logoAspect = logo?.let { it.width.toFloat() / it.height } ?: 1f
+            val logoWidth = minOf(availableWidth, ArtistLogoMaxWidth, ArtistLogoMaxHeight * logoAspect)
+            val logoHeight = logoWidth / logoAspect
+            val logoState = logo?.let { rememberArtistLogoState(it, logoWidth, logoHeight) }
+            val logoPainter = (logoState as? AsyncImagePainter.State.Success)?.painter
+            val appleAccent = logo?.keyColorRgb?.takeIf { logoPainter != null }?.let {
+                Color(it or 0xFF000000.toInt())
+            }
+            val buttonAccent = appleAccent ?: accent
+            val titlePadding = Modifier.padding(horizontal = DetailPageHorizontalPadding).padding(top = 8.dp)
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                ArtistActionButton(
-                    onClick = onInfoClick,
-                    accent = accent,
-                ) {
-                    SfIcon(
-                        "info",
-                        stringResource(R.string.artist_info_title),
-                        size = 24.dp,
-                        weight = FontWeight.SemiBold,
-                        tint = accent,
-                    )
+                if (logoPainter != null) {
+                    CopyNamePopover(
+                        name = name,
+                        actionLabel = R.string.artist_action_copy_name,
+                        modifier = titlePadding,
+                        openOnClick = subtitle.isNotBlank(),
+                    ) { copyModifier, _ ->
+                        GlasmioTooltip(text = subtitle, modifier = copyModifier) {
+                            Image(
+                                painter = logoPainter,
+                                contentDescription = name,
+                                modifier = Modifier.size(logoWidth, logoHeight),
+                                contentScale = ContentScale.Fit,
+                            )
+                        }
+                    }
+                } else if (logoState != null && logoState !is AsyncImagePainter.State.Error) {
+                    ShimmerHost(modifier = titlePadding.semantics { contentDescription = name }) {
+                        Spacer(
+                            Modifier.size(logoWidth, logoHeight)
+                                .clip(ContinuousRoundedRectangle(8.dp))
+                                .background(colors.content)
+                        )
+                    }
+                } else {
+                    CopyNamePopover(
+                        name = name,
+                        actionLabel = R.string.artist_action_copy_name,
+                        modifier = titlePadding,
+                    ) { copyModifier, _ ->
+                        Text(
+                            text = name,
+                            style = if (landscape) IosTypography.title2.copy(fontSize = 32.sp, lineHeight = 36.sp)
+                            else IosTypography.title2.copy(fontSize = 24.sp),
+                            color = colors.content,
+                            textAlign = TextAlign.Center,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = copyModifier,
+                        )
+                    }
+                    if (subtitle.isNotBlank()) {
+                        Text(
+                            text = subtitle,
+                            style = IosTypography.subheadline,
+                            color = colors.secondaryContent,
+                            textAlign = TextAlign.Center,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(horizontal = DetailPageHorizontalPadding).padding(top = 4.dp),
+                        )
+                    }
                 }
-                ArtistActionButton(
-                    onClick = onPlayHotSongs,
-                    modifier = Modifier.semantics { contentDescription = playHotSongsLabel },
-                    accent = accent,
-                    enabled = canPlayHotSongs,
-                    prominent = true,
+
+                Row(
+                    modifier = Modifier.padding(top = 18.dp, bottom = if (landscape) 8.dp else 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(24.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    SfIcon(
-                        "play.fill", null,
-                        modifier = Modifier.graphicsLayer {
-                            translationX = 2.dp.toPx()
-                            blendMode = BlendMode.DstOut
-                            compositingStrategy = CompositingStrategy.Offscreen
-                        },
-                        size = 28.dp,
-                        tint = Color.Black,
-                    )
-                }
-                ArtistActionButton(
-                    onClick = onFollowClick,
-                    accent = accent,
-                    enabled = !isFollowLoading,
-                ) {
-                    SfIcon(
-                        if (isFollowed) "star.fill" else "star",
-                        stringResource(if (isFollowed) R.string.artist_following else R.string.artist_follow),
-                        size = 24.dp,
-                        weight = FontWeight.SemiBold,
-                        tint = accent,
-                    )
+                    ArtistActionButton(
+                        onClick = onInfoClick,
+                        accent = buttonAccent,
+                        useAppleAccent = appleAccent != null,
+                        landscape = landscape,
+                    ) {
+                        SfIcon(
+                            "info",
+                            stringResource(R.string.artist_info_title),
+                            size = if (landscape) 28.dp else 24.dp,
+                            weight = FontWeight.SemiBold,
+                            tint = buttonAccent,
+                        )
+                    }
+                    ArtistActionButton(
+                        onClick = onPlayHotSongs,
+                        modifier = Modifier.semantics { contentDescription = playHotSongsLabel },
+                        accent = buttonAccent,
+                        useAppleAccent = appleAccent != null,
+                        enabled = canPlayHotSongs,
+                        prominent = true,
+                        landscape = landscape,
+                    ) {
+                        SfIcon(
+                            "play.fill",
+                            null,
+                            modifier =
+                                Modifier.graphicsLayer {
+                                    translationX = 2.dp.toPx()
+                                    blendMode = BlendMode.DstOut
+                                    compositingStrategy = CompositingStrategy.Offscreen
+                                },
+                            size = if (landscape) 36.dp else 28.dp,
+                            tint = Color.Black,
+                        )
+                    }
+                    if (canFollow) ArtistActionButton(
+                        onClick = onFollowClick,
+                        accent = buttonAccent,
+                        useAppleAccent = appleAccent != null,
+                        enabled = !isFollowLoading,
+                        landscape = landscape,
+                    ) {
+                        SfIcon(
+                            if (isFollowed) "star.fill" else "star",
+                            stringResource(
+                                if (isFollowed) R.string.artist_following
+                                else R.string.artist_follow
+                            ),
+                            size = if (landscape) 28.dp else 24.dp,
+                            weight = FontWeight.SemiBold,
+                            tint = buttonAccent,
+                        )
+                    }
                 }
             }
+        },
+    )
+}
+
+@Composable
+private fun rememberArtistLogoState(logo: AppleArtistLogo, width: Dp, height: Dp): AsyncImagePainter.State {
+    val context = LocalContext.current
+    val density = LocalDensity.current
+    val widthPx = with(density) { width.roundToPx().coerceAtLeast(1) }
+    val heightPx = with(density) { height.roundToPx().coerceAtLeast(1) }
+    val displayUrl = remember(logo, widthPx, heightPx) { logo.displayUrl(maxOf(widthPx, heightPx)) }
+    val primaryUrl = if (displayUrl == logo.url) logo.url else {
+        key(logo.url, displayUrl) {
+            val cachedUrl by produceState<String?>(null) {
+                value = if (AppContext.instance.hasCachedImage(logo.url)) logo.url else displayUrl
+            }
+            cachedUrl
         }
+    }
+    if (primaryUrl == null) return AsyncImagePainter.State.Empty
+    return key(logo.url, displayUrl, primaryUrl) {
+        var tryAlternate by remember { mutableStateOf(false) }
+        val alternateUrl = (if (primaryUrl == logo.url) displayUrl else logo.url)
+            .takeIf { it != primaryUrl }
+        val url = if (tryAlternate) alternateUrl ?: primaryUrl else primaryUrl
+        val request = remember(context, url, widthPx, heightPx) {
+            ImageRequest.Builder(context)
+                .data(url)
+                .size(widthPx, heightPx)
+                .scale(Scale.FIT)
+                .precision(Precision.INEXACT)
+                .crossfade(false)
+                .build()
+        }
+        val state by key(url) {
+            rememberAsyncImagePainter(request, contentScale = ContentScale.Fit)
+                .state.collectAsStateWithLifecycle()
+        }
+        if (state is AsyncImagePainter.State.Error && alternateUrl != null && !tryAlternate) {
+            LaunchedEffect(url) { tryAlternate = true }
+            AsyncImagePainter.State.Empty
+        } else state
     }
 }
 
@@ -643,21 +613,28 @@ private fun ArtistHeader(
 private fun ArtistActionButton(
     onClick: () -> Unit,
     accent: Color,
+    useAppleAccent: Boolean,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     prominent: Boolean = false,
+    landscape: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     val colors = LocalGlassColors.current
     Box(
         modifier = modifier
-            .size(if (prominent) 64.dp else 44.dp)
+            .size(if (landscape) { if (prominent) 72.dp else 48.dp } else { if (prominent) 68.dp else 44.dp })
             .graphicsLayer {
-                blendMode = BlendMode.Luminosity
-                compositingStrategy = CompositingStrategy.Offscreen
+                blendMode = if (useAppleAccent) BlendMode.SrcOver else BlendMode.Luminosity
+                compositingStrategy = if (useAppleAccent && !prominent) {
+                    CompositingStrategy.Auto
+                } else {
+                    CompositingStrategy.Offscreen
+                }
                 alpha = if (enabled) 1f else 0.4f
             }
             .clip(Capsule())
+            .then(if (prominent) Modifier else Modifier.border(ArtistCardStrokeWidth, ArtistCardStrokeColor, Capsule()))
             .clickable(enabled = enabled, role = Role.Button, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
@@ -670,51 +647,38 @@ private fun ArtistActionButton(
     }
 }
 
-
 // ─── Album Card ───────────────────────────────────────────────────────────────
 
 @Composable
-fun AlbumCard(album: Album, onClick: (Long) -> Unit) {
-    Column(
-        modifier = Modifier
-            .width(116.dp)
-            .clickable { onClick(album.id) }
-    ) {
+internal fun ArtistAlbumCard(title: String, cover: String, trackCount: Int, artworkSize: Dp = 116.dp, onClick: () -> Unit) {
+    val coverShape = ContinuousRoundedRectangle(8.dp)
+    Column(modifier = Modifier.width(artworkSize).clickable(interactionSource = null, indication = null, onClick = onClick)) {
         AsyncImage(
-            model = album.cover,
-            contentDescription = album.title,
-            modifier = Modifier
-                .size(116.dp)
-                .clip(ContinuousRoundedRectangle(8.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant),
-            contentScale = ContentScale.Crop
+            model = cover,
+            contentDescription = title,
+            modifier =
+                Modifier.size(artworkSize)
+                    .clip(coverShape)
+                    .homeArtworkBorder(coverShape)
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentScale = ContentScale.Crop,
         )
         Spacer(modifier = Modifier.height(6.dp))
-        Text(
-            text = album.title,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.Medium,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            color = MaterialTheme.colorScheme.onBackground
-        )
-        Text(
-            text = "${album.size} 首",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.42f),
-            modifier = Modifier.padding(top = 2.dp)
+        FixedCardCaption(
+            title = title,
+            subtitle = "$trackCount 首",
         )
     }
 }
 
 @Composable
-fun AlbumCardShimmer() {
-    Column(modifier = Modifier.width(116.dp)) {
+fun AlbumCardShimmer(artworkSize: Dp = 116.dp) {
+    Column(modifier = Modifier.width(artworkSize)) {
         Spacer(
-            modifier = Modifier
-                .size(116.dp)
-                .clip(ContinuousRoundedRectangle(8.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
+            modifier =
+                Modifier.size(artworkSize)
+                    .clip(ContinuousRoundedRectangle(8.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
         )
         Spacer(modifier = Modifier.height(6.dp))
         TextPlaceholder(Modifier.width(96.dp).height(14.dp))
@@ -723,62 +687,254 @@ fun AlbumCardShimmer() {
     }
 }
 
-
 // ─── Header Shimmer ───────────────────────────────────────────────────────────
 
 @Composable
-fun ArtistHeaderShimmer() {
+fun ArtistHeaderShimmer(landscape: Boolean = false) {
     ShimmerHost {
-        BoxWithConstraints(
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(1f)
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.18f)),
-            )
+        ArtistHeroLayout(
+            landscape = landscape,
+            image = { imageModifier ->
+                Box(
+                    imageModifier
+                        .then(if (landscape) Modifier else Modifier.fillMaxWidth().aspectRatio(1f))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.18f))
+                )
+            },
+            information = {
+                Column(
+                    Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    TextPlaceholder(
+                        Modifier.padding(top = 8.dp)
+                            .width(180.dp)
+                            .height(
+                                if (landscape)
+                                    with(LocalDensity.current) {
+                                        36.sp.toDp()
+                                    }
+                                else 22.dp
+                            ),
+                        verticalPadding = if (landscape) 0.dp else 4.dp,
+                    )
+                    TextPlaceholder(
+                        Modifier.padding(top = 4.dp)
+                            .width(120.dp)
+                            .height(
+                                if (landscape)
+                                    with(LocalDensity.current) {
+                                        IosTypography.subheadline.lineHeight.toDp()
+                                    }
+                                else 16.dp
+                            ),
+                        verticalPadding = if (landscape) 0.dp else 4.dp,
+                    )
+                    Row(
+                        Modifier.padding(top = 18.dp, bottom = if (landscape) 8.dp else 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(24.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        (if (landscape) listOf(48.dp, 72.dp, 48.dp) else listOf(44.dp, 68.dp, 44.dp)).forEach { size ->
+                            Spacer(
+                                Modifier.size(size)
+                                    .clip(Capsule())
+                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                            )
+                        }
+                    }
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun ArtistHeroLayout(
+    landscape: Boolean,
+    image: @Composable (Modifier) -> Unit,
+    information: @Composable (Dp) -> Unit,
+) {
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val heroWidth = maxWidth
+        val avatarSize = minOf(heroWidth * 0.20f, 200.dp)
+        if (landscape) {
             Column(
-                modifier = Modifier.fillMaxWidth().padding(top = (maxWidth - 64.dp).coerceAtLeast(0.dp)),
+                Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                TextPlaceholder(Modifier.padding(top = 8.dp).width(180.dp).height(22.dp))
-                TextPlaceholder(Modifier.padding(top = 7.dp).width(120.dp).height(16.dp))
-                Row(
-                    modifier = Modifier.padding(top = 18.dp, bottom = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(24.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    listOf(44.dp, 64.dp, 44.dp).forEach { size ->
-                        Spacer(
-                            modifier = Modifier
-                                .size(size)
-                                .clip(Capsule())
-                                .background(MaterialTheme.colorScheme.surfaceVariant),
+                image(
+                    Modifier.size(avatarSize)
+                        .dropShadow(
+                            shape = CircleShape,
+                            shadow = Shadow(
+                                radius = 18.dp,
+                                color = Color.Black.copy(alpha = 0.18f),
+                                offset = DpOffset(0.dp, 12.dp),
+                            ),
                         )
+                        .clip(CircleShape)
+                )
+                Spacer(Modifier.height(24.dp))
+                information(heroWidth)
+            }
+        } else {
+            image(Modifier)
+            Box(Modifier.fillMaxWidth().padding(top = (heroWidth - 64.dp).coerceAtLeast(0.dp))) {
+                information(heroWidth)
+            }
+        }
+    }
+}
+
+@Composable
+internal fun ArtistFeaturedAlbumInformation(title: String, trackCount: Int, releaseDate: String? = null, landscape: Boolean) {
+    val metadataStyle = if (landscape) IosTypography.subheadline
+        else IosTypography.subheadline.copy(fontSize = 13.sp, lineHeight = 18.sp)
+    releaseDate?.takeIf(String::isNotBlank)?.let {
+        Text(it, style = metadataStyle, color = LocalGlassColors.current.secondaryContent)
+    }
+    Text(title, style = if (landscape) IosTypography.headline else IosTypography.headline.copy(
+        fontSize = 15.sp, lineHeight = 20.sp, fontWeight = FontWeight.SemiBold),
+        maxLines = if (landscape) 3 else 2, overflow = TextOverflow.Ellipsis,
+        color = LocalGlassColors.current.content)
+    Text(stringResource(R.string.playlist_song_count, trackCount), style = metadataStyle,
+        color = LocalGlassColors.current.secondaryContent)
+}
+
+@Composable
+internal fun ArtistFeaturedAlbumLayout(
+    landscape: Boolean,
+    artworkHeight: Dp,
+    artwork: @Composable (Modifier) -> Unit,
+    information: @Composable () -> Unit,
+    action: @Composable () -> Unit,
+    onClick: (() -> Unit)? = null,
+) {
+    val colors = LocalGlassColors.current
+    val shape = ContinuousRoundedRectangle(24.dp)
+    val coverSize = if (landscape) artworkHeight else 88.dp
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = if (landscape) DetailPageHorizontalPadding else 20.dp)
+            .padding(top = if (landscape) 0.dp else 12.dp, bottom = if (landscape) 0.dp else 4.dp)
+            .then(if (landscape) Modifier else Modifier.clip(shape)
+                .background(colors.content.copy(alpha = 0.10f))
+                .border(ArtistCardStrokeWidth, ArtistCardStrokeColor, shape))
+            .then(if (onClick != null) Modifier.clickable(interactionSource = null, indication = null, onClick = onClick) else Modifier)
+            .then(if (landscape) Modifier else Modifier.padding(12.dp)),
+        horizontalArrangement = Arrangement.spacedBy(if (landscape) 16.dp else 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        val coverShape = ContinuousRoundedRectangle(if (landscape) 8.dp else 10.dp)
+        artwork(Modifier.size(coverSize).clip(coverShape).homeArtworkBorder(coverShape))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(if (landscape) 4.dp else 0.dp)) {
+            information()
+            if (landscape) Box(Modifier.padding(top = 4.dp)) { action() }
+        }
+        if (!landscape) action()
+    }
+}
+
+@Composable
+private fun ArtistFeaturedAlbumPlaceholder(artworkHeight: Dp = ArtistPopularSongsHeight, landscape: Boolean = true) {
+    ArtistFeaturedAlbumLayout(landscape, artworkHeight,
+        artwork = { Spacer(it.background(MaterialTheme.colorScheme.surfaceVariant)) },
+        information = { repeat(3) { TextPlaceholder() } },
+        action = {
+            Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
+                Spacer(Modifier.size(if (landscape) 36.dp else 32.dp).clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surfaceVariant))
+            }
+        },
+    )
+}
+
+@Composable
+internal fun ArtistPopularSongs(
+    tracks: List<MediaMetadata>,
+    favoriteIds: Set<String>,
+    viewportWidth: Dp,
+    onClick: (Int) -> Unit,
+    onMore: (MediaMetadata, Rect) -> Unit,
+    onHeightChanged: (Int) -> Unit,
+    menuAnchorState: GlasmioMenuAnchorState? = null,
+) {
+    val spacing = homeCardSpacing(true)
+    val columnWidth = minOf(
+        homePlaylistCardSize(true) * 2 + spacing,
+        (viewportWidth - DetailPageHorizontalPadding * 2 - HomeSongNextPagePeek).coerceAtLeast(220.dp),
+    )
+    Row(
+        Modifier.padding(horizontal = DetailPageHorizontalPadding)
+            .onSizeChanged { onHeightChanged(it.height) },
+        horizontalArrangement = Arrangement.spacedBy(spacing),
+    ) {
+        repeat((tracks.size + 2) / 3) { column ->
+            val start = column * 3
+            HomeSongColumn(minOf(3, tracks.size - start), Modifier.width(columnWidth), ArtistSongCoverSize) { row ->
+                val index = start + row
+                val track = tracks[index]
+                Box {
+                    if (track.mediaId in favoriteIds) {
+                        FavoriteTrackStar(Modifier.align(Alignment.CenterStart).offset(x = (-14).dp)
+                            .testTag("ArtistSongFavorite:${track.id}"))
                     }
+                    HomeSongListRow(
+                        track.coverUrl,
+                        track.title,
+                        track.artists.joinToString(" / ") { it.name },
+                        onClick = { onClick(index) },
+                        onMore = { onMore(track, it) },
+                        moreModifier = Modifier.testTag("ArtistSongMore:${track.id}"),
+                        coverSize = ArtistSongCoverSize,
+                        menuAnchorState = menuAnchorState,
+                        trackRef = track.trackRef,
+                        hasAlternateVersion = track.hasAlternateVersion,
+                    )
                 }
             }
         }
     }
 }
 
-
 // ─── Shared ───────────────────────────────────────────────────────────────────
 
 @Composable
-fun SectionTitle(title: String) {
-    Text(
-        text = title,
-        style = MaterialTheme.typography.titleMedium,
-        fontWeight = FontWeight.Bold,
-        modifier = Modifier.padding(
-            start = DetailPageHorizontalPadding,
-            end = DetailPageHorizontalPadding,
-            top = 20.dp,
-            bottom = 4.dp,
-        )
-    )
+fun SectionTitle(
+    title: String,
+    onClick: (() -> Unit)? = null,
+    bottomPadding: Dp = if (onClick != null) 12.dp else 4.dp,
+    landscape: Boolean = false,
+    topPadding: Dp = 20.dp,
+) {
+    Box(
+        Modifier.fillMaxWidth().padding(
+            start = if (landscape) DetailPageHorizontalPadding else 20.dp,
+            end = if (landscape) DetailPageHorizontalPadding else 20.dp,
+            top = topPadding,
+            bottom = bottomPadding,
+        ),
+    ) {
+        Row(
+            if (onClick != null) Modifier.clickable(interactionSource = null, indication = null, onClick = onClick)
+            else Modifier,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                title,
+                style = if (landscape) MaterialTheme.typography.titleMedium.copy(fontSize = 20.sp, lineHeight = 24.sp)
+                    else MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+            if (onClick != null) {
+                SfIcon(
+                    "chevron.forward", null, size = if (landscape) 18.dp else 16.dp,
+                    weight = FontWeight.SemiBold, tint = LocalGlassColors.current.secondaryContent,
+                )
+            }
+        }
+    }
 }
 
 @Composable

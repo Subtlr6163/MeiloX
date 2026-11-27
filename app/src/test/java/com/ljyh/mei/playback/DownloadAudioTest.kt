@@ -12,6 +12,10 @@ import java.io.File
 import java.io.RandomAccessFile
 import java.util.Base64
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import okhttp3.ResponseBody.Companion.asResponseBody
 import okhttp3.ResponseBody.Companion.toResponseBody
 import okio.Buffer
@@ -25,7 +29,87 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class DownloadAudioTest {
+    @Test
+    fun notificationOwnershipAggregatesActiveWorkersAndIgnoresRetiredProgress() {
+        val state = DownloadNotificationState()
+        val updates = mutableListOf<DownloadNotificationProgress?>()
+        state.start("first", 2, updates::add)
+        state.start("second", 3, updates::add)
+        state.progress("first", 1, updates::add)
+        assertEquals(DownloadNotificationProgress(1, 5), updates.last())
+        state.progress("first", 0, updates::add)
+        assertEquals(DownloadNotificationProgress(1, 5), updates.last())
+        state.finish("first", updates::add)
+        assertEquals(DownloadNotificationProgress(0, 3), updates.last())
+        val count = updates.size
+        state.progress("first", 2, updates::add)
+        state.finish("first", updates::add)
+        assertEquals(count, updates.size)
+        state.progress("second", 4, updates::add)
+        assertEquals(DownloadNotificationProgress(3, 3), updates.last())
+        state.finish("second", updates::add)
+        assertNull(updates.last())
+        state.start("replacement", 1, updates::add)
+        state.progress("second", 3, updates::add)
+        assertEquals(DownloadNotificationProgress(0, 1), updates.last())
+        state.finish("replacement", updates::add)
+        assertNull(updates.last())
+    }
+
+    @Test
+    fun pausedRestoreAndBufferingDoNotCountForAutomaticDownloads() = runTest {
+        val tracker = AutomaticCachePlaybackTracker(this)
+        var count = 0
+        repeat(5) {
+            tracker.reset()
+            tracker.update(isPlaying = false) { count++ }
+            advanceTimeBy(10_000)
+        }
+        assertEquals(0, count)
+
+        tracker.update(isPlaying = true) { count++ }
+        runCurrent()
+        advanceTimeBy(4_999)
+        assertEquals(0, count)
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(1, count)
+        repeat(3) { tracker.update(isPlaying = true) { count++ } }
+        advanceTimeBy(10_000)
+        assertEquals(1, count)
+    }
+
+    @Test
+    fun pauseAndTransitionCancelUnqualifiedAutomaticCacheTimers() = runTest {
+        val tracker = AutomaticCachePlaybackTracker(this)
+        val recorded = mutableListOf<String>()
+        tracker.update(isPlaying = true) { recorded += "paused" }
+        runCurrent()
+        advanceTimeBy(2_000)
+        tracker.update(isPlaying = false) { recorded += "paused" }
+        advanceTimeBy(10_000)
+        assertTrue(recorded.isEmpty())
+
+        tracker.update(isPlaying = true) { recorded += "resumed" }
+        runCurrent()
+        advanceTimeBy(5_000)
+        runCurrent()
+        assertEquals(listOf("resumed"), recorded)
+
+        tracker.reset()
+        tracker.update(isPlaying = true) { recorded += "skipped" }
+        runCurrent()
+        advanceTimeBy(2_000)
+        tracker.reset()
+        tracker.update(isPlaying = true) { recorded += "next" }
+        runCurrent()
+        advanceTimeBy(5_000)
+        runCurrent()
+        assertEquals(listOf("resumed", "next"), recorded)
+    }
+
     @Test
     fun embeddedLyricsPreferReadableSourceLrcAndKeepTranslations() {
         val lyric = lyric(

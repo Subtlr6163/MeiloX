@@ -27,6 +27,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -40,6 +41,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.ljyh.mei.constants.PlayerStyle
 import com.ljyh.mei.constants.PlayerStyleKey
+import com.ljyh.mei.source.api.TrackRefCodec
 import com.ljyh.mei.ui.component.player.component.applemusic.AppleMusicProgressSlider
 import com.ljyh.mei.ui.local.LocalPlayerConnection
 import com.ljyh.mei.utils.TimeUtils.makeTimeString
@@ -54,38 +56,46 @@ fun FluidProgressSlider(
     onPositionChange: (Long) -> Unit,
     modifier: Modifier = Modifier,
     onTrackTopChanged: ((Float) -> Unit)? = null,
+    onQualityMenuVisibilityChanged: (Boolean) -> Unit = {},
+    viewportBounds: Rect? = null,
 ) {
     val playerStyle by rememberEnumPreference(PlayerStyleKey, PlayerStyle.AppleMusic)
     if (playerStyle == PlayerStyle.AppleMusic) {
-        AppleMusicProgressSlider(position, duration, onPositionChange, modifier, onTrackTopChanged)
+        AppleMusicProgressSlider(position, duration, onPositionChange, modifier, onTrackTopChanged,
+            onQualityMenuVisibilityChanged, viewportBounds)
         return
     }
     val playerConnection = LocalPlayerConnection.current
+    val qualityMediaId = playerConnection?.mediaMetadata?.collectAsStateWithLifecycle()?.value?.trackRef
+        ?.let(TrackRefCodec::mediaId)
     val musicQuality = playerConnection?.currentMusicQuality?.collectAsStateWithLifecycle()?.value
     val availableQualities = playerConnection?.availableMusicQualities?.collectAsStateWithLifecycle()?.value.orEmpty()
     val isLoadingQualities = playerConnection?.isLoadingMusicQualities?.collectAsStateWithLifecycle()?.value ?: false
     val localPlaybackInfo = playerConnection?.localPlaybackInfo?.collectAsStateWithLifecycle()?.value
     val isPlayingLocalSource = playerConnection?.isPlayingLocalSource?.collectAsStateWithLifecycle()?.value ?: false
-    val isDurationValid = remember(duration) { duration > 0 }
-    val valueRange = remember(duration) { 0f..(duration.takeIf { it > 0 } ?: 1).toFloat() }
+    val rail = playerRailClock(position, duration, qualityMediaId)
+    val displayDuration = rail.durationMs
+    val valueRange = remember(displayDuration) { 0f..displayDuration.coerceAtLeast(1).toFloat() }
 
     // 交互状态监听
-    val interactionSource = remember { MutableInteractionSource() }
+    val interactionSource = remember(rail.seekSession) { MutableInteractionSource() }
     val isUserDragging by interactionSource.collectIsDraggedAsState()
     val isUserPressed by interactionSource.collectIsPressedAsState()
 
     // Apple Music 的逻辑是：只要按住 (Pressed) 或者 拖拽 (Dragged)，条就会变粗
-    val isInteracting = isUserDragging || isUserPressed
+    val isInteracting = rail.seekEnabled && (isUserDragging || isUserPressed)
 
     // 内部拖拽位置状态
-    var rawDragPosition by remember { mutableFloatStateOf(0f) }
+    var rawDragPosition by remember(rail.seekSession) { mutableFloatStateOf(rail.positionMs.toFloat()) }
 
     // 计算当前显示的值
-    val sliderPosition = if (isUserDragging) {
+    val sliderPosition = if (rail.seekEnabled && isUserDragging) {
         rawDragPosition
     } else {
-        position.toFloat()
+        rail.positionMs.toFloat()
     }.coerceIn(valueRange)
+    val displayPosition = if (rail.showingIncoming && displayDuration <= 0) rail.positionMs
+        else sliderPosition.toLong()
 
     // --- Apple Music 风格动画核心 ---
 
@@ -125,14 +135,14 @@ fun FluidProgressSlider(
                 value = sliderPosition,
                 onValueChange = { rawDragPosition = it },
                 onValueChangeFinished = {
-                    if (isDurationValid) {
+                    if (rail.canCommitSeek()) {
                         onPositionChange(rawDragPosition.roundToLong())
                     }
                 },
                 valueRange = valueRange,
                 interactionSource = interactionSource,
                 modifier = Modifier.fillMaxWidth(),
-                enabled = isDurationValid,
+                enabled = rail.seekEnabled,
 
                 // 去掉默认的颜色处理，完全在 track/thumb 中自定义
                 colors = SliderDefaults.colors(
@@ -214,7 +224,7 @@ fun FluidProgressSlider(
 
             // 左侧：当前时间
             Text(
-                text = makeTimeString(sliderPosition.toLong()),
+                text = makeTimeString(displayPosition),
                 modifier = Modifier.weight(1f),
                 style = commonTextStyle,
                 color = Color.White.copy(alpha = 0.9f),
@@ -225,6 +235,7 @@ fun FluidProgressSlider(
             // 中间：音质 (复用你原本的逻辑)
             PlayerQualityDropdown(
                 quality = musicQuality,
+                mediaId = qualityMediaId,
                 availableQualities = availableQualities,
                 isLoading = isLoadingQualities,
                 localPlaybackInfo = localPlaybackInfo,
@@ -232,6 +243,8 @@ fun FluidProgressSlider(
                 onMenuOpened = { playerConnection?.refreshAvailableMusicQualities() },
                 onQualitySelected = { playerConnection?.changeQuality(it) },
                 onLocalSourceSelected = { playerConnection?.useLocalSource() },
+                onMenuVisibilityChanged = onQualityMenuVisibilityChanged,
+                viewportBounds = viewportBounds,
                 style = commonTextStyle.copy(fontSize = 10.sp),
                 color = Color.White.copy(alpha = 0.6f),
             )
@@ -240,7 +253,7 @@ fun FluidProgressSlider(
             // 这里为了兼容性，我先显示总时长，如果你想改剩余时间，可以改为:
             // "-" + makeTimeString(duration - sliderPosition.toLong())
             Text(
-                text = if (duration > 0) makeTimeString(duration) else "-:--",
+                text = if (displayDuration > 0) makeTimeString(displayDuration) else "-:--",
                 modifier = Modifier.weight(1f),
                 textAlign = TextAlign.End,
                 style = commonTextStyle,

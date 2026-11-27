@@ -1,5 +1,7 @@
 package com.ljyh.mei.ui.screen.playlist.component
 
+import com.ljyh.mei.ui.component.item.trackPressViewport
+import com.kyant.capsule.ContinuousRoundedRectangle
 import androidx.compose.ui.geometry.Rect
 
 import androidx.compose.foundation.background
@@ -20,7 +22,6 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -30,7 +31,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.stringResource
@@ -39,11 +39,15 @@ import androidx.paging.compose.LazyPagingItems
 import androidx.paging.compose.itemContentType
 import androidx.paging.compose.itemKey
 import com.ljyh.mei.constants.PlaylistTrackTableHeaderKey
+import com.ljyh.mei.data.model.mediaId
+import com.ljyh.mei.data.model.supportsNeteaseSongActions
 import com.ljyh.mei.data.model.MediaMetadata
-import com.ljyh.mei.ui.glass.LocalGlassColors
-import com.ljyh.mei.ui.glass.LocalGroupedListBackgroundAlpha
+import io.github.neoruaa.glasmio.core.LocalGlassColors
+import io.github.neoruaa.glasmio.core.LocalGroupedListBackgroundAlpha
+import io.github.neoruaa.glasmio.glass.GlasmioMenuAnchorState
 import com.ljyh.mei.ui.component.item.Track
 import com.ljyh.mei.utils.rememberPreference
+import com.ljyh.mei.ui.component.shimmer.ShimmerHost
 
 @Composable
 fun PlaylistTrackList(
@@ -57,7 +61,9 @@ fun PlaylistTrackList(
     onTrackDownload: ((MediaMetadata) -> Unit)? = null,
     lazyListState: LazyListState = rememberLazyListState(),
     contentPadding: PaddingValues = PaddingValues(0.dp),
-    emptyMessage: String? = null
+    emptyMessage: String? = null,
+    flatDetailStyle: Boolean = false,
+    menuAnchorState: GlasmioMenuAnchorState? = null,
 ) {
 
     val playlistTrackTableHeader by rememberPreference(PlaylistTrackTableHeaderKey,  false)
@@ -70,7 +76,7 @@ fun PlaylistTrackList(
 
         LazyColumn(
             state = lazyListState,
-            modifier = Modifier.weight(1f), // 占据剩余空间
+            modifier = Modifier.weight(1f).trackPressViewport(),
             contentPadding = contentPadding
         ) {
             if (headerContent != null) {
@@ -80,20 +86,44 @@ fun PlaylistTrackList(
             }
             // 如果是平板，可以在这里加一个 StickyHeader 作为“表头”
 
+            if (flatDetailStyle) {
+                playlistTrackItems(
+                    pagingItems = pagingItems, staticTracks = staticTracks,
+                    isTablet = false, showTableHeader = false,
+                    onTrackClick = onTrackClick, onMoreClick = onMoreClick,
+                    emptyMessage = emptyMessage, flatDetailStyle = true,
+                    showLeadingDivider = headerContent == null,
+                    menuAnchorState = menuAnchorState,
+                )
+                return@LazyColumn
+            }
+
             if (pagingItems != null) {
                 items(
                     count = pagingItems.itemCount,
-                    key = pagingItems.itemKey { it.id },
+                    key = pagingItems.itemKey { it.mediaId },
                     contentType = pagingItems.itemContentType { "Track" }
                 ) { index ->
                     val track = pagingItems[index]
                     if (track != null) {
-                        Track(
+                        if (flatDetailStyle) DetailTrackRow(
+                            track = track,
+                            trackNumber = index + 1,
+                            showArtwork = true,
+                            isCurrentTrack = false,
+                            isPlaying = false,
+                            isFavorite = false,
+                            onClick = { onTrackClick(track, index) },
+                            selected = null,
+                            onMoreClick = { onMoreClick(track, it) },
+                            menuAnchorState = menuAnchorState,
+                        ) else Track(
                             track = track,
                             index = index,
                             isTablet = isTablet,
                             onClick = { onTrackClick(track, index) },
-                            onMoreClick = { onMoreClick(track, it) }
+                            onMoreClick = { onMoreClick(track, it) },
+                            menuAnchorState = menuAnchorState,
                         )
                     }
                 }
@@ -101,13 +131,12 @@ fun PlaylistTrackList(
                 when (pagingItems.loadState.append) {
                     is LoadState.Loading -> {
                         item {
-                            Box(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .padding(16.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                CircularProgressIndicator(Modifier.size(24.dp))
+                            ShimmerHost {
+                                TrackItemShimmer(
+                                    isTablet = isTablet,
+                                    flatDetailStyle = flatDetailStyle,
+                                    showArtwork = true,
+                                )
                             }
                         }
                     }
@@ -151,13 +180,25 @@ fun PlaylistTrackList(
                         )
                     }
                 }
-                itemsIndexed(staticTracks, key = { _, item -> item.id }) { index, track ->
-                    Track(
+                itemsIndexed(staticTracks, key = { index, item -> "$index:${item.mediaId}" }) { index, track ->
+                    if (flatDetailStyle) DetailTrackRow(
+                        track = track,
+                        trackNumber = index + 1,
+                        showArtwork = true,
+                        isCurrentTrack = false,
+                        isPlaying = false,
+                        isFavorite = false,
+                        onClick = { onTrackClick(track, index) },
+                        selected = null,
+                        onMoreClick = { onMoreClick(track, it) },
+                        menuAnchorState = menuAnchorState,
+                    ) else Track(
                         track = track,
                         index = index,
                         isTablet = isTablet,
                         onClick = { onTrackClick(track, index) },
-                        onMoreClick = { onMoreClick(track, it) }
+                        onMoreClick = { onMoreClick(track, it) },
+                        menuAnchorState = menuAnchorState,
                     )
                 }
             }
@@ -183,10 +224,14 @@ fun LazyListScope.playlistTrackItems(
     selectedTrackIds: Set<String> = emptySet(),
     flatDetailStyle: Boolean = false,
     showArtwork: Boolean = true,
+    showDuration: Boolean = false,
     currentTrackId: String? = null,
     trackNumbers: Map<Long, Int> = emptyMap(),
+    trackNumber: ((MediaMetadata, Int) -> Int)? = null,
     isPlaying: Boolean = false,
     favoriteTrackIds: Set<String> = emptySet(),
+    showLeadingDivider: Boolean = true,
+    menuAnchorState: GlasmioMenuAnchorState? = null,
 ) {
     val itemCount = pagingItems?.itemCount ?: staticTracks.size
     val showsTableHeader = isTablet && showTableHeader && !flatDetailStyle
@@ -209,37 +254,40 @@ fun LazyListScope.playlistTrackItems(
     if (pagingItems != null) {
         items(
             count = pagingItems.itemCount,
-            key = pagingItems.itemKey { it.id },
+            key = pagingItems.itemKey { it.mediaId },
             contentType = pagingItems.itemContentType { "Track" },
         ) { index ->
             val track = pagingItems[index]
             if (track != null) {
                 PlaylistSurface(
-                    isFirst = index == 0 && !showsTableHeader,
+                    isFirst = index == 0 && !showsTableHeader && (!flatDetailStyle || showLeadingDivider),
                     isLast = index == itemCount - 1 && !hasAppendFooter,
                     flatDetailStyle = flatDetailStyle,
                 ) {
                     if (flatDetailStyle) {
                         DetailTrackRow(
                             track = track,
-                            trackNumber = trackNumbers[track.id] ?: index + 1,
+                            trackNumber = trackNumber?.invoke(track, index) ?: trackNumbers[track.id] ?: index + 1,
                             showArtwork = showArtwork,
-                            isCurrentTrack = track.id.toString() == currentTrackId,
+                            showDuration = showDuration,
+                            isCurrentTrack = track.mediaId == currentTrackId,
                             isPlaying = isPlaying,
-                            isFavorite = !track.isLocal && !track.isPodcast && track.id > 0 &&
-                                track.id.toString() in favoriteTrackIds,
+                            isFavorite = track.mediaId in favoriteTrackIds,
                             onClick = { onTrackClick(track, index) },
                             onMoreClick = if (selectionMode) null else { { onMoreClick(track, it) } },
-                            selected = if (selectionMode) track.id.toString() in selectedTrackIds else null,
+                            menuAnchorState = menuAnchorState,
+                            selected = if (selectionMode) track.mediaId in selectedTrackIds else null,
                         )
                     } else {
                         Track(
                             track = track,
                             index = index,
                             isTablet = isTablet,
+                            showPressIndication = true,
                             onClick = { onTrackClick(track, index) },
                             onMoreClick = if (selectionMode) null else { { onMoreClick(track, it) } },
-                            selected = if (selectionMode) track.id.toString() in selectedTrackIds else null,
+                            menuAnchorState = menuAnchorState,
+                            selected = if (selectionMode) track.mediaId in selectedTrackIds else null,
                         )
                     }
                     if (index < itemCount - 1 || hasAppendFooter) {
@@ -260,11 +308,13 @@ fun LazyListScope.playlistTrackItems(
         when (pagingItems.loadState.append) {
             is LoadState.Loading -> item(key = "playlist-append-loading") {
                 PlaylistSurface(isFirst = false, isLast = true, flatDetailStyle = flatDetailStyle) {
-                    Box(
-                        Modifier.fillMaxWidth().padding(18.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                    ShimmerHost {
+                        TrackItemShimmer(
+                            isTablet = isTablet,
+                            flatDetailStyle = flatDetailStyle,
+                            showArtwork = showArtwork,
+                            showDuration = showDuration,
+                        )
                     }
                 }
             }
@@ -282,33 +332,36 @@ fun LazyListScope.playlistTrackItems(
             else -> Unit
         }
     } else {
-        itemsIndexed(staticTracks, key = { _, item -> item.id }) { index, track ->
+        itemsIndexed(staticTracks, key = { index, item -> "$index:${item.mediaId}" }) { index, track ->
             PlaylistSurface(
-                isFirst = index == 0,
+                isFirst = index == 0 && (!flatDetailStyle || showLeadingDivider),
                 isLast = index == staticTracks.lastIndex,
                 flatDetailStyle = flatDetailStyle,
             ) {
                 if (flatDetailStyle) {
                     DetailTrackRow(
                         track = track,
-                        trackNumber = trackNumbers[track.id] ?: index + 1,
+                        trackNumber = trackNumber?.invoke(track, index) ?: trackNumbers[track.id] ?: index + 1,
                         showArtwork = showArtwork,
-                        isCurrentTrack = track.id.toString() == currentTrackId,
+                        showDuration = showDuration,
+                        isCurrentTrack = track.mediaId == currentTrackId,
                         isPlaying = isPlaying,
-                        isFavorite = !track.isLocal && !track.isPodcast && track.id > 0 &&
-                            track.id.toString() in favoriteTrackIds,
+                        isFavorite = track.mediaId in favoriteTrackIds,
                         onClick = { onTrackClick(track, index) },
                         onMoreClick = if (selectionMode) null else { { onMoreClick(track, it) } },
-                        selected = if (selectionMode) track.id.toString() in selectedTrackIds else null,
+                        menuAnchorState = menuAnchorState,
+                        selected = if (selectionMode) track.mediaId in selectedTrackIds else null,
                     )
                 } else {
                     Track(
                         track = track,
                         index = index,
                         isTablet = isTablet,
+                        showPressIndication = true,
                         onClick = { onTrackClick(track, index) },
                         onMoreClick = if (selectionMode) null else { { onMoreClick(track, it) } },
-                        selected = if (selectionMode) track.id.toString() in selectedTrackIds else null,
+                        menuAnchorState = menuAnchorState,
+                        selected = if (selectionMode) track.mediaId in selectedTrackIds else null,
                     )
                 }
                 if (index < staticTracks.lastIndex) {
@@ -366,7 +419,7 @@ internal fun PlaylistSurface(
     }
     val colors = LocalGlassColors.current
     val backgroundAlpha = LocalGroupedListBackgroundAlpha.current.coerceIn(0f, 1f)
-    val shape = RoundedCornerShape(
+    val shape = ContinuousRoundedRectangle(
         topStart = if (isFirst) 26.dp else 0.dp,
         topEnd = if (isFirst) 26.dp else 0.dp,
         bottomStart = if (isLast) 26.dp else 0.dp,

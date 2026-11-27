@@ -1,0 +1,1835 @@
+package io.github.neoruaa.glasmio.sample
+
+import android.os.Build
+import android.os.Bundle
+import android.graphics.Typeface
+import android.graphics.BitmapFactory
+import android.graphics.fonts.Font as NativeFont
+import android.graphics.fonts.FontFamily as NativeFontFamily
+import android.graphics.fonts.FontStyle as NativeFontStyle
+import android.content.pm.PackageManager
+import android.content.Context
+import android.content.res.Configuration
+import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.material3.Text
+import androidx.compose.material3.Typography
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.snapshots.SnapshotStateList
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.AbsoluteAlignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.LocalFontFamilyResolver
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.AndroidFont
+import androidx.compose.ui.text.font.FontLoadingStrategy
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontVariation
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.unit.IntOffset
+import androidx.core.view.WindowCompat
+import androidx.navigation3.runtime.NavEntry
+import androidx.navigation3.scene.Scene
+import io.github.neoruaa.glasmio.scaffold.navigation.GlasmioNavDisplay
+import io.github.neoruaa.glasmio.scaffold.navigation.GlasmioNavHeaderMotion
+import androidx.navigation3.ui.NavDisplay
+import androidx.navigation3.ui.NavDisplayTransitionEffects
+import io.github.neoruaa.glasmio.scaffold.navigation.iosTransitionSpec
+import io.github.neoruaa.glasmio.scaffold.navigation.iosPopTransitionSpec
+import io.github.neoruaa.glasmio.scaffold.navigation.iosPredictivePopTransitionSpec
+import com.kyant.capsule.ContinuousRoundedRectangle
+import io.github.neoruaa.glasmio.glass.render.isRuntimeShaderSupported
+import io.github.neoruaa.glasmio.glass.render.Backdrop
+import io.github.neoruaa.glasmio.glass.render.LocalGlassAdaptiveLuminanceRange
+import io.github.neoruaa.glasmio.glass.render.backdrops.LayerBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.rememberLayerBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.rememberCombinedBackdrop
+import com.kyant.shapes.Capsule
+import io.github.neoruaa.glasmio.core.*
+import io.github.neoruaa.glasmio.glass.*
+import io.github.neoruaa.glasmio.icons.*
+import io.github.neoruaa.glasmio.icons.R as GlasmioIconsR
+import io.github.neoruaa.glasmio.preference.*
+import io.github.neoruaa.glasmio.scaffold.*
+import io.github.neoruaa.glasmio.ui.*
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
+import java.io.IOException
+import kotlin.math.roundToInt
+
+private data class SampleAssets(
+    val symbolTypeface: Typeface?,
+    val typography: Typography,
+    val lightWallpaper: ImageBitmap,
+    val darkWallpaper: ImageBitmap,
+)
+
+/** Process-owned immutable assets; no Activity, View, or Context is retained. */
+private object SampleAssetCache {
+    private var assets: SampleAssets? = null
+
+    @Synchronized
+    fun load(applicationContext: Context): SampleAssets {
+        assets?.let { return it }
+        val baseFont = try {
+            NativeFont.Builder(applicationContext.assets, "glasmio_symbols.ttf").build()
+        } catch (_: IOException) {
+            null
+        }
+        val italicFont = if (baseFont == null) null else try {
+            NativeFont.Builder(applicationContext.assets, "glasmio_italic.ttf").build()
+        } catch (_: IOException) {
+            null
+        }
+        return SampleAssets(
+            symbolTypeface = baseFont?.let(::sampleTypeface),
+            typography = baseFont?.let { sampleTypography(it, italicFont) } ?: glasmioTypography(),
+            lightWallpaper = requireNotNull(BitmapFactory.decodeResource(applicationContext.resources, R.drawable.ios27_wallpaper_light)).apply { prepareToDraw() }.asImageBitmap(),
+            darkWallpaper = requireNotNull(BitmapFactory.decodeResource(applicationContext.resources, R.drawable.ios27_wallpaper_dark)).apply { prepareToDraw() }.asImageBitmap(),
+        ).also { assets = it }
+    }
+}
+
+private val LocalSampleAssets = staticCompositionLocalOf<SampleAssets> { error("Sample assets are not loaded") }
+private val topLevelRoutes = setOf("Home", "MaterialTab", "SettingsTab", "About")
+private val wallpaperRoutes = setOf("MaterialTab", "Materials")
+
+class MainActivity : ComponentActivity() {
+    private var appDarkAppearance: Boolean? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        val initialPreferences = DemoPreferences.load(this,
+            (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES)
+        appDarkAppearance = initialPreferences.dark
+        io.github.neoruaa.glasmio.glass.render.configureGlassDynamicRange(window, initialPreferences.hdrOutput)
+        val systemBarStyle = SystemBarStyle.auto(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT) { resources ->
+            appDarkAppearance ?: ((resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES)
+        }
+        enableEdgeToEdge(statusBarStyle = systemBarStyle, navigationBarStyle = systemBarStyle)
+        setContent {
+            // Persistent host settings take precedence over an old saved-instance snapshot.
+            var preferences by remember { mutableStateOf(initialPreferences) }
+            fun updatePreferences(next: DemoPreferences) {
+                if (next == preferences) return
+                val outputChanged = next.hdrOutput != preferences.hdrOutput
+                next.save(applicationContext)
+                preferences = next
+                if (outputChanged) recreate()
+            }
+            val dark = preferences.dark
+            val reduceTransparency = preferences.reduceTransparency
+            val rtl = preferences.rtl
+            val context = LocalContext.current.applicationContext
+            val fontResolver = LocalFontFamilyResolver.current
+            val assets by produceState<SampleAssets?>(null, context, fontResolver) {
+                value = withContext(Dispatchers.IO) {
+                    val cachedAssets = SampleAssetCache.load(context)
+                    val typography = cachedAssets.typography
+                    listOf(
+                        typography.displayLarge, typography.displayMedium, typography.displaySmall,
+                        typography.headlineLarge, typography.headlineMedium, typography.headlineSmall,
+                        typography.titleLarge, typography.titleMedium, typography.titleSmall,
+                        typography.bodyLarge, typography.bodyMedium, typography.bodySmall,
+                        typography.labelLarge, typography.labelMedium, typography.labelSmall,
+                    ).mapNotNull { it.fontFamily }.distinct().forEach { fontResolver.preload(it) }
+                    cachedAssets
+                }
+            }
+            val darkAppearance = dark
+            SideEffect {
+                appDarkAppearance = darkAppearance
+                WindowCompat.getInsetsController(window, window.decorView).apply {
+                    isAppearanceLightStatusBars = !darkAppearance
+                    isAppearanceLightNavigationBars = !darkAppearance
+                }
+            }
+            val loadedAssets = assets
+            if (loadedAssets == null) {
+                Box(Modifier.fillMaxSize().background(if (dark) Color.Black else Color.White))
+            } else {
+                GlasmioIconProvider(symbolTypeface = loadedAssets.symbolTypeface) {
+                    GlasmioTheme(
+                        isDark = dark,
+                        typography = loadedAssets.typography,
+                        appearance = GlassAppearance(reduceTransparency = reduceTransparency),
+                    ) {
+                        CompositionLocalProvider(
+                            LocalSampleAssets provides loadedAssets,
+                            LocalLayoutDirection provides if (rtl) LayoutDirection.Rtl else LayoutDirection.Ltr,
+                        ) {
+                            Box(Modifier.fillMaxSize()) {
+                                SampleNavigation(
+                                    dark, { updatePreferences(preferences.copy(dark = it)) },
+                                    reduceTransparency, { updatePreferences(preferences.copy(reduceTransparency = it)) },
+                                    rtl, { updatePreferences(preferences.copy(rtl = it)) },
+                                    preferences.hdrEffects, { updatePreferences(preferences.copy(hdrEffects = it)) },
+                                    preferences.fpsCounter, { updatePreferences(preferences.copy(fpsCounter = it)) },
+                                    preferences.separateNavigationItem, { updatePreferences(preferences.copy(separateNavigationItem = it)) },
+                                )
+                                if (preferences.fpsCounter) DemoFpsCounter(
+                                    Modifier.align(Alignment.TopEnd).statusBarsPadding()
+                                        .windowInsetsPadding(WindowInsets.captionBar.only(WindowInsetsSides.Top))
+                                        .padding(top = 70.dp, end = 12.dp).testTag("demo-fps-counter"),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Every variation retains the same native font buffer; the asset is read only once. */
+private fun sampleTypeface(font: NativeFont): Typeface =
+    Typeface.CustomFallbackBuilder(NativeFontFamily.Builder(font).build()).setStyle(font.style).build()
+
+private class SampleFont(
+    override val weight: FontWeight,
+    val typeface: Typeface,
+    override val style: FontStyle = FontStyle.Normal,
+) : AndroidFont(
+    loadingStrategy = FontLoadingStrategy.Blocking,
+    typefaceLoader = SampleFontLoader,
+    variationSettings = FontVariation.Settings(),
+)
+
+private object SampleFontLoader : AndroidFont.TypefaceLoader {
+    override fun loadBlocking(context: Context, font: AndroidFont): Typeface = (font as SampleFont).typeface
+    override suspend fun awaitLoad(context: Context, font: AndroidFont): Typeface = loadBlocking(context, font)
+}
+
+/** Compose sees real weight entries; their Typefaces clone the shared native Font data. */
+private fun sampleTypography(baseFont: NativeFont, italicFont: NativeFont?): Typography {
+    val base = glasmioTypography()
+    val families = mutableMapOf<Float, FontFamily>()
+    val typefaces = mutableMapOf<Triple<Float, Float, FontStyle>, Typeface>()
+    val weights = listOf(400 to 400f, 500 to 510f, 510 to 510f, 590 to 590f, 591 to 590.7999878f, 600 to 590f, 700 to 700f)
+    val fontStyles = if (italicFont == null) listOf(FontStyle.Normal) else listOf(FontStyle.Normal, FontStyle.Italic)
+    fun resolve(style: TextStyle): TextStyle {
+        val opticalSize = style.fontSize.value.coerceIn(17f, 28f)
+        val family = families.getOrPut(opticalSize) {
+            FontFamily(weights.flatMap { (request, axis) ->
+                fontStyles.map { fontStyle ->
+                    // Named SF Pro Italic instances carry a YAXS value as well as weight.
+                    val (weightAxis, italicYAxis) = if (fontStyle == FontStyle.Italic) {
+                        when (request) {
+                            500, 510 -> 508f to 436f
+                            590, 591, 600 -> 590.800003f to 419.199997f
+                            700 -> 700f to 430f
+                            else -> axis to 400f
+                        }
+                    } else axis to 400f
+                    val typeface = typefaces.getOrPut(Triple(weightAxis, opticalSize, fontStyle)) {
+                        val source = if (fontStyle == FontStyle.Italic) requireNotNull(italicFont) else baseFont
+                        val axes = "'wght' $weightAxis, 'opsz' $opticalSize" +
+                            if (fontStyle == FontStyle.Italic) ", 'YAXS' $italicYAxis" else ""
+                        val variation = NativeFont.Builder(source)
+                            .setWeight(weightAxis.roundToInt())
+                            .setSlant(if (fontStyle == FontStyle.Italic) NativeFontStyle.FONT_SLANT_ITALIC else NativeFontStyle.FONT_SLANT_UPRIGHT)
+                            .setFontVariationSettings(axes)
+                            .build()
+                        sampleTypeface(variation)
+                    }
+                    SampleFont(FontWeight(request), typeface, fontStyle)
+                }
+            })
+        }
+        return style.copy(fontFamily = family)
+    }
+    return base.copy(
+        displayLarge = resolve(base.displayLarge),
+        displayMedium = resolve(base.displayMedium),
+        displaySmall = resolve(base.displaySmall),
+        headlineLarge = resolve(base.headlineLarge),
+        headlineMedium = resolve(base.headlineMedium),
+        headlineSmall = resolve(base.headlineSmall),
+        titleLarge = resolve(base.titleLarge),
+        titleMedium = resolve(base.titleMedium),
+        titleSmall = resolve(base.titleSmall),
+        bodyLarge = resolve(base.bodyLarge),
+        bodyMedium = resolve(base.bodyMedium),
+        bodySmall = resolve(base.bodySmall),
+        labelLarge = resolve(base.labelLarge),
+        labelMedium = resolve(base.labelMedium),
+        labelSmall = resolve(base.labelSmall),
+    )
+}
+
+@Composable
+private fun SampleNavigation(
+    dark: Boolean,
+    onDark: (Boolean) -> Unit,
+    reduceTransparency: Boolean,
+    onReduceTransparency: (Boolean) -> Unit,
+    rtl: Boolean,
+    onRtl: (Boolean) -> Unit,
+    hdrEffects: Boolean,
+    onHdrEffects: (Boolean) -> Unit,
+    fpsCounter: Boolean,
+    onFpsCounter: (Boolean) -> Unit,
+    detachTrailingItem: Boolean,
+    onDetachTrailingItem: (Boolean) -> Unit,
+) {
+    val layoutDirection = LocalLayoutDirection.current
+    val navigationDensity = LocalDensity.current.density
+    val topLevelKeys = rememberSaveable(
+        saver = listSaver<Map<String, String>, String>(
+            save = { map -> map.entries.flatMap { listOf(it.key, it.value) } },
+            restore = { list -> list.chunked(2).associate { (k, v) -> k to v } },
+        ),
+    ) { topLevelRoutes.associateWith { sampleEntryKey(it) } }
+    val retainedTopLevelKeys = remember(topLevelKeys) { topLevelKeys.values.toSet() }
+    val backStack = rememberSaveable(
+        saver = listSaver<SnapshotStateList<String>, String>(save = { it.toList() }, restore = { it.toMutableStateList() }),
+    ) { mutableStateListOf(topLevelKeys.getValue("Home")) }
+    val homeListState = rememberLazyListState()
+    val materialsListState = rememberLazyListState()
+    val settingsListState = rememberLazyListState()
+    val aboutListState = rememberLazyListState()
+    val rootListStates = remember(homeListState, materialsListState, settingsListState, aboutListState) {
+        mapOf("Home" to homeListState, "MaterialTab" to materialsListState, "SettingsTab" to settingsListState, "About" to aboutListState)
+    }
+    var searchQuery by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue()) }
+    var searchSourceBounds by remember { mutableStateOf<Rect?>(null) }
+    val currentRoute = rememberUpdatedState(backStack.lastOrNull()?.sampleRouteName())
+    val searchTransition = rememberGlasmioSearchTransition(currentRoute.value == "Search")
+    val navigationScrollState = rememberGlasmioNavigationScrollState(
+        listState = rootListStates[currentRoute.value] ?: homeListState,
+        enabled = currentRoute.value in topLevelRoutes,
+    )
+    val compactProgress = navigationScrollState.compactProgress
+    val currentDark by rememberUpdatedState(dark)
+    val currentOnDark by rememberUpdatedState(onDark)
+    val currentReduceTransparency by rememberUpdatedState(reduceTransparency)
+    val currentOnReduceTransparency by rememberUpdatedState(onReduceTransparency)
+    val currentRtl by rememberUpdatedState(rtl)
+    val currentOnRtl by rememberUpdatedState(onRtl)
+    val currentHdrEffects by rememberUpdatedState(hdrEffects)
+    val currentOnHdrEffects by rememberUpdatedState(onHdrEffects)
+    val currentFpsCounter by rememberUpdatedState(fpsCounter)
+    val currentOnFpsCounter by rememberUpdatedState(onFpsCounter)
+    val currentDetachTrailingItem by rememberUpdatedState(detachTrailingItem)
+    val currentOnDetachTrailingItem by rememberUpdatedState(onDetachTrailingItem)
+    val navigate: (String) -> Unit = { route ->
+        if (backStack.lastOrNull()?.sampleRouteName() != route) {
+            backStack.add(sampleEntryKey(route))
+        }
+    }
+    val navigateBack: () -> Unit = {
+        if (backStack.size > 1) {
+            val target = backStack[backStack.lastIndex - 1].sampleRouteName()
+            backStack.removeAt(backStack.lastIndex)
+        }
+    }
+    val selectTab: (String) -> Unit = { route ->
+        if (backStack.lastOrNull()?.sampleRouteName() != route) {
+            backStack.clear()
+            backStack.add(topLevelKeys.getValue("Home"))
+            if (route != "Home") backStack.add(topLevelKeys[route] ?: sampleEntryKey(route))
+        }
+    }
+    val navigationBackdrop = rememberLayerBackdrop()
+    val headerMotion = remember {
+        GlasmioNavHeaderMotion(backStack.last()) { from, to, pop ->
+            if ((from as? String)?.sampleRouteName() in topLevelRoutes && (to as? String)?.sampleRouteName() in topLevelRoutes) GlasmioNavigationOperation.Tab
+            else if (pop) GlasmioNavigationOperation.Pop else GlasmioNavigationOperation.Push
+        }
+    }
+    val headerEntries = remember { mutableMapOf<String, SampleHeaderEntry>() }
+    fun headerEntry(key: String): SampleHeaderEntry = headerEntries.getOrPut(key) {
+        SampleHeaderEntry()
+    }
+    SideEffect {
+        val frame = headerMotion.frame.value
+        headerEntries.keys.retainAll(backStack.toSet() + retainedTopLevelKeys + setOf(frame.fromEntryKey, frame.toEntryKey))
+    }
+    val bottomBackdrop = rememberSharedGlassBackdrop(navigationBackdrop, navigationBackdrop)
+    val adaptiveNavigation = rememberGlasmioAdaptiveNavigationState()
+    val navigationLayout = glasmioNavigationLayout()
+    val topTabs = navigationLayout == GlasmioNavigationLayout.TopTabs
+    val currentTopTabs by rememberUpdatedState(topTabs)
+    val tabItems = sampleTabItems(currentRoute.value ?: "Home")
+    val selectedRoot = backStack.asReversed().firstOrNull { it.sampleRouteName() in topLevelRoutes }
+        ?.sampleRouteName() ?: "Home"
+    val editingValue = rememberSaveable(stateSaver = TextFieldValue.Saver) {
+        mutableStateOf(TextFieldValue("Hello World"))
+    }
+    val editingActions = textEditingDemoActions(editingValue, navigationBackdrop)
+    GlasmioTextSelectionHost(
+        backdrop = navigationBackdrop,
+        additionalItems = if (currentRoute.value == "Text Editing") editingActions.items else emptyList(),
+    ) {
+        editingActions.dialog()
+        GlasmioAdaptiveNavigationScaffold(
+            state = adaptiveNavigation,
+            contentBackdrop = navigationBackdrop,
+            layout = navigationLayout,
+            extendContentUnderSidebar = currentRoute.value != "Materials" && currentRoute.value != "MaterialTab",
+            sidebar = {
+                SampleSidebar(adaptiveNavigation, tabItems, selectedRoot, selectTab, navigate)
+            },
+        ) {
+        GlasmioFloatingSearch(
+            active = currentRoute.value == "Search",
+            query = searchQuery,
+            onQueryChange = { searchQuery = it },
+            onSearch = {},
+            onDismiss = navigateBack,
+            placeholder = "Search Components",
+            cancelLabel = "Cancel",
+            backdrop = navigationBackdrop,
+            transition = searchTransition,
+            sourceBoundsInWindow = searchSourceBounds,
+            results = { padding -> SearchResults(searchQuery.text, padding, navigate) },
+        ) {
+            Box(Modifier.fillMaxSize().nestedScroll(navigationScrollState.nestedScrollConnection)) {
+                GlasmioNavigationScaffold(
+                    contentBackdrop = navigationBackdrop,
+                    motion = headerMotion,
+                    header = { entryKey ->
+                        val key = entryKey as String
+                        val route = key.sampleRouteName()
+                        val entry = headerEntry(key)
+                        val appearanceAction = GlasmioHeaderAction(
+                            key = "appearance.toggle", visualKey = if (dark) "sun.max" else "moon",
+                            contentDescription = if (dark) "Light appearance" else "Dark appearance",
+                            onClick = { currentOnDark(!currentDark) },
+                        ) { SfIcon(if (dark) "sun.max" else "moon", null) }
+                        GlasmioHeaderSpec(
+                            title = when (route) { "Home" -> "Glasmio"; "MaterialTab" -> "Materials"; "SettingsTab" -> "Settings"; "About" -> "About"; else -> route },
+                            leading = if (route in topLevelRoutes) emptyList() else listOf(GlasmioHeaderGroup("navigation", listOf(
+                                GlasmioHeaderAction("navigation.back", "chevron.backward", "Back", navigateBack) { SfIcon(SfSymbol.ChevronBack, null, mirrored = true) },
+                            ))),
+                            trailing = listOf(GlasmioHeaderGroup("primary", entry.actions ?: listOf(appearanceAction))),
+                            scrollState = entry.scroll,
+                        )
+                    },
+                    topBar = if (topTabs) ({ availableWidth ->
+                        GlasmioTabBar(
+                            items = tabItems,
+                            selectedKey = if (currentRoute.value == "Search") "Search" else selectedRoot,
+                            searchKey = "Search",
+                            onSelected = selectTab,
+                            onSearchClick = { navigate("Search") },
+                            onSidebarToggle = adaptiveNavigation::toggleSidebar,
+                            sidebarToggleLabel = if (adaptiveNavigation.sidebarExpanded) "Hide Sidebar" else "Show Sidebar",
+                            onSearchBoundsChanged = { searchSourceBounds = it },
+                            modifier = Modifier.widthIn(max = minOf(560.dp, availableWidth))
+                                .onGloballyPositioned { adaptiveNavigation.tabBarBounds.value = it.boundsInWindow() },
+                        )
+                    }) else null,
+                ) { headerPadding ->
+                CompositionLocalProvider(LocalSampleBodyPadding provides headerPadding) {
+                Box(Modifier.fillMaxSize()) {
+                    GlasmioNavDisplay(
+                        motion = headerMotion,
+                        backStack = backStack,
+                        modifier = Modifier.fillMaxSize(),
+                        retainedTabKeys = retainedTopLevelKeys,
+                        onBack = navigateBack,
+                        transitionSpec = {
+                            if (usesRootTabTransition()) rootTabTransition()
+                            else iosTransitionSpec<String>(layoutDirection, navigationDensity).invoke(this)
+                        },
+                        popTransitionSpec = {
+                            if (usesRootTabTransition()) rootTabTransition()
+                            else iosPopTransitionSpec<String>(layoutDirection, navigationDensity).invoke(this)
+                        },
+                        predictivePopTransitionSpec = { swipeEdge ->
+                            if (usesRootTabTransition()) rootTabTransition()
+                            else iosPredictivePopTransitionSpec<String>(layoutDirection, navigationDensity).invoke(this, swipeEdge)
+                        },
+                        entryProvider = { entryKey ->
+                            NavEntry(key = entryKey, contentKey = entryKey) {
+                                val route = entryKey.sampleRouteName()
+                                val entryListState = rootListStates[route] ?: rememberLazyListState()
+                                CompositionLocalProvider(LocalSampleHeaderEntry provides headerEntry(entryKey)) {
+                                val wallpaper = route in wallpaperRoutes
+                                val overlay: @Composable BoxScope.(LayerBackdrop) -> Unit = { source ->
+                                        val isTopLevel = route in topLevelRoutes
+                                        val navigationInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+                                        val bottomPadding = navigationInset + if (!currentTopTabs && (isTopLevel || route == "Search")) NavigationBarSurfaceHeight + 8.dp else 0.dp
+                                        // Reuse GlasmioNavigationScaffold's navigationBackdrop directly for modal blur consumers
+                                        // instead of nesting an extra full-screen LayerBackdrop inside every page.
+                                        CompositionLocalProvider(LocalBlurBackdrop provides navigationBackdrop) {
+                                            Box(Modifier.fillMaxSize()) {
+                                                Box(Modifier.fillMaxSize()) {
+                                                    if (route == "Adaptive Glass") {
+                                                        AdaptiveGlassDemo(bottomPadding)
+                                                    } else if (route == "Lists") {
+                                                        ListDemo()
+                                                    } else if (route == "Menus") {
+                                                        MenusDemo(bottomPadding, currentDark, currentOnDark)
+                                                    } else {
+                                                        val title = when (route) {
+                                                            "Home" -> "Glasmio"
+                                                            "MaterialTab" -> "Materials"
+                                                            "SettingsTab" -> "Settings"
+                                                            "About" -> "About"
+                                                            else -> route
+                                                        }
+                                                        SamplePinnedPage(
+                                                            title = title,
+                                                            bottomPadding = bottomPadding,
+                                                            wallpaper = source.takeIf { wallpaper },
+                                                            listState = entryListState,
+                                                            alwaysCompact = route == "Text Editing",
+                                                            topPaddingAdjustment = if (currentTopTabs && route == "Search")
+                                                                GlasmioAdaptiveNavigationDefaults.SearchTopPadding + 56.dp - 72.dp else 0.dp,
+                                                            backgroundColor = if (route == "Text Editing") {
+                                                                if (LocalGlassColors.current.isDark) Color.Black else Color.White
+                                                            } else LocalGlassColors.current.groupedBackground,
+                                                        ) { layout ->
+                                                            when (route) {
+                                                                "Home" -> Catalog(layout, navigate)
+                                                                "MaterialTab", "Materials" -> MaterialsDemo(layout, navigate)
+                                                                "Controls" -> ControlsDemo(layout)
+                                                                "Navigation" -> NavigationDemo(layout)
+                                                                "SettingsTab" -> DemoSettings(
+                                                                    layout, currentDark, currentOnDark, currentReduceTransparency,
+                                                                    currentOnReduceTransparency, currentRtl, currentOnRtl,
+                                                                    currentDetachTrailingItem, currentOnDetachTrailingItem,
+                                                                    currentHdrEffects, currentOnHdrEffects,
+                                                                    currentFpsCounter, currentOnFpsCounter,
+                                                                )
+                                                                "Search" -> SearchLanding(layout, navigate)
+                                                                "Text Styles and Dynamic Type" -> TypographyDemo(layout.listState, layout.padding) {
+                                                                    SampleLargeTitle(layout.title, layout.collapseProgress)
+                                                                }
+                                                                "Text Editing" -> TextEditingDemo(editingValue, layout.padding)
+                                                                "Messages" -> MessageBubblesDemo(layout.listState, layout.padding) {
+                                                                    SampleLargeTitle(layout.title, layout.collapseProgress)
+                                                                }
+                                                                "Sheets" -> SheetsDemo(layout)
+                                                                "About" -> AboutDemo(layout)
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                GlasmioPageTitle(entryKey)
+                                            }
+                                        }
+                                    }
+                                if (route != "Adaptive Glass" && !wallpaper) {
+                                    // Declaring the uniform source lets moving glass keep its result.
+                                    GlasmioBackdropHost(
+                                        sampledColor = LocalGlassColors.current.groupedBackground,
+                                        modifier = Modifier.fillMaxSize(),
+                                        overlayContent = overlay,
+                                    )
+                                } else {
+                                    GlasmioBackdropHost(
+                                        modifier = Modifier.fillMaxSize(),
+                                        sampledContentClipped = wallpaper,
+                                        sampledContent = { source ->
+                                            if (wallpaper) {
+                                                // The page background replays this image, including in modal captures.
+                                                SampleWallpaper(Modifier.drawWithContent {
+                                                    if (drawContext.graphicsLayer === source.graphicsLayer) drawContent()
+                                                }.graphicsLayer())
+                                            } else AdaptiveGlassBackdrop()
+                                        },
+                                        overlayContent = overlay,
+                                    )
+                                }
+                                }
+                            }
+                        },
+                    )
+                }
+                }
+                }
+                val activeRoute = currentRoute.value
+                val searchMorph = searchTransition.progressState.value.coerceIn(0f, 1f)
+                if (!topTabs && activeRoute != null && (activeRoute in topLevelRoutes || searchMorph > 0f)) {
+                    GlasmioBackdropProvider(bottomBackdrop) {
+                        SampleBottomBar(
+                            selected = activeRoute,
+                            onSelected = selectTab,
+                            onSearch = { navigate("Search") },
+                            detachTrailingItem = detachTrailingItem,
+                            onItemBoundsChanged = { key, bounds -> if (key == "Search") searchSourceBounds = bounds },
+                            modifier = Modifier.align(Alignment.BottomCenter)
+                                .graphicsLayer {
+                                    alpha = 1f - searchMorph
+                                    val scale = 1f - 0.08f * searchMorph
+                                    scaleX = scale
+                                    scaleY = scale
+                                    transformOrigin = androidx.compose.ui.graphics.TransformOrigin(
+                                        if (layoutDirection == LayoutDirection.Rtl) 0f else 1f,
+                                        1f,
+                                    )
+                                },
+                            backdrop = bottomBackdrop,
+                            compactProgress = compactProgress,
+                            scrollHintProgress = navigationScrollState.scrollHintProgress,
+                            onExpand = navigationScrollState::expand,
+                        )
+                    }
+                }
+            }
+        }
+        }
+    }
+}
+
+@Composable
+private fun sampleTabItems(selected: String): List<GlasmioTabItem<String>> = listOf(
+    GlasmioTabItem("Home", "Home", if (selected == "Home") SfSymbol.HouseFilled else SfSymbol.House),
+    GlasmioTabItem("MaterialTab", "Materials", SfSymbol.Layers),
+    GlasmioTabItem("SettingsTab", "Settings", SfSymbol.Gearshape),
+    GlasmioTabItem("About", "About", SfSymbol.InfoCircle),
+)
+
+@Composable
+private fun SampleSidebar(
+    state: GlasmioAdaptiveNavigationState,
+    tabs: List<GlasmioTabItem<String>>,
+    selected: String,
+    onSelected: (String) -> Unit,
+    navigate: (String) -> Unit,
+) {
+    var query by rememberSaveable { mutableStateOf("") }
+    var componentsExpanded by rememberSaveable { mutableStateOf(true) }
+    Column(
+        Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()
+            .windowInsetsPadding(WindowInsets.captionBar.only(WindowInsetsSides.Top))
+            .padding(horizontal = 10.dp),
+    ) {
+        GlasmioSidebarToolbar(
+            leading = { Text("Glasmio", style = IosTypography.headline, modifier = Modifier.padding(start = 12.dp)) },
+            trailing = {
+                GlasmioIconButton(onClick = { state.sidebarExpanded = false },
+                    modifier = Modifier.semantics { contentDescription = "Hide Sidebar" }) {
+                    GlasmioSidebarToggleIcon()
+                }
+            },
+        )
+        GlasmioSidebarSearchField(query, { query = it }, onSearch = { navigate("Search") }, placeholder = "Search Components")
+        LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 10.dp)) {
+            items(tabs.filter { it.label.contains(query, ignoreCase = true) }, key = { it.key }) { tab ->
+                GlasmioSidebarRow(tab.label, tab.symbol, selected == tab.key, onClick = { onSelected(tab.key) })
+            }
+            item {
+                GlasmioSidebarSectionHeader("Components", componentsExpanded, { componentsExpanded = it })
+            }
+            if (componentsExpanded) {
+                items(listOf("Controls", "Navigation", "Lists", "Menus", "Sheets", "Text Editing", "Text Styles and Dynamic Type", "Messages")
+                    .filter { it.contains(query, ignoreCase = true) }) { route ->
+                    GlasmioSidebarRow(route, SfSymbol.Layers, onClick = { navigate(route) })
+                }
+            }
+        }
+    }
+}
+
+private fun Scene<String>.sampleRoute(): String? = entries.lastOrNull()?.contentKey?.let { (it as? String)?.sampleRouteName() }
+
+private fun AnimatedContentTransitionScope<Scene<String>>.usesRootTabTransition(): Boolean =
+    initialState.sampleRoute() in topLevelRoutes && targetState.sampleRoute() in topLevelRoutes
+
+private fun AnimatedContentTransitionScope<Scene<String>>.rootTabTransition(): ContentTransform =
+    fadeIn() togetherWith fadeOut()
+
+@Composable
+private fun SampleWallpaper(modifier: Modifier = Modifier) {
+    val assets = LocalSampleAssets.current
+    Image(
+        bitmap = if (LocalGlassColors.current.isDark) assets.darkWallpaper else assets.lightWallpaper,
+        contentDescription = null,
+        modifier = Modifier.fillMaxSize().then(modifier),
+        contentScale = ContentScale.Crop,
+    )
+}
+
+private data class SamplePageLayout(
+    val title: String,
+    val padding: PaddingValues,
+    val listState: LazyListState,
+    val collapseProgress: State<Float>,
+)
+
+@Composable
+private fun SamplePinnedPage(
+    title: String,
+    bottomPadding: Dp,
+    wallpaper: LayerBackdrop?,
+    listState: LazyListState? = null,
+    alwaysCompact: Boolean = false,
+    topPaddingAdjustment: Dp = 0.dp,
+    backgroundColor: Color = LocalGlassColors.current.groupedBackground,
+    content: @Composable (SamplePageLayout) -> Unit,
+) {
+    val state = listState ?: rememberLazyListState()
+    // The title collapses on a breakpoint; the top bar material keeps tracking the scroll offset.
+    val collapseProgress = if (alwaysCompact) {
+        remember { mutableFloatStateOf(1f) }
+    } else {
+        rememberGlasmioHeaderCollapseState(state)
+    }
+    val entry = LocalSampleHeaderEntry.current
+    val scroll = remember(collapseProgress) {
+        GlasmioHeaderScrollState({ collapseProgress.value })
+    }
+    SideEffect { entry.scroll = scroll }
+    val hostPadding = LocalSampleBodyPadding.current
+    val bodyPadding = PaddingValues(
+        start = IosPageHorizontalPadding, top = hostPadding.calculateTopPadding() + topPaddingAdjustment,
+        end = IosPageHorizontalPadding, bottom = bottomPadding + 24.dp,
+    )
+    GlasmioPageBody(
+        contentPadding = bodyPadding,
+        backgroundColor = backgroundColor,
+        topBarBlurProgress = rememberGlasmioHeaderScrollEdge(state),
+        background = wallpaper?.let { source ->
+            { Box(Modifier.fillMaxSize().drawWithContent { drawLayer(source.graphicsLayer) }) }
+        },
+    ) { padding ->
+        content(SamplePageLayout(title, padding, state, collapseProgress))
+    }
+}
+
+@Composable
+private fun SampleLargeTitle(title: String, collapseProgress: Float) {
+    SampleLargeTitle(title, rememberUpdatedState(collapseProgress))
+}
+
+@Composable
+private fun SampleLargeTitle(title: String, collapse: State<Float>) {
+    Text(
+        title,
+        style = IosTypography.largeTitle,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier.fillMaxWidth()
+            .graphicsLayer {
+                val collapseProgress = collapse.value.coerceIn(0f, 1f)
+                alpha = 1f - collapseProgress
+                scaleX = 1f - 0.04f * collapseProgress
+                scaleY = scaleX
+                transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0.5f)
+                val blurPx = 6.dp.toPx() * collapseProgress
+                clip = blurPx >= 0.5f
+                renderEffect = if (blurPx >= 0.5f) {
+                    createAnimatedBlurComposeRenderEffect(blurPx, android.graphics.Shader.TileMode.CLAMP, size)
+                } else null
+            }
+            .offset(y = (-10).dp)
+            .padding(horizontal = 4.dp, vertical = 6.dp),
+    )
+}
+
+@Composable
+private fun DemoList(layout: SamplePageLayout, content: LazyListScope.() -> Unit) {
+    LazyColumn(
+        state = layout.listState,
+        modifier = Modifier.fillMaxSize().glasmioHorizontalEdgeToEdge()
+            .consumeWindowInsets(layout.padding),
+        contentPadding = glasmioHorizontalContentPadding(layout.padding),
+        verticalArrangement = Arrangement.spacedBy(20.dp),
+    ) {
+        item(key = "sample-large-title") { SampleLargeTitle(layout.title, layout.collapseProgress) }
+        content()
+    }
+}
+
+@Composable
+private fun SampleBottomBar(
+    selected: String,
+    onSelected: (String) -> Unit,
+    onSearch: () -> Unit,
+    backdrop: Backdrop,
+    compactProgress: State<Float>,
+    scrollHintProgress: State<Float>,
+    onExpand: () -> Unit,
+    detachTrailingItem: Boolean,
+    modifier: Modifier = Modifier,
+    onItemBoundsChanged: ((String, Rect) -> Unit)? = null,
+) {
+    val items = sampleTabItems(selected)
+    GlasmioNavigationBarWithTrailingItem(
+        items = items,
+        trailingItem = GlasmioTabItem("Search", "Search", SfSymbol.Search),
+        selectedKey = selected,
+        onSelected = { key -> if (key == "Search") onSearch() else onSelected(key) },
+        onExpand = onExpand,
+        compactProgress = compactProgress,
+        compactSize = CompactBottomControlSize,
+        detachTrailingItem = detachTrailingItem,
+        backdrop = backdrop,
+        onItemBoundsChanged = onItemBoundsChanged,
+        modifier = modifier.fillMaxWidth()
+            .padding(horizontal = 20.dp)
+            .padding(bottom = 8.dp)
+            .glasmioNavigationScrollHint(scrollHintProgress)
+            .navigationBarsPadding(),
+    )
+}
+
+@Composable
+private fun AboutDemo(layout: SamplePageLayout) {
+    val context = LocalContext.current
+    val uriHandler = LocalUriHandler.current
+    val version = remember(context) {
+        val packageInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.packageManager.getPackageInfo(context.packageName, PackageManager.PackageInfoFlags.of(0))
+        } else {
+            @Suppress("DEPRECATION")
+            context.packageManager.getPackageInfo(context.packageName, 0)
+        }
+        packageInfo.versionName.orEmpty()
+    }
+    DemoList(layout) {
+        item {
+            GlasmioGroupedList {
+                GlasmioListRow("Glasmio", detail = version, showTopSeparator = false)
+                GlasmioListRow("Apache License 2.0", onClick = { uriHandler.openUri("https://www.apache.org/licenses/LICENSE-2.0") })
+                GlasmioListRow("GitHub", onClick = { uriHandler.openUri("https://github.com/NEORUAA/Glasmio") })
+            }
+        }
+    }
+}
+
+@Immutable
+private data class CatalogEntry(
+    val route: String,
+    val icon: String,
+    val subtitle: String,
+    val title: String = route,
+)
+
+private val catalog = listOf(
+    CatalogEntry("Materials", "square.stack.3d.up", "Light, depth, and refraction"),
+    CatalogEntry("Controls", "slider.horizontal.3", "Switches and sliders"),
+    CatalogEntry("Navigation", "rectangle.3.group", "Tabs and toolbars"),
+    CatalogEntry("Lists", "list.bullet", "Rows and swipe actions"),
+    CatalogEntry("Search", "magnifyingglass", "Find a component"),
+    CatalogEntry("Menus", "ellipsis", "Actions and context"),
+    CatalogEntry("Sheets", "inset.filled.bottomthird.rectangle", "Layers and gestures"),
+    CatalogEntry("Text Styles and Dynamic Type", "textformat.size", "Type and hierarchy", "Typography"),
+    CatalogEntry("Text Editing", "character.cursor.ibeam", "Selection and input"),
+    CatalogEntry("Messages", "message", "Bubbles and reactions"),
+)
+private val catalogComponents = catalog.drop(1)
+
+@Composable
+private fun Catalog(layout: SamplePageLayout, onOpen: (String) -> Unit) {
+    val colors = LocalGlassColors.current
+    val fontScale = LocalDensity.current.fontScale
+    BoxWithConstraints(Modifier.fillMaxSize().testTag("component-catalog")) {
+        val columns = when {
+            maxWidth < 360.dp || fontScale > 1.3f -> 1
+            maxWidth >= 720.dp -> 3
+            else -> 2
+        }
+        val rows = remember(columns) { catalogComponents.chunked(columns) }
+        DemoList(layout) {
+            item(key = "catalog-intro") {
+                Text("A little depth. A lighter touch.", style = IosTypography.subheadline,
+                    color = colors.secondaryContent, modifier = Modifier.padding(horizontal = 4.dp))
+            }
+            item(key = "catalog-materials") { CatalogMaterialPreview { onOpen("Materials") } }
+            item(key = "catalog-heading") {
+                Text("Explore components", style = IosTypography.headline,
+                    modifier = Modifier.padding(start = 4.dp, top = 8.dp))
+            }
+            items(rows, key = { it.first().route }, contentType = { "catalog-row" }) { row ->
+                Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    row.forEach { entry ->
+                        GlasmioCard(Modifier.weight(1f).fillMaxHeight().heightIn(min = 124.dp)
+                            .testTag("catalog-${entry.route}"), onClick = { onOpen(entry.route) }) {
+                            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                                SfIcon(entry.icon, null, size = 25.dp, tint = colors.accent)
+                                Spacer(Modifier.height(7.dp))
+                                Text(entry.title, style = IosTypography.headline)
+                                Text(entry.subtitle, style = IosTypography.caption1, color = colors.secondaryContent)
+                            }
+                        }
+                    }
+                    repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CatalogMaterialPreview(onOpen: () -> Unit) {
+    val fontScale = LocalDensity.current.fontScale.coerceAtLeast(1f)
+    GlasmioBackdropHost(
+        modifier = Modifier.fillMaxWidth().height(172.dp * fontScale)
+            .clip(ContinuousRoundedRectangle(28.dp)).testTag("catalog-materials-preview"),
+        sampledContent = { SampleWallpaper() },
+        overlayContent = {
+            GlassSurface(
+                modifier = Modifier.align(Alignment.Center).padding(18.dp).fillMaxWidth(),
+                material = NavigationGlassMaterial.RegularMedium,
+                shape = ContinuousRoundedRectangle(24.dp),
+                onClick = onOpen,
+            ) {
+                Row(Modifier.fillMaxWidth().padding(22.dp), horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Materials", style = IosTypography.title2)
+                        Text("Light, depth, and refraction", style = IosTypography.subheadline)
+                    }
+                    SfIcon("chevron.right", null, size = 20.dp, mirrored = true)
+                }
+            }
+        },
+    )
+}
+
+@Composable
+private fun Section(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(title, style = IosTypography.headline, modifier = Modifier.padding(horizontal = 4.dp))
+        content()
+    }
+}
+
+@Composable
+private fun MaterialsDemo(layout: SamplePageLayout, onOpen: (String) -> Unit) {
+    var separated by rememberSaveable { mutableStateOf(false) }
+    var favorite by rememberSaveable { mutableStateOf(false) }
+    var menuExpanded by remember { mutableStateOf(false) }
+    DemoList(layout) {
+        item(key = "adaptive-glass") {
+            GlasmioGroupedList {
+                GlasmioListRow(
+                    "Adaptive Glass",
+                    subtitle = "Drag a surface through light and shade",
+                    onClick = { onOpen("Adaptive Glass") },
+                    showTopSeparator = false,
+                )
+            }
+        }
+        items(NavigationGlassMaterial.entries, key = { it.name }) { material ->
+            GlassSurface(
+                modifier = Modifier.fillMaxWidth().heightIn(min = 148.dp),
+                shape = ContinuousRoundedRectangle(32.dp),
+                material = material,
+                onClick = {},
+            ) {
+                Column(Modifier.align(Alignment.CenterStart).padding(24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = when (material) {
+                            NavigationGlassMaterial.RegularSmall -> "Regular Small"
+                            NavigationGlassMaterial.RegularMedium -> "Regular Medium"
+                            NavigationGlassMaterial.RegularLarge -> "Regular Large"
+                            NavigationGlassMaterial.Clear -> "Clear"
+                        },
+                        style = IosTypography.title2,
+                    )
+                    Text(
+                        text = when (material) {
+                            NavigationGlassMaterial.RegularSmall -> "Compact surfaces"
+                            NavigationGlassMaterial.RegularMedium -> "Floating controls"
+                            NavigationGlassMaterial.RegularLarge -> "Large surfaces"
+                            NavigationGlassMaterial.Clear -> "Minimal diffusion"
+                        },
+                        style = IosTypography.subheadline,
+                        color = LocalGlassColors.current.secondaryContent,
+                    )
+                }
+            }
+        }
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                GlasmioButton(onClick = {}, modifier = Modifier.fillMaxWidth(), size = GlasmioButtonSize.Large) { Text("Glass") }
+                GlasmioButton(onClick = {}, modifier = Modifier.fillMaxWidth(), emphasis = GlassEmphasis.Prominent, size = GlasmioButtonSize.Large) { Text("Glass Prominent") }
+            }
+        }
+        item {
+            val switchBackdrop = rememberLayerBackdrop()
+            val switchMaterialBackdrop = rememberCombinedBackdrop(LocalGlassBackdrop.current, switchBackdrop)
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Box(Modifier.fillMaxWidth()) {
+                    // Sample the cell material without recording the switch into its own lens.
+                    Box(
+                        Modifier.matchParentSize()
+                            .glassBackdropSource(switchBackdrop)
+                            .glasmioGroupedListBackground(),
+                    )
+                    GlasmioGroupedList(framed = false) {
+                        GlasmioListRow("Separate Actions", showTopSeparator = false, trailing = {
+                            GlasmioSwitch(separated, { separated = it }, backdrop = switchMaterialBackdrop)
+                        })
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    GlasmioToolbarActionGroup(style = if (separated) GlasmioToolbarActionStyle.Separated else GlasmioToolbarActionStyle.Merged) {
+                        GlasmioIconButton(onClick = {}) { SfIcon("plus", "Add") }
+                        GlasmioIconButton(onClick = { favorite = false }) { SfIcon("arrow.counterclockwise", "Reset") }
+                        GlasmioIconButton(onClick = { favorite = !favorite }) {
+                            SfIcon(if (favorite) "heart.fill" else "heart", if (favorite) "Unlike" else "Like")
+                        }
+                    }
+                    GlasmioMenu(
+                        expanded = menuExpanded,
+                        onExpandedChange = { menuExpanded = it },
+                        itemCount = 3,
+                        anchor = { open -> GlasmioIconButton(open) { SfIcon("ellipsis", "Example menu") } },
+                    ) { backdrop, close ->
+                        GlasmioMenuItem(if (separated) "Merge Actions" else "Separate Actions",
+                            { separated = !separated; close() }, systemName = if (separated) "checkmark" else null, backdrop = backdrop)
+                        GlasmioMenuItem(if (favorite) "Unlike" else "Like", { favorite = !favorite; close() },
+                            systemName = if (favorite) "heart.fill" else "heart", backdrop = backdrop)
+                        GlasmioMenuItem("Reset", { favorite = false; separated = false; close() },
+                            systemName = "arrow.counterclockwise", backdrop = backdrop)
+                    }
+                }
+            }
+        }
+        item(key = "materials-popover") {
+            var visible by remember { mutableStateOf(false) }
+            GlasmioPopover(
+                visible = visible,
+                onDismissRequest = { visible = false },
+                adaptToSheet = false,
+                anchor = {
+                    GlasmioButton(
+                        onClick = { visible = true },
+                        size = GlasmioButtonSize.Medium,
+                    ) { Text("Popover") }
+                },
+            ) {
+                Text("Glass picks up the colors behind it.")
+            }
+        }
+    }
+}
+
+@Composable
+private fun AdaptiveGlassBackdrop() {
+    val assets = LocalSampleAssets.current
+    Box(Modifier.fillMaxSize()) {
+        listOf(assets.lightWallpaper, assets.darkWallpaper).forEachIndexed { index, wallpaper ->
+            Image(
+                bitmap = wallpaper,
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize().drawWithContent {
+                    val middle = (size.height * .5f).roundToInt().toFloat()
+                    clipRect(
+                        top = if (index == 0) 0f else middle,
+                        bottom = if (index == 0) middle else size.height,
+                    ) { this@drawWithContent.drawContent() }
+                },
+                contentScale = ContentScale.Crop,
+            )
+        }
+    }
+}
+
+@Composable
+private fun AdaptiveGlassDemo(bottomPadding: Dp) {
+    val entry = LocalSampleHeaderEntry.current
+    val headerScroll = remember { GlasmioHeaderScrollState({ 1f }) }
+    SideEffect { entry.scroll = headerScroll }
+    var horizontalPosition by rememberSaveable { mutableFloatStateOf(.5f) }
+    var verticalPosition by rememberSaveable { mutableFloatStateOf(.5f) }
+    val headerPadding = LocalSampleBodyPadding.current
+    BoxWithConstraints(
+        modifier = Modifier.fillMaxSize()
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+            .padding(
+                start = IosPageHorizontalPadding,
+                top = headerPadding.calculateTopPadding(),
+                end = IosPageHorizontalPadding,
+                bottom = bottomPadding + 20.dp,
+            ),
+        contentAlignment = AbsoluteAlignment.TopLeft,
+    ) {
+        val width = minOf(180.dp, maxWidth)
+        val height = minOf(132.dp, maxHeight)
+        val density = LocalDensity.current
+        val horizontalTravel = with(density) { (maxWidth - width).toPx().coerceAtLeast(0f) }
+        val verticalTravel = with(density) { (maxHeight - height).toPx().coerceAtLeast(0f) }
+        CompositionLocalProvider(
+            LocalGlassAppearance provides LocalGlassAppearance.current.copy(adaptiveColorScheme = true),
+            LocalGlassAdaptiveLuminanceRange provides (0.2f..0.5f),
+        ) {
+        GlassSurface(
+            modifier = Modifier
+                .absoluteOffset {
+                    IntOffset(
+                        (horizontalPosition * horizontalTravel).roundToInt(),
+                        (verticalPosition * verticalTravel).roundToInt(),
+                    )
+                }
+                .size(width, height)
+                .testTag("adaptive-glass-block")
+                .swipeBackExcluded()
+                .pointerInput(horizontalTravel, verticalTravel) {
+                    detectDragGestures { change, amount ->
+                        change.consume()
+                        if (horizontalTravel > 0f) {
+                            horizontalPosition = (horizontalPosition + amount.x / horizontalTravel).coerceIn(0f, 1f)
+                        }
+                        if (verticalTravel > 0f) {
+                            verticalPosition = (verticalPosition + amount.y / verticalTravel).coerceIn(0f, 1f)
+                        }
+                    }
+                },
+            shape = ContinuousRoundedRectangle(32.dp),
+            material = NavigationGlassMaterial.RegularMedium,
+        ) {}
+        }
+    }
+}
+
+@Composable
+private fun ControlsDemo(layout: SamplePageLayout) {
+    var enabled by rememberSaveable { mutableStateOf(true) }
+    var checked by rememberSaveable { mutableStateOf(true) }
+    var value by rememberSaveable { mutableFloatStateOf(0.45f) }
+    var step by rememberSaveable { mutableIntStateOf(3) }
+    var text by rememberSaveable { mutableStateOf("") }
+    var segment by rememberSaveable { mutableIntStateOf(0) }
+    var iconSegment by rememberSaveable { mutableIntStateOf(1) }
+    var adaptivePosition by rememberSaveable { mutableFloatStateOf(.5f) }
+    var adaptiveMode by rememberSaveable { mutableIntStateOf(4) }
+    var groupedAdaptivePosition by rememberSaveable { mutableFloatStateOf(.4f) }
+    var color by remember { mutableStateOf(Color(0xFF0088FF)) }
+    var colorPicker by rememberSaveable { mutableStateOf(false) }
+    var preferenceChecked by rememberSaveable { mutableStateOf(false) }
+    var preferenceName by rememberSaveable { mutableStateOf("Glasmio") }
+    var preferenceChoice by rememberSaveable { mutableStateOf("System") }
+    DemoList(layout) {
+        item {
+            GlasmioGroupedList {
+                GlasmioListRow("Enabled", showTopSeparator = false, trailing = { GlasmioSwitch(enabled, { enabled = it }) })
+                GlasmioListRow("Switch", trailing = { GlasmioSwitch(checked, { checked = it }, enabled = enabled) })
+                GlasmioListRow("Stepper", trailing = {
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("$step", style = IosTypography.body, color = LocalGlassColors.current.secondaryContent)
+                        GlasmioStepper(step, { step = it }, range = 0..10, enabled = enabled)
+                    }
+                })
+                GlasmioTextField(text, { text = it }, placeholder = "Text Field", enabled = enabled)
+            }
+        }
+        item {
+            Section("Slider") {
+                GlasmioCard(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("${(value * 100).toInt()}%", style = IosTypography.headline)
+                        GlasmioSlider(value, { value = it }, Modifier.fillMaxWidth(), enabled = enabled)
+                    }
+                }
+            }
+        }
+        item {
+            Section("Volume Slider") {
+                GlasmioVolumeSlider(value, { value = it }, Modifier.fillMaxWidth(), enabled = enabled)
+            }
+        }
+        item {
+            Section("Adaptive Slider") {
+                GlasmioAdaptiveSlider(
+                    value = adaptivePosition,
+                    onValueChange = { adaptivePosition = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = enabled,
+                    showLabels = true,
+                    labels = listOf("More Noise", "Default", "Less Noise"),
+                )
+            }
+        }
+        item {
+            Section("Segmented Control") {
+                GlasmioSegmentedControl(listOf(0 to "Day", 1 to "Week", 2 to "Month"), segment, { segment = it }, Modifier.fillMaxWidth())
+            }
+        }
+        item {
+            Section("Icon Segmented Control") {
+                GlasmioSegmentedControl(
+                    items = listOf(0 to "Muted", 1 to "Low", 2 to "Medium", 3 to "High"),
+                    selected = iconSegment,
+                    onSelected = { iconSegment = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    height = 50.dp,
+                    enabled = enabled,
+                    itemContent = { choice, _ ->
+                        SfIcon(when (choice) {
+                            0 -> "speaker.slash.fill"
+                            1 -> "speaker.wave.1.fill"
+                            2 -> "speaker.wave.2.fill"
+                            else -> "speaker.wave.3.fill"
+                        }, null, size = 25.dp)
+                    },
+                )
+            }
+        }
+        item {
+            Section("Adaptive Segmented Control") {
+                GlasmioSegmentedControl(
+                    items = listOf(1 to "Off", 3 to "Transparency", 4 to "Adaptive", 2 to "Noise Cancellation"),
+                    selected = adaptiveMode,
+                    onSelected = { selected ->
+                        if (selected == 4 && adaptiveMode != 4) groupedAdaptivePosition = .5f
+                        adaptiveMode = selected
+                    },
+                    adaptiveItem = 4,
+                    adaptiveValue = groupedAdaptivePosition,
+                    onAdaptiveValueChange = { groupedAdaptivePosition = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = enabled,
+                    hiddenItems = if (adaptiveMode == 4) setOf(1) else emptySet(),
+                    showLabels = true,
+                    adaptiveLabels = listOf("More Noise", "Default", "Less Noise"),
+                    itemContent = { choice, _ ->
+                        val colors = LocalGlassColors.current
+                        val resource = when (choice) {
+                            1 -> GlasmioIconsR.drawable.glasmio_listening_off
+                            3 -> GlasmioIconsR.drawable.glasmio_listening_transparency
+                            4 -> GlasmioIconsR.drawable.glasmio_adaptive_audio
+                            else -> GlasmioIconsR.drawable.glasmio_listening_anc
+                        }
+                        val tint = when {
+                            choice != 1 -> ColorFilter.tint(colors.content)
+                            !colors.isDark -> null
+                            else -> ColorFilter.colorMatrix(ColorMatrix(floatArrayOf(
+                                -1f, 0f, 0f, 0f, 255f,
+                                0f, -1f, 0f, 0f, 255f,
+                                0f, 0f, -1f, 0f, 255f,
+                                0f, 0f, 0f, 1f, 0f,
+                            )))
+                        }
+                        Image(painterResource(resource), null, Modifier.size(30.dp), colorFilter = tint)
+                    },
+                )
+            }
+        }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                GlasmioButton(onClick = { colorPicker = true }, enabled = enabled, size = GlasmioButtonSize.Medium) { Text("Color Picker") }
+                Box(Modifier.size(34.dp).background(color, Capsule()))
+            }
+        }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                GlasmioButton(onClick = {}, enabled = enabled, emphasis = GlassEmphasis.Prominent, size = GlasmioButtonSize.Large) { Text("Continue") }
+                GlasmioButton(onClick = {}, enabled = false, size = GlasmioButtonSize.Large) { Text("Disabled") }
+            }
+        }
+        item {
+            Section("Buttons") {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    GlasmioButtonSize.entries.forEach { size ->
+                        GlasmioButton(onClick = {}, size = size, enabled = enabled) { Text(size.name) }
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    GlasmioButton(onClick = {}, size = GlasmioButtonSize.Large, destructive = true, enabled = enabled) { Text("Delete") }
+                    GlasmioButton(onClick = {}, size = GlasmioButtonSize.Large, emphasis = GlassEmphasis.Prominent, destructive = true, enabled = enabled) { Text("Delete") }
+                }
+            }
+        }
+        item {
+            Section("Preference Rows") {
+                GlasmioGroupedList {
+                    GlasmioSwitchPreference(title = { Text("Switch Preference") }, checked = preferenceChecked,
+                        onCheckedChange = { preferenceChecked = it }, isEnabled = enabled, showTopSeparator = false)
+                    GlasmioEditTextPreference(title = { Text("Name") }, value = preferenceName,
+                        onValueChange = { preferenceName = it }, isEnabled = enabled)
+                    GlasmioListPreference(title = { Text("Appearance Choice") }, selectedValue = preferenceChoice,
+                        values = listOf("System", "Light", "Dark"), valueText = { it },
+                        onValueSelected = { preferenceChoice = it }, isEnabled = enabled)
+                    GlasmioSwitchPreference(title = { Text("Disabled Preference") }, checked = true,
+                        onCheckedChange = {}, isEnabled = false)
+                }
+            }
+        }
+    }
+    GlasmioColorPicker(colorPicker, color, { color = it }, { colorPicker = false }, "Colors")
+}
+
+@Composable
+private fun NavigationDemo(layout: SamplePageLayout) {
+    var selected by rememberSaveable { mutableIntStateOf(0) }
+    var compact by rememberSaveable { mutableStateOf(false) }
+    val compactProgress = animateFloatAsState(
+        targetValue = if (compact) 1f else 0f,
+        animationSpec = spring(dampingRatio = .8f, stiffness = 438.64908f),
+        label = "Navigation compact progress",
+    )
+    var style by rememberSaveable { mutableIntStateOf(0) }
+    DemoList(layout) {
+        item {
+            GlasmioGroupedList {
+                GlasmioListRow("Compact Tab Bar", showTopSeparator = false, trailing = { GlasmioSwitch(compact, { compact = it }) })
+            }
+        }
+        item {
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                GlasmioNavigationBar(
+                    items = listOf(
+                        GlasmioTabItem(0, "Home", SfSymbol.House),
+                        GlasmioTabItem(1, "Favorites", SfSymbol.Heart),
+                        GlasmioTabItem(2, "Search", SfSymbol.Search),
+                    ),
+                    selectedKey = selected,
+                    onSelected = { selected = it },
+                    onExpand = { compact = false },
+                    compactProgress = compactProgress,
+                    compactSize = 48.dp,
+                )
+            }
+        }
+        item {
+            Section("Toolbars") {
+                GlasmioPopUpButton(GlasmioTopBarStyle.entries[style], GlasmioTopBarStyle.entries, { style = it.ordinal }, { it.name })
+                GlasmioTopBar("Title", subtitle = "Subtitle", style = GlasmioTopBarStyle.entries[style], actions = {
+                    GlasmioIconButton(onClick = {}) { SfIcon("ellipsis", "More") }
+                })
+            }
+        }
+    }
+}
+
+@Composable
+private fun ListDemo() {
+    var reordered by remember { mutableStateOf(listOf("First", "Second", "Third")) }
+    var grid by rememberSaveable { mutableStateOf(false) }
+    var entries by remember { mutableStateOf((1..24).toList()) }
+    var refreshing by remember { mutableStateOf(false) }
+    var month by rememberSaveable { mutableStateOf("June 2024") }
+    var time by rememberSaveable { mutableStateOf("9:41 AM") }
+    var swipeRevealed by remember { mutableStateOf(false) }
+    var swipeItemVisible by rememberSaveable { mutableStateOf(true) }
+    val colors = LocalGlassColors.current
+    val scope = rememberCoroutineScope()
+    val refresh: () -> Unit = {
+        if (!refreshing) {
+            refreshing = true
+            scope.launch {
+                try {
+                    delay(1400)
+                    entries = entries.drop(1) + entries.first()
+                    swipeRevealed = false
+                    swipeItemVisible = true
+                } finally {
+                    refreshing = false
+                }
+            }
+        }
+    }
+    val listState = rememberLazyListState()
+    val gridState = rememberLazyGridState()
+    val collapseProgress = if (grid) rememberGlasmioHeaderCollapse(gridState) else rememberGlasmioHeaderCollapse(listState)
+    val edgeProgress = if (grid) rememberGlasmioHeaderScrollEdge(gridState) else rememberGlasmioHeaderScrollEdge(listState)
+    val headerEntry = LocalSampleHeaderEntry.current
+    val currentCollapse = rememberUpdatedState(collapseProgress)
+    val headerScroll = remember { GlasmioHeaderScrollState({ currentCollapse.value }) }
+    val currentRefresh = rememberUpdatedState(refresh)
+    val headerActions = remember(grid, refreshing) {
+        val layoutSymbol = if (grid) "list.bullet" else "rectangle.grid.2x2"
+        listOf(
+            GlasmioHeaderAction("list.refresh", "arrow.clockwise", "Refresh", { currentRefresh.value() }, enabled = !refreshing) { SfIcon("arrow.clockwise", null) },
+            GlasmioHeaderAction("list.layout", if (grid) "list.bullet" else "rectangle.grid.2x2", if (grid) "Show list" else "Show grid", { grid = !grid }) {
+                SfIcon(layoutSymbol, null)
+            },
+        )
+    }
+    SideEffect { headerEntry.scroll = headerScroll; headerEntry.actions = headerActions }
+    val headerPadding = LocalSampleBodyPadding.current
+    GlasmioPageBody(
+        PaddingValues(start = IosPageHorizontalPadding, top = headerPadding.calculateTopPadding(), end = IosPageHorizontalPadding,
+            bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 24.dp),
+        topBarBlurProgress = edgeProgress,
+    ) { padding ->
+        GlasmioPullToRefreshBox(
+            isRefreshing = refreshing,
+            onRefresh = refresh,
+            modifier = Modifier.fillMaxSize(),
+            indicatorPadding = PaddingValues(top = padding.calculateTopPadding()),
+        ) {
+            if (grid) {
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(150.dp),
+                    state = gridState,
+                    modifier = Modifier.fillMaxSize().glasmioHorizontalEdgeToEdge()
+                        .consumeWindowInsets(padding),
+                    contentPadding = glasmioHorizontalContentPadding(padding),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    item(key = "large-title", span = { GridItemSpan(maxLineSpan) }) { SampleLargeTitle("Lists", collapseProgress) }
+                    items(entries, key = { it }) { index ->
+                        GlasmioCard(Modifier.fillMaxWidth().height(120.dp)) {
+                            Text("Item $index", style = IosTypography.headline, modifier = Modifier.padding(20.dp))
+                        }
+                    }
+                }
+            } else {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize().glasmioHorizontalEdgeToEdge()
+                        .consumeWindowInsets(padding),
+                    contentPadding = glasmioHorizontalContentPadding(padding),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    item(key = "large-title") { SampleLargeTitle("Lists", collapseProgress) }
+                    item(key = "reorderable") {
+                        GlasmioReorderableGroup(reordered, { reordered = it }, "Reorder", "Move up", "Move down") {
+                            Text(it, style = IosTypography.body, modifier = Modifier.weight(1f))
+                        }
+                    }
+                    item(key = "grouped") {
+                        GlasmioSectionTitle("Grouped")
+                        GlasmioGroupedList {
+                            GlasmioListRow("Simple row", showTopSeparator = false)
+                            GlasmioListRow(
+                                "Title",
+                                subtitle = "Subtitle",
+                                detail = "Detail",
+                                leading = {
+                                    Box(
+                                        Modifier.size(30.dp).clip(ContinuousRoundedRectangle(7.dp)).background(colors.accent),
+                                        contentAlignment = Alignment.Center,
+                                    ) { SfIcon("house.fill", null, size = 17.dp, tint = Color.White) }
+                                },
+                                trailing = {
+                                    Box(Modifier.size(22.dp), contentAlignment = Alignment.Center) {
+                                        SfIcon(
+                                            "star", null, size = 22.dp, fontSize = 17.sp,
+                                            weight = FontWeight.Normal, tint = colors.accent,
+                                            fontFeatureSettings = "'ss16' 1", fitGlyphToBounds = false,
+                                        )
+                                    }
+                                },
+                                showDisclosure = true,
+                            )
+                            GlasmioListRow("Value", detail = "Detail")
+                            GlasmioListRow("Selection", trailing = {
+                                Box(Modifier.size(22.dp), contentAlignment = Alignment.Center) {
+                                    SfIcon(
+                                        "checkmark", null, size = 22.dp, fontSize = 17.sp,
+                                        weight = FontWeight(590), tint = colors.accent,
+                                        fontFeatureSettings = "", fitGlyphToBounds = false,
+                                    )
+                                }
+                            })
+                            GlasmioListRow("Information", trailing = {
+                                Box(Modifier.size(22.dp), contentAlignment = Alignment.Center) {
+                                    SfIcon(
+                                        "info.circle", "Information", size = 22.dp, fontSize = 17.sp,
+                                        weight = FontWeight.Normal, tint = colors.accent,
+                                        fontFeatureSettings = "'ss16' 1", fitGlyphToBounds = false,
+                                    )
+                                }
+                            })
+                            GlasmioListRow("Date and Time", trailing = {
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    GlasmioListValuePill(month, { month = if (month == "June 2024") "July 2024" else "June 2024" })
+                                    GlasmioListValuePill(time, { time = if (time == "9:41 AM") "10:41 AM" else "9:41 AM" })
+                                }
+                            })
+                            GlasmioListRow("A long row title stays inside its layout and truncates cleanly", onClick = {})
+                        }
+                        GlasmioGroupedTableFooter("Footer")
+                    }
+                    item(key = "flat-actions") {
+                        GlasmioGroupedList {
+                            GlasmioListRow("Action", onClick = {}, showTopSeparator = false, showDisclosure = false,
+                                titleColor = colors.accent, titleAlignment = TextAlign.Center)
+                            GlasmioListRow("Delete", onClick = {}, showDisclosure = false,
+                                titleColor = colors.destructive, titleAlignment = TextAlign.Center)
+                            GlasmioListRow("Unavailable", onClick = {}, enabled = false, showDisclosure = false)
+                        }
+                    }
+                    if (swipeItemVisible) {
+                        item(key = "swipe-actions") {
+                            GlasmioListSwipeActions(
+                                revealed = swipeRevealed,
+                                onRevealedChange = { swipeRevealed = it },
+                                actions = {
+                                    GlasmioListSwipeAction(
+                                        "circle.dashed", { swipeRevealed = false },
+                                        if (colors.isDark) Color(0xFF636366) else Color(0xFFAEAEB2),
+                                        label = "Action",
+                                    )
+                                    GlasmioListSwipeAction(
+                                        "circle.dashed", { swipeRevealed = false },
+                                        if (colors.isDark) Color(0xFF0091FF) else Color(0xFF0088FF),
+                                        label = "Action",
+                                    )
+                                    GlasmioListSwipeAction(
+                                        "circle.dashed", { swipeRevealed = false; swipeItemVisible = false },
+                                        if (colors.isDark) Color(0xFF30D158) else Color(0xFF34C759),
+                                        label = "Action",
+                                    )
+                                },
+                            ) {
+                                GlasmioListRow(
+                                    "Swipe Actions", subtitle = "Subtitle", detail = "Detail",
+                                    showTopSeparator = false, showDisclosure = true,
+                                )
+                            }
+                        }
+                    }
+                    items(entries, key = { it }) { index ->
+                        GlasmioCard(Modifier.fillMaxWidth()) {
+                            GlasmioListRow("Item $index", showTopSeparator = false, onClick = {})
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DemoSettings(
+    layout: SamplePageLayout,
+    dark: Boolean,
+    onDark: (Boolean) -> Unit,
+    reduceTransparency: Boolean,
+    onReduceTransparency: (Boolean) -> Unit,
+    rtl: Boolean,
+    onRtl: (Boolean) -> Unit,
+    detachTrailingItem: Boolean,
+    onDetachTrailingItem: (Boolean) -> Unit,
+    hdrEffects: Boolean,
+    onHdrEffects: (Boolean) -> Unit,
+    fpsCounter: Boolean,
+    onFpsCounter: (Boolean) -> Unit,
+) {
+    val shaderEffectsSupported = isRuntimeShaderSupported()
+    DemoList(layout) {
+        item {
+            // Keep a full viewport below the independently scrolling large title.
+            // Short preference groups must still let the title leave the viewport.
+            Column(Modifier.fillParentMaxHeight(), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                Section("Appearance") {
+                    GlasmioGroupedList {
+                        GlasmioSwitchPreference(title = { Text("Dark Appearance") }, checked = dark, onCheckedChange = onDark, showTopSeparator = false)
+                        GlasmioSwitchPreference(title = { Text("Reduce Transparency") }, checked = reduceTransparency, onCheckedChange = onReduceTransparency, showTopSeparator = true)
+                        GlasmioSwitchPreference(
+                            modifier = Modifier.testTag("settings-hdr-effects"),
+                            title = { Text("HDR Effects") },
+                            checked = shaderEffectsSupported && hdrEffects,
+                            onCheckedChange = onHdrEffects,
+                            isEnabled = shaderEffectsSupported && !reduceTransparency, showTopSeparator = true,
+                        )
+                    }
+                }
+                Section("Layout") {
+                    GlasmioGroupedList {
+                        GlasmioSwitchPreference(title = { Text("Right to Left") }, checked = rtl, onCheckedChange = onRtl, showTopSeparator = false)
+                        GlasmioSwitchPreference(title = { Text("Separate Navigation Item") }, checked = detachTrailingItem, onCheckedChange = onDetachTrailingItem, showTopSeparator = true)
+                    }
+                }
+                Section("Diagnostics") {
+                    GlasmioGroupedList {
+                        GlasmioSwitchPreference(
+                            modifier = Modifier.testTag("settings-fps-counter"),
+                            title = { Text("FPS Counter") }, checked = fpsCounter, onCheckedChange = onFpsCounter,
+                            showTopSeparator = false,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SearchLanding(layout: SamplePageLayout, onOpen: (String) -> Unit) {
+    DemoList(layout) {
+        item {
+            Column(Modifier.fillParentMaxHeight()) {
+                GlasmioGroupedList {
+                    catalog.filter { it.route != "Search" }.forEachIndexed { index, entry ->
+                        GlasmioListRow(entry.title, subtitle = entry.subtitle, systemName = entry.icon,
+                            showTopSeparator = index > 0, onClick = { onOpen(entry.route) })
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SearchResults(query: String, padding: PaddingValues, onOpen: (String) -> Unit) {
+    val matches = remember(query) {
+        val term = query.trim()
+        catalog.filter { entry ->
+            entry.route != "Search" && (entry.route.contains(term, ignoreCase = true) ||
+                entry.title.contains(term, ignoreCase = true) || entry.subtitle.contains(term, ignoreCase = true))
+        }
+    }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().glasmioHorizontalEdgeToEdge()
+            .consumeWindowInsets(padding),
+        contentPadding = glasmioHorizontalContentPadding(padding),
+        verticalArrangement = Arrangement.spacedBy(20.dp),
+    ) {
+        if (matches.isEmpty()) {
+            item {
+                Column(Modifier.fillMaxWidth().padding(vertical = 56.dp, horizontal = 24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    SfIcon(SfSymbol.Search, null, size = 30.dp, tint = LocalGlassColors.current.tertiaryContent)
+                    Text("No Results", style = IosTypography.title2)
+                    Text("Try sliders, menus, or type.", style = IosTypography.subheadline,
+                        color = LocalGlassColors.current.secondaryContent, textAlign = TextAlign.Center)
+                }
+            }
+        } else {
+            item {
+                GlasmioGroupedList {
+                    matches.forEachIndexed { index, entry ->
+                        GlasmioListRow(entry.title, subtitle = entry.subtitle, systemName = entry.icon,
+                            showTopSeparator = index > 0, onClick = { onOpen(entry.route) })
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MenusDemo(bottomPadding: Dp, dark: Boolean, onDark: (Boolean) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    var selection by rememberSaveable { mutableStateOf("Default") }
+    var alert by rememberSaveable { mutableStateOf(false) }
+    var inputAlert by rememberSaveable { mutableStateOf(false) }
+    var nestedMenu by remember { mutableStateOf(false) }
+    var appearancePopover by remember { mutableStateOf(false) }
+    val nestedAnchor = rememberGlasmioMenuAnchorState()
+    val toolbarAnchor = rememberGlasmioMenuAnchorState()
+    val headerEntry = LocalSampleHeaderEntry.current
+    val headerActions = remember(dark, toolbarAnchor) {
+        listOf(
+            GlasmioHeaderAction("appearance.toggle", if (dark) "sun.max" else "moon", if (dark) "Light appearance" else "Dark appearance", { onDark(!dark) }) {
+                SfIcon(if (dark) "sun.max" else "moon", null)
+            },
+            GlasmioHeaderAction("menu.options", "ellipsis", "Menu", { expanded = true }, menuAnchor = toolbarAnchor) { SfIcon("ellipsis", null) },
+        )
+    }
+    SideEffect { headerEntry.actions = headerActions }
+    var name by remember { mutableStateOf(TextFieldValue("")) }
+    SamplePinnedPage(
+        title = "Menus",
+        bottomPadding = bottomPadding,
+        wallpaper = null,
+    ) { layout ->
+        DemoList(layout) {
+            item {
+                GlasmioGroupedList {
+                    GlasmioListRow("Pop-up Button", showTopSeparator = false, trailing = {
+                        GlasmioPopUpButton(selection.takeIf { it in listOf("Default", "Recent", "Name") } ?: "Default", listOf("Default", "Recent", "Name"), { selection = it }, { it })
+                    })
+                    GlasmioListRow("Alert", onClick = { alert = true })
+                    GlasmioListRow("Input Alert", onClick = { inputAlert = true })
+                }
+            }
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    GlasmioButton(
+                        onClick = { nestedMenu = true },
+                        modifier = Modifier.glasmioMenuAnchor(nestedAnchor, onOpenMenu = { nestedMenu = true }),
+                        size = GlasmioButtonSize.Medium,
+                    ) { Text("Cascading Menu") }
+                    GlasmioPopover(
+                        visible = appearancePopover,
+                        onDismissRequest = { appearancePopover = false },
+                        adaptToSheet = false,
+                        anchor = {
+                            GlasmioTooltip(text = "Change appearance") {
+                                GlasmioButton(
+                                    onClick = { appearancePopover = true },
+                                    size = GlasmioButtonSize.Medium,
+                                ) { Text("Popover") }
+                            }
+                        },
+                    ) {
+                        Text(
+                            "Appearance",
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            style = IosTypography.headline,
+                        )
+                        GlasmioSwitchPreference(
+                            title = { Text("Dark Mode") },
+                            checked = dark,
+                            onCheckedChange = onDark,
+                            showTopSeparator = false,
+                        )
+                    }
+                }
+            }
+        }
+    }
+    GlasmioMenu(
+        expanded = expanded, onExpandedChange = { expanded = it }, itemCount = 4,
+        menuAnchorState = toolbarAnchor, externalAnchorBounds = toolbarAnchor.bounds,
+        anchor = {},
+    ) { backdrop, close ->
+        GlasmioMenuItem("Favorite", { selection = "Favorite"; close() }, systemName = "heart", backdrop = backdrop)
+        GlasmioMenuItem("Duplicate", { selection = "Duplicate"; close() }, systemName = "plus.square.on.square", backdrop = backdrop)
+        GlasmioMenuItem("Unavailable", {}, enabled = false, backdrop = backdrop)
+        GlasmioMenuItem("Delete", { selection = "Delete"; close() }, destructive = true, systemName = "trash", backdrop = backdrop)
+    }
+    if (nestedMenu) {
+        GlasmioCascadingMenu(
+            anchorBounds = nestedAnchor.bounds,
+            menuAnchorState = nestedAnchor,
+            items = listOf(
+                GlasmioCascadingMenuItem("Sort By", systemName = "arrow.up.arrow.down", children = listOf(
+                    GlasmioCascadingMenuItem("Name", onClick = { selection = "Name" }),
+                    GlasmioCascadingMenuItem("Recent", onClick = { selection = "Recent" }),
+                )),
+                GlasmioCascadingMenuItem("Favorite", systemName = "heart", onClick = { selection = "Favorite" }),
+            ),
+            title = "Options",
+            expandedDescription = "Expanded",
+            collapsedDescription = "Collapsed",
+            onDismiss = { nestedMenu = false },
+        )
+    }
+    GlasmioAlertDialog(
+        visible = alert,
+        onDismissRequest = { alert = false },
+        title = "Save Changes?",
+        message = "Your changes will appear in this sample.",
+        buttons = listOf(
+            GlasmioAlertButtonSpec("Cancel", { alert = false }, GlasmioAlertButtonRole.Cancel),
+            GlasmioAlertButtonSpec("Save", { alert = false }),
+        ),
+    )
+    GlasmioAlertDialog(
+        visible = inputAlert,
+        onDismissRequest = { inputAlert = false },
+        title = "Name",
+        buttons = listOf(
+            GlasmioAlertButtonSpec("Cancel", { inputAlert = false }, GlasmioAlertButtonRole.Cancel),
+            GlasmioAlertButtonSpec("Done", { inputAlert = false }, enabled = name.text.isNotBlank()),
+        ),
+    ) {
+        GlasmioAlertFieldGroup { GlasmioAlertTextField(name, { name = it }, "Name") }
+    }
+}
+
+@Composable
+private fun SheetsDemo(layout: SamplePageLayout) {
+    var sheet by rememberSaveable { mutableStateOf(false) }
+    var actionSheet by rememberSaveable { mutableStateOf(false) }
+    var checked by rememberSaveable { mutableStateOf(true) }
+    val sheetListState = rememberLazyListState()
+    val sheetEdgeProgress = rememberGlasmioHeaderScrollEdge(sheetListState)
+    DemoList(layout) {
+        item {
+            GlasmioGroupedList {
+                GlasmioListRow("Sheet", showTopSeparator = false, onClick = { sheet = true })
+                GlasmioListRow("Action Sheet", onClick = { actionSheet = true })
+            }
+        }
+    }
+    GlasmioBottomSheet(
+        visible = sheet,
+        skipPartiallyExpanded = false,
+        onDismissRequest = { sheet = false },
+        topBarBlurProgress = sheetEdgeProgress,
+        topBar = {
+            GlasmioSheetTopToolbar("Sheet", actions = {
+                GlasmioSheetToolbarButton(onClick = { sheet = false }) { SfIcon("xmark", "Close") }
+            })
+        },
+    ) {
+        val sheetPadding = LocalGlasmioSheetContentPadding.current
+        Column(Modifier.fillMaxWidth().weight(1f)) {
+        LazyColumn(Modifier.fillMaxWidth().weight(1f), state = sheetListState, contentPadding = PaddingValues(
+            start = 16.dp, top = sheetPadding.calculateTopPadding() + 8.dp, end = 16.dp, bottom = 8.dp,
+        )) {
+            item {
+                GlasmioGroupedList {
+                    GlasmioListRow("Notifications", showTopSeparator = false, trailing = { GlasmioSwitch(checked, { checked = it }) })
+                    GlasmioListRow("Privacy", systemName = "lock", onClick = {})
+                    GlasmioListRow("Appearance", systemName = "circle.lefthalf.filled", onClick = {})
+                }
+            }
+            item { Spacer(Modifier.height(24.dp)) }
+            item {
+                GlasmioGroupedList {
+                    repeat(20) { index ->
+                        GlasmioListRow("Item ${index + 1}", subtitle = if (index % 5 == 0) "Subtitle" else null,
+                            showTopSeparator = index > 0, onClick = {})
+                    }
+                }
+            }
+        }
+        Box(Modifier.fillMaxWidth().padding(bottom = sheetPadding.calculateBottomPadding()).padding(16.dp)) {
+            GlasmioButton(onClick = { sheet = false }, modifier = Modifier.fillMaxWidth(), emphasis = GlassEmphasis.Prominent, size = GlasmioButtonSize.Large) { Text("Done") }
+        }
+        }
+    }
+    GlasmioBottomSheet(visible = actionSheet, fitContent = true, onDismissRequest = { actionSheet = false }) {
+        GlasmioActionSheetContent("Actions", message = "Choose an action") {
+            GlasmioListRow("Share", systemName = "square.and.arrow.up", showTopSeparator = false, onClick = { actionSheet = false })
+            GlasmioListRow("Duplicate", systemName = "plus.square.on.square", onClick = { actionSheet = false })
+            GlasmioListRow("Cancel", onClick = { actionSheet = false })
+        }
+    }
+}

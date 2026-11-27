@@ -1,7 +1,7 @@
 package com.ljyh.mei.ui.component.player.component.classic
 
+import io.github.neoruaa.glasmio.core.swipeBackExcluded
 import android.os.Build
-import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
 import androidx.annotation.RequiresApi
@@ -27,6 +27,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -36,15 +37,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.LayoutCoordinates
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.util.UnstableApi
 import com.ljyh.mei.constants.PlayerHorizontalPadding
 import com.ljyh.mei.constants.ProgressBarStyle
 import com.ljyh.mei.constants.ProgressBarStyleKey
 import com.ljyh.mei.data.network.Resource
-import com.ljyh.mei.ui.component.player.OverlayState
 import com.ljyh.mei.ui.component.player.component.PlayerControls
+import com.ljyh.mei.ui.component.player.LocalPlayerLyricsRequest
 import com.ljyh.mei.ui.component.player.component.FluidProgressSlider
 import com.ljyh.mei.ui.component.player.component.LyricScreen
 import com.ljyh.mei.ui.component.player.component.PlayerActionToolbar
@@ -56,7 +56,6 @@ import com.ljyh.mei.ui.component.player.component.classic.component.PlayerHeader
 import com.ljyh.mei.ui.component.player.overlay.PlayerOverlayHandler
 import com.ljyh.mei.ui.component.player.state.PlayerStateContainer
 import com.ljyh.mei.ui.component.sheet.LocalPlayerSheet
-import com.ljyh.mei.ui.model.LyricSource
 import com.ljyh.mei.utils.rememberEnumPreference
 import kotlinx.coroutines.launch
 
@@ -69,11 +68,17 @@ fun ClassicPhoneLayout(
 ) {
 
 
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var headerTextCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
     var headerRowCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
-    val pagerState = rememberPagerState(pageCount = { 3 })
+    val lyricsRequest = LocalPlayerLyricsRequest.current
+    val pagerState = rememberPagerState(initialPage = if (lyricsRequest?.value == true) 1 else 0, pageCount = { 3 })
+    LaunchedEffect(lyricsRequest?.value) {
+        if (lyricsRequest?.value == true) {
+            pagerState.scrollToPage(1)
+            lyricsRequest.value = false
+        }
+    }
     val sheet = LocalPlayerSheet.current
     val sheetExpanded by remember(sheet) { derivedStateOf { sheet?.state?.isExpanded == true } }
 
@@ -102,6 +107,7 @@ fun ClassicPhoneLayout(
     val duration by remember { derivedStateOf { stateContainer.duration } }
     val lyricLine by remember { derivedStateOf { stateContainer.lyricLine } }
     val isLiked by stateContainer.isLiked
+    val canLike by stateContainer.canLike
 
     val progressBarStyle = rememberEnumPreference(
         key = ProgressBarStyleKey,
@@ -118,6 +124,7 @@ fun ClassicPhoneLayout(
         // Header
         mediaMetadata?.let { it ->
             PlayerHeader(
+                showLikeButton = canLike,
                 mediaMetadata = it,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -137,7 +144,7 @@ fun ClassicPhoneLayout(
                 },
                 isLiked = isLiked,
                 onLikeClick = {
-                    stateContainer.playerViewModel.like(it.id.toString())
+                    stateContainer.playerViewModel.like(it)
                 }
             )
         }
@@ -146,6 +153,7 @@ fun ClassicPhoneLayout(
         HorizontalPager(
             state = pagerState,
             modifier = Modifier
+                .swipeBackExcluded()
                 .fillMaxWidth()
                 .weight(1f),
             contentPadding = PaddingValues(horizontal = PlayerHorizontalPadding),
@@ -172,29 +180,13 @@ fun ClassicPhoneLayout(
                 1 -> {
                     LyricScreen(
                         lyricData = lyricLine,
-                        // Account for the pager inset while matching the progress track.
-                        sourceBadgeEndOffset = PlayerHorizontalPadding - 8.dp,
+                        showSourceBadge = false,
                         playerConnection = stateContainer.playerConnection,
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(horizontal = PlayerHorizontalPadding),
-                        onClick = {
-                            mediaMetadata?.let {
-                                if (overlayHandler.currentOverlayValue is OverlayState.None) {
-                                    stateContainer.playerViewModel.searchQQSong(it.title)
-                                    overlayHandler.showQQMusicSelection(
-                                        mediaMetadata = it
-                                    )
-                                }
-                            }
-                        },
-                        onLongClick = { source ->
-                            if (source == LyricSource.QQMusic && mediaMetadata != null) {
-                                stateContainer.playerViewModel.deleteSongById(id = mediaMetadata!!.id.toString())
-                                Toast.makeText(context, "已删除QQ音乐歌词", Toast.LENGTH_SHORT)
-                                    .show()
-                            }
-                        },
+                        onClick = {},
+                        onLongClick = {},
                         controlsVisible = stateContainer.controlsVisible,
                         onToggleControls = {},
                     )
@@ -280,7 +272,7 @@ fun ClassicPhoneLayout(
             },
             onAddToPlaylistClick = {
                 mediaMetadata?.let {
-                    overlayHandler.showAddToPlaylist(it.id)
+                    overlayHandler.showAddToPlaylist(it)
                 }
             },
             onDownloadClick = {

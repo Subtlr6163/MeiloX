@@ -23,14 +23,18 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -38,15 +42,21 @@ import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.ljyh.mei.source.api.TrackRefCodec
 import com.ljyh.mei.ui.local.LocalPlayerConnection
 import com.ljyh.mei.ui.component.sheet.LocalPlayerSheet
 import com.ljyh.mei.ui.component.utils.rememberLifecycleStarted
 import com.ljyh.mei.utils.TimeUtils.makeTimeString
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.roundToLong
 import kotlin.math.sin
 
@@ -58,30 +68,41 @@ fun PlayerProgressSlider(
     duration: Long,
     isPlaying: Boolean, // 新增：需要根据播放状态控制波浪滚动
     onPositionChange: (Long) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onQualityMenuVisibilityChanged: (Boolean) -> Unit = {},
+    edgeToEdgeTrack: Boolean = false,
+    onTrackTopChanged: ((Float) -> Unit)? = null,
+    viewportBounds: Rect? = null,
 ) {
     val playerConnection = LocalPlayerConnection.current
+    val qualityMediaId = playerConnection?.mediaMetadata?.collectAsStateWithLifecycle()?.value?.trackRef
+        ?.let(TrackRefCodec::mediaId)
     val musicQuality = playerConnection?.currentMusicQuality?.collectAsStateWithLifecycle()?.value
     val availableQualities = playerConnection?.availableMusicQualities?.collectAsStateWithLifecycle()?.value.orEmpty()
     val isLoadingQualities = playerConnection?.isLoadingMusicQualities?.collectAsStateWithLifecycle()?.value ?: false
     val localPlaybackInfo = playerConnection?.localPlaybackInfo?.collectAsStateWithLifecycle()?.value
     val isPlayingLocalSource = playerConnection?.isPlayingLocalSource?.collectAsStateWithLifecycle()?.value ?: false
-    val isDurationValid = remember(duration) { duration > 0 }
-    val valueRange = remember(duration) { 0f..(duration.takeIf { it > 0 } ?: 1).toFloat() }
+    val rail = playerRailClock(position, duration, qualityMediaId)
+    val displayDuration = rail.durationMs
+    val isDurationValid = displayDuration > 0
+    val valueRange = remember(displayDuration) { 0f..displayDuration.coerceAtLeast(1).toFloat() }
 
     // 交互状态
-    val interactionSource = remember { MutableInteractionSource() }
-    val isUserDragging by interactionSource.collectIsDraggedAsState()
+    val interactionSource = remember(rail.seekSession) { MutableInteractionSource() }
+    val isDragged by interactionSource.collectIsDraggedAsState()
+    val isUserDragging = isDragged && rail.seekEnabled
 
     // 内部拖拽位置状态
-    var rawDragPosition by remember { mutableFloatStateOf(0f) }
+    var rawDragPosition by remember(rail.seekSession) { mutableFloatStateOf(rail.positionMs.toFloat()) }
 
     // 计算当前显示的值
     val sliderPosition = if (isUserDragging) {
         rawDragPosition
     } else {
-        position.toFloat()
+        rail.positionMs.toFloat()
     }.coerceIn(valueRange)
+    val displayPosition = if (rail.showingIncoming && !isDurationValid) rail.positionMs
+        else sliderPosition.toLong()
 
     // 计算进度百分比 (0.0 - 1.0)
     val progressFraction = if (isDurationValid) {
@@ -115,6 +136,20 @@ fun PlayerProgressSlider(
         animationSpec = tween(300),
         label = "amplitude"
     )
+    val density = LocalDensity.current
+    var trackCenterInRoot by remember { mutableStateOf<Float?>(null) }
+    val trackTopListener by rememberUpdatedState(onTrackTopChanged)
+    val hasProgress by rememberUpdatedState(progressFraction > 0f)
+    if (onTrackTopChanged != null) LaunchedEffect(density) {
+        snapshotFlow {
+            trackCenterInRoot?.let { center ->
+                // Reserve the waveform envelope, including its moving endpoint.
+                // The phase changes within that envelope without moving the fade.
+                val radius = with(density) { if (hasProgress) 6.dp.toPx() else 1.dp.toPx() }
+                center - radius - if (hasProgress) abs(amplitude) else 0f
+            }
+        }.filterNotNull().distinctUntilChanged().collect { trackTopListener?.invoke(it) }
+    }
 
     Column(modifier = modifier) {
         // 自定义 Slider
@@ -125,7 +160,7 @@ fun PlayerProgressSlider(
                 rawDragPosition = it
             },
             onValueChangeFinished = {
-                if (isDurationValid) {
+                if (rail.canCommitSeek()) {
                     onPositionChange(rawDragPosition.roundToLong())
                 }
             },
@@ -134,14 +169,14 @@ fun PlayerProgressSlider(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(24.dp), // 增加一点高度给波浪
-            enabled = isDurationValid,
+            enabled = rail.seekEnabled,
 
             // 隐藏原本的 Thumb (圆球)，我们自己画在 Track 里，或者不需要 Thumb
             thumb = {
                 // 如果你想要一个光标，可以在这里画。
                 // 安卓原生波浪条通常末端是一条竖线。
                 // 这里我们做一个透明的占位，把绘制逻辑统一放到 track 里
-                Spacer(Modifier.size(1.dp))
+                Spacer(Modifier.size(if (edgeToEdgeTrack) 0.dp else 1.dp))
             },
 
             // 自定义轨道绘制
@@ -150,6 +185,9 @@ fun PlayerProgressSlider(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(24.dp) // 确保有足够空间画波峰波谷
+                        .onGloballyPositioned {
+                            trackCenterInRoot = it.localToRoot(Offset(0f, it.size.height / 2f)).y
+                        }
                 ) {
                     val width = size.width
                     val height = size.height
@@ -234,7 +272,7 @@ fun PlayerProgressSlider(
             )
 
             Text(
-                text = makeTimeString(sliderPosition.toLong()),
+                text = makeTimeString(displayPosition),
                 modifier = Modifier.weight(1f),
                 style = timeTextStyle,
                 color = Color.White.copy(alpha = 0.9f), // 使用白色，微透
@@ -244,6 +282,7 @@ fun PlayerProgressSlider(
 
             PlayerQualityDropdown(
                 quality = musicQuality,
+                mediaId = qualityMediaId,
                 availableQualities = availableQualities,
                 isLoading = isLoadingQualities,
                 localPlaybackInfo = localPlaybackInfo,
@@ -251,13 +290,15 @@ fun PlayerProgressSlider(
                 onMenuOpened = { playerConnection?.refreshAvailableMusicQualities() },
                 onQualitySelected = { playerConnection?.changeQuality(it) },
                 onLocalSourceSelected = { playerConnection?.useLocalSource() },
+                onMenuVisibilityChanged = onQualityMenuVisibilityChanged,
+                viewportBounds = viewportBounds,
                 style = timeTextStyle,
                 color = Color.White.copy(alpha = 0.8f),
             )
 
 
             Text(
-                text = if (duration > 0) makeTimeString(duration) else "-:--",
+                text = if (isDurationValid) makeTimeString(displayDuration) else "-:--",
                 modifier = Modifier.weight(1f),
                 textAlign = TextAlign.End,
                 style = timeTextStyle,

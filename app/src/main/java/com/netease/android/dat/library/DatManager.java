@@ -32,7 +32,13 @@ public final class DatManager implements AutoCloseable {
 
     private void importAsset(Context context, String asset, String name) throws IOException {
         try (var in = context.getAssets().open(asset);
-             var out = new FileOutputStream(new File(directory, name))) { in.transferTo(out); }
+             var out = new FileOutputStream(new File(directory, name))) {
+            byte[] buffer = new byte[8192];
+            int count;
+            while ((count = in.read(buffer)) != -1) {
+                out.write(buffer, 0, count);
+            }
+        }
     }
 
     @Override public void close() {

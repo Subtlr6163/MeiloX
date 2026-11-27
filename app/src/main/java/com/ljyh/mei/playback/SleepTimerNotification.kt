@@ -1,5 +1,6 @@
 package com.ljyh.mei.playback
 
+import android.os.Build
 import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -14,6 +15,7 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.ljyh.mei.MainActivity
 import com.ljyh.mei.R
+import com.ljyh.mei.widget.MusicWidgets
 import java.util.Date
 
 class SleepTimerNotification(private val context: Context) {
@@ -31,8 +33,9 @@ class SleepTimerNotification(private val context: Context) {
     }
 
     fun isEnabled(): Boolean =
-        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
-            PackageManager.PERMISSION_GRANTED && manager.areNotificationsEnabled() &&
+        (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED) && manager.areNotificationsEnabled() &&
             manager.getNotificationChannel(CHANNEL_ID)?.importance != NotificationManager.IMPORTANCE_NONE
 
     fun update(state: SleepTimerState) {
@@ -51,7 +54,7 @@ class SleepTimerNotification(private val context: Context) {
         val cancel = PendingIntent.getService(
             context,
             NOTIFICATION_ID,
-            Intent(context, MusicService::class.java).setAction(MusicService.ACTION_CANCEL_SLEEP_TIMER),
+            MusicWidgets.authorize(context, Intent(context, MusicService::class.java).setAction(MusicService.ACTION_CANCEL_SLEEP_TIMER)),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val builder = NotificationCompat.Builder(context, CHANNEL_ID)

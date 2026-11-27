@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -31,9 +32,11 @@ import com.ljyh.mei.constants.AccentColorKey
 import com.ljyh.mei.constants.AccompanimentLyricTextSizeKey
 import com.ljyh.mei.constants.CoverStyle
 import com.ljyh.mei.constants.CoverStyleKey
+import com.ljyh.mei.constants.ColorfulDetailBackgroundsKey
 import com.ljyh.mei.constants.DebugKey
 import com.ljyh.mei.constants.DefaultAccentColorArgb
 import com.ljyh.mei.constants.DefaultInterfaceLetterSpacing
+import com.ljyh.mei.constants.MaxInterfaceLetterSpacing
 import com.ljyh.mei.constants.DynamicThemeKey
 import com.ljyh.mei.constants.InterfaceLetterSpacingKey
 import com.ljyh.mei.constants.LyricTextSize
@@ -51,9 +54,11 @@ import com.ljyh.mei.constants.LibraryStyle
 import com.ljyh.mei.constants.LibraryStyleKey
 import com.ljyh.mei.constants.LibraryDefaultPageKey
 import com.ljyh.mei.constants.KeepBottomBarExpandedKey
+import com.ljyh.mei.constants.HorizontalSafeAreaEnabledKey
 import com.ljyh.mei.constants.BottomFloatingContentExtraSpacingKey
 import com.ljyh.mei.constants.DefaultBottomFloatingContentExtraSpacing
 import com.ljyh.mei.constants.MaxBottomFloatingContentExtraSpacing
+import com.ljyh.mei.constants.GlassHdrEffectsKey
 import com.ljyh.mei.constants.LiquidGlassEnabledKey
 import com.ljyh.mei.constants.ReduceTransparencyKey
 import com.ljyh.mei.constants.PredictiveBackAnimationEnabledKey
@@ -70,22 +75,22 @@ import com.ljyh.mei.constants.ProgressBarStyle
 import com.ljyh.mei.constants.ProgressBarStyleKey
 import com.ljyh.mei.constants.TabletAnimationStyle
 import com.ljyh.mei.constants.TabletAnimationStyleKey
-import com.ljyh.mei.ui.glass.GlassCard
-import com.ljyh.mei.ui.glass.GlassIconButton
-import com.ljyh.mei.ui.glass.GlassSlider
-import com.ljyh.mei.ui.glass.GlassToggle
-import com.ljyh.mei.ui.glass.SfIcon
-import com.ljyh.mei.ui.glass.SfSymbol
-import com.ljyh.mei.ui.glass.IosColorPicker
-import com.ljyh.mei.ui.glass.IosPinnedListPage
-import com.ljyh.mei.ui.glass.IosPopupButton
-import com.ljyh.mei.ui.glass.IosTypography
+import io.github.neoruaa.glasmio.ui.GlasmioSlider
+import com.ljyh.mei.ui.component.MeiloXSwitch
+import io.github.neoruaa.glasmio.icons.SfIcon
+import io.github.neoruaa.glasmio.icons.SfSymbol
+import io.github.neoruaa.glasmio.ui.GlasmioColorPicker
+import io.github.neoruaa.glasmio.ui.GlasmioColorPickerLabels
+import com.ljyh.mei.ui.navigation.MeiloXPinnedListPage
+import io.github.neoruaa.glasmio.ui.GlasmioPopUpButton
+import io.github.neoruaa.glasmio.core.IosTypography
 import com.ljyh.mei.ui.local.LocalNavController
 import com.ljyh.mei.ui.local.LocalPlayerAwareWindowInsets
 import com.ljyh.mei.ui.navigation.ContentFeature
 import com.ljyh.mei.ui.navigation.LibraryPage
 import com.ljyh.mei.utils.rememberEnumPreference
 import com.ljyh.mei.utils.rememberPreference
+import io.github.neoruaa.glasmio.glass.render.isRuntimeShaderSupported
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -95,19 +100,25 @@ fun AppearanceSettings(
 ) {
     val navController = LocalNavController.current
     val insets = LocalPlayerAwareWindowInsets.current.asPaddingValues()
-    val (dynamicTheme, setDynamicTheme) = rememberPreference(DynamicThemeKey, true)
+    val (dynamicTheme, setDynamicTheme) = rememberPreference(DynamicThemeKey, false)
+    val (colorfulDetailBackgrounds, setColorfulDetailBackgrounds) =
+        rememberPreference(ColorfulDetailBackgroundsKey, true)
     val (accentColorArgb, setAccentColorArgb) = rememberPreference(AccentColorKey, DefaultAccentColorArgb)
     val (letterSpacing, setLetterSpacing) = rememberPreference(InterfaceLetterSpacingKey, DefaultInterfaceLetterSpacing)
     val customAccent = accentColorArgb != DefaultAccentColorArgb
     var showColorPicker by remember { mutableStateOf(false) }
-    val (playlistStyle, setPlaylistStyle) = rememberEnumPreference(PlaylistCoverStyleKey, PlaylistCoverStyle.Cover)
+    val (playlistStyle, setPlaylistStyle) = rememberEnumPreference(PlaylistCoverStyleKey, PlaylistCoverStyle.Combination)
     val (playlistHeader, setPlaylistHeader) = rememberPreference(PlaylistTrackTableHeaderKey, false)
     val (libraryStyle, setLibraryStyle) = rememberEnumPreference(LibraryStyleKey, LibraryStyle.Default)
     val (libraryDefaultPage, setLibraryDefaultPage) = rememberPreference(LibraryDefaultPageKey, "")
     val (keepBottomBarExpanded, setKeepBottomBarExpanded) = rememberPreference(KeepBottomBarExpandedKey, false)
+    val (horizontalSafeAreaEnabled, setHorizontalSafeAreaEnabled) =
+        rememberPreference(HorizontalSafeAreaEnabledKey, true)
     val (bottomFloatingExtraSpacing, setBottomFloatingExtraSpacing) =
         rememberPreference(BottomFloatingContentExtraSpacingKey, DefaultBottomFloatingContentExtraSpacing)
+    val shaderEffectsSupported = isRuntimeShaderSupported()
     val (liquidGlassEnabled, setLiquidGlassEnabled) = rememberPreference(LiquidGlassEnabledKey, true)
+    val (glassHdrEffects, setGlassHdrEffects) = rememberPreference(GlassHdrEffectsKey, false)
     val (reduceTransparency, setReduceTransparency) = rememberPreference(ReduceTransparencyKey, false)
     val (predictiveBackAnimation, setPredictiveBackAnimation) =
         rememberPreference(PredictiveBackAnimationEnabledKey, true)
@@ -147,7 +158,7 @@ fun AppearanceSettings(
     val (secondaryBold, setSecondaryBold) = rememberPreference(AccompanimentLyricTextBoldKey, true)
     val (debug, setDebug) = rememberPreference(DebugKey, false)
 
-    IosPinnedListPage(
+    MeiloXPinnedListPage(
         title = stringResource(R.string.appearance_settings),
         onNavigateBack = navController::navigateUp,
         bottomPadding = insets.calculateBottomPadding(),
@@ -172,11 +183,25 @@ fun AppearanceSettings(
                     },
                     enabled = !dynamicTheme,
                 )
+                AppearanceToggle(
+                    R.string.appearance_colorful_detail_backgrounds,
+                    R.string.appearance_colorful_detail_backgrounds_description,
+                    "photo.stack",
+                    colorfulDetailBackgrounds,
+                    setColorfulDetailBackgrounds,
+                )
                 AppearanceLetterSpacing(letterSpacing, setLetterSpacing)
             }
         }
         item {
             SettingsGroup(stringResource(R.string.appearance_interface)) {
+                AppearanceToggle(
+                    R.string.appearance_horizontal_safe_area,
+                    null,
+                    "arrow.left.and.right",
+                    horizontalSafeAreaEnabled,
+                    setHorizontalSafeAreaEnabled,
+                )
                 AppearanceToggle(
                     R.string.appearance_fixed_bottom_bar,
                     R.string.appearance_fixed_bottom_bar_description,
@@ -187,18 +212,29 @@ fun AppearanceSettings(
                 AppearanceBottomFloatingSpacing(bottomFloatingExtraSpacing, setBottomFloatingExtraSpacing)
                 AppearanceToggle(
                     R.string.appearance_liquid_glass,
-                    R.string.appearance_liquid_glass_description,
+                    if (shaderEffectsSupported) R.string.appearance_liquid_glass_description
+                    else R.string.legacy_appearance_shader_requirement,
                     "square.on.square",
-                    liquidGlassEnabled,
+                    liquidGlassEnabled && shaderEffectsSupported,
                     setLiquidGlassEnabled,
-                    enabled = !reduceTransparency,
+                    enabled = shaderEffectsSupported && !reduceTransparency,
+                )
+                AppearanceToggle(
+                    R.string.appearance_glass_hdr_effects,
+                    if (shaderEffectsSupported) null else R.string.legacy_appearance_shader_requirement,
+                    "sun.max.fill",
+                    glassHdrEffects && shaderEffectsSupported,
+                    setGlassHdrEffects,
+                    enabled = shaderEffectsSupported && liquidGlassEnabled && !reduceTransparency,
                 )
                 AppearanceToggle(
                     R.string.appearance_reduce_transparency,
-                    R.string.appearance_reduce_transparency_description,
+                    if (shaderEffectsSupported) R.string.appearance_reduce_transparency_description
+                    else R.string.legacy_appearance_reduce_transparency_description,
                     "circle.lefthalf.filled",
-                    reduceTransparency,
+                    !shaderEffectsSupported || reduceTransparency,
                     setReduceTransparency,
+                    enabled = shaderEffectsSupported,
                 )
                 AppearanceToggle(
                     R.string.appearance_predictive_back,
@@ -281,21 +317,31 @@ fun AppearanceSettings(
             }
         }
         item {
-            SettingsGroup(stringResource(R.string.appearance_fluid_background)) {
-                AppearanceFloatChoice(R.string.appearance_flow_speed, "gauge.with.dots.needle.33percent", meshFlowSpeed, listOf(.05f, .1f, .15f, .25f, .5f), setMeshFlowSpeed)
-                AppearanceFloatChoice(R.string.appearance_render_scale, "eye", meshRenderScale, listOf(.25f, .5f, .75f, 1f), setMeshRenderScale)
-                AppearanceFloatChoice(R.string.appearance_beat_sensitivity, "waveform.path.ecg", meshLowFrequency, listOf(0f, .1f, .2f, .3f, .4f, .5f), setMeshLowFrequency)
-                AppearanceChoice(R.string.appearance_mesh_subdivision, "circle.grid.2x2.fill", meshSubdivision, (1..8).map { it * 10 }, { it.toString() }, setMeshSubdivision)
-                AppearanceToggle(R.string.appearance_static_mode, R.string.appearance_static_mode_description, "pause.circle", meshStatic, setMeshStatic)
-                AppearanceToggle(R.string.appearance_background_animation, R.string.appearance_background_animation_description, "play.circle", meshPlaying, setMeshPlaying)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SettingsGroup(stringResource(R.string.appearance_fluid_background)) {
+                    AppearanceFloatChoice(R.string.appearance_flow_speed, "gauge.with.dots.needle.33percent", meshFlowSpeed, listOf(.05f, .1f, .15f, .25f, .5f), setMeshFlowSpeed, enabled = shaderEffectsSupported)
+                    AppearanceFloatChoice(R.string.appearance_render_scale, "eye", meshRenderScale, listOf(.25f, .5f, .75f, 1f), setMeshRenderScale, enabled = shaderEffectsSupported)
+                    AppearanceFloatChoice(R.string.appearance_beat_sensitivity, "waveform.path.ecg", meshLowFrequency, listOf(0f, .1f, .2f, .3f, .4f, .5f), setMeshLowFrequency, enabled = shaderEffectsSupported)
+                    AppearanceChoice(R.string.appearance_mesh_subdivision, "circle.grid.2x2.fill", meshSubdivision, (1..8).map { it * 10 }, { it.toString() }, setMeshSubdivision, enabled = shaderEffectsSupported)
+                    AppearanceToggle(R.string.appearance_static_mode, R.string.appearance_static_mode_description.takeIf { shaderEffectsSupported }, "pause.circle", meshStatic && shaderEffectsSupported, setMeshStatic, enabled = shaderEffectsSupported)
+                    AppearanceToggle(R.string.appearance_background_animation, R.string.appearance_background_animation_description.takeIf { shaderEffectsSupported }, "play.circle", meshPlaying && shaderEffectsSupported, setMeshPlaying, enabled = shaderEffectsSupported)
+                }
+                if (!shaderEffectsSupported) {
+                    Text(
+                        stringResource(R.string.legacy_appearance_fluid_description),
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
         item {
             SettingsGroup(stringResource(R.string.appearance_lyrics)) {
                 AppearanceToggle(R.string.appearance_primary_bold, null, "bold", primaryBold, setPrimaryBold)
-                AppearanceChoice(R.string.appearance_primary_size, "textformat.size", primarySize, LyricTextSize.entries, { "${it.text} sp" }, setPrimarySize)
+                AppearanceLyricSize(R.string.appearance_primary_size, primarySize, 16..48, setPrimarySize)
                 AppearanceToggle(R.string.appearance_secondary_bold, null, "bold", secondaryBold, setSecondaryBold)
-                AppearanceChoice(R.string.appearance_secondary_size, "textformat.size", secondarySize, LyricTextSize.entries, { "${it.text} sp" }, setSecondarySize)
+                AppearanceLyricSize(R.string.appearance_secondary_size, secondarySize, 16..36, setSecondarySize)
             }
         }
         item {
@@ -304,7 +350,7 @@ fun AppearanceSettings(
             }
         }
     }
-    IosColorPicker(
+    GlasmioColorPicker(
         visible = showColorPicker,
         selectedColor = androidx.compose.ui.graphics.Color(accentColorArgb.toInt()),
         onColorSelected = { color ->
@@ -312,26 +358,71 @@ fun AppearanceSettings(
         },
         onDismiss = { showColorPicker = false },
         title = stringResource(R.string.appearance_accent_color),
+        labels = GlasmioColorPickerLabels(
+            grid = stringResource(R.string.color_picker_grid),
+            spectrum = stringResource(R.string.color_picker_spectrum),
+            sliders = stringResource(R.string.color_picker_sliders),
+            opacity = stringResource(R.string.color_picker_opacity),
+        ),
     )
 }
 
 @Composable
-private fun AppearanceLetterSpacing(savedSpacing: Float, setSpacing: (Float) -> Unit) {
-    val spacing = (savedSpacing.takeIf { it.isFinite() } ?: DefaultInterfaceLetterSpacing).coerceIn(0f, 3f)
-    // Keep the latest local edit visible while consecutive preference writes settle.
-    var draftSpacing by remember { mutableStateOf<Float?>(null) }
-    val displayedSpacing = draftSpacing ?: spacing
-    val title = stringResource(R.string.appearance_letter_spacing)
-    val valueLabel = stringResource(R.string.appearance_letter_spacing_value, displayedSpacing)
-
-    GlassCard(Modifier.fillMaxWidth()) {
+private fun AppearanceLyricSize(
+    titleRes: Int,
+    savedSize: LyricTextSize,
+    range: IntRange,
+    setSize: (LyricTextSize) -> Unit,
+) {
+    val size = savedSize.text.coerceIn(range)
+    var draftSize by remember { mutableStateOf<Int?>(null) }
+    val displayedSize = draftSize ?: size
+    val title = stringResource(titleRes)
+    val valueLabel = "$displayedSize sp"
+    SettingsCard(Modifier.fillMaxWidth()) {
         Column(Modifier.fillMaxWidth().padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 SfIcon("textformat.size", null)
                 Text(title, Modifier.weight(1f).padding(horizontal = 13.dp))
                 Text(valueLabel, style = IosTypography.subheadline, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            GlassSlider(
+            GlasmioSlider(
+                value = displayedSize.toFloat(),
+                onValueChange = { draftSize = it.roundToInt().coerceIn(range) },
+                onValueChangeFinished = {
+                    val selectedSize = draftSize ?: size
+                    setSize(LyricTextSize.entries.first { it.text == selectedSize })
+                },
+                valueRange = range.first.toFloat()..range.last.toFloat(),
+                modifier = Modifier.padding(horizontal = 10.dp).semantics {
+                    contentDescription = title
+                    stateDescription = valueLabel
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun AppearanceLetterSpacing(savedSpacing: Float, setSpacing: (Float) -> Unit) {
+    val spacing = (savedSpacing.takeIf { it.isFinite() } ?: DefaultInterfaceLetterSpacing)
+        .coerceIn(0f, MaxInterfaceLetterSpacing)
+    // Keep the latest local edit visible while consecutive preference writes settle.
+    var draftSpacing by remember { mutableStateOf<Float?>(null) }
+    val displayedSpacing = draftSpacing ?: spacing
+    val title = stringResource(R.string.appearance_letter_spacing)
+    // A zero spacing is not "no tracking": every style keeps the tracking Apple's design uses.
+    val valueLabel = if (displayedSpacing == 0f) stringResource(R.string.appearance_letter_spacing_ios)
+        else stringResource(R.string.appearance_letter_spacing_value, displayedSpacing)
+
+    SettingsCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.fillMaxWidth().padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                SfIcon("textformat.size", null)
+                Text(title, Modifier.weight(1f).padding(horizontal = 13.dp))
+                Text(valueLabel, style = IosTypography.subheadline, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            GlasmioSlider(
                 value = displayedSpacing,
                 onValueChange = { draftSpacing = it },
                 onValueChangeFinished = {
@@ -339,7 +430,7 @@ private fun AppearanceLetterSpacing(savedSpacing: Float, setSpacing: (Float) -> 
                     draftSpacing = rounded
                     setSpacing(rounded)
                 },
-                valueRange = 0f..3f,
+                valueRange = 0f..MaxInterfaceLetterSpacing,
                 modifier = Modifier.padding(horizontal = 10.dp).semantics {
                     contentDescription = title
                     stateDescription = valueLabel
@@ -358,14 +449,14 @@ private fun AppearanceBottomFloatingSpacing(savedSpacing: Int, setSpacing: (Int)
     val title = stringResource(R.string.appearance_bottom_floating_extra_spacing)
     val valueLabel = stringResource(R.string.appearance_bottom_floating_extra_spacing_value, displayedSpacing)
 
-    GlassCard(Modifier.fillMaxWidth()) {
+    SettingsCard(Modifier.fillMaxWidth()) {
         Column(Modifier.fillMaxWidth().padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 SfIcon("arrow.up", null)
                 Text(title, Modifier.weight(1f).padding(horizontal = 13.dp))
                 Text(valueLabel, style = IosTypography.subheadline, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            GlassSlider(
+            GlasmioSlider(
                 value = displayedSpacing.toFloat(),
                 onValueChange = { draftSpacing = it.roundToInt().coerceIn(0, MaxBottomFloatingContentExtraSpacing) },
                 onValueChangeFinished = { setSpacing(draftSpacing ?: spacing) },
@@ -393,7 +484,7 @@ private fun AppearanceToggle(
     onCheckedChange: (Boolean) -> Unit,
     enabled: Boolean = true,
 ) {
-    GlassCard(
+    SettingsCard(
         Modifier.fillMaxWidth().semantics { if (!enabled) disabled() },
         onClick = if (enabled) ({ onCheckedChange(!checked) }) else null,
     ) {
@@ -408,7 +499,7 @@ private fun AppearanceToggle(
                     Text(stringResource(it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            GlassToggle(checked, onCheckedChange, enabled = enabled)
+            MeiloXSwitch(checked, onCheckedChange, enabled = enabled)
         }
     }
 }
@@ -423,14 +514,15 @@ private fun <T> AppearanceChoice(
     onSelected: (T) -> Unit,
     enabled: Boolean = true,
 ) {
-    GlassCard(Modifier.fillMaxWidth()) {
+    SettingsCard(Modifier.fillMaxWidth()) {
         Row(
-            Modifier.fillMaxWidth().alpha(if (enabled) 1f else 0.38f).padding(14.dp),
+            Modifier.fillMaxWidth().heightIn(min = 52.dp)
+                .alpha(if (enabled) 1f else 0.38f).padding(horizontal = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             SfIcon(systemName, null)
-            Text(stringResource(titleRes), modifier = Modifier.weight(1f).padding(horizontal = 13.dp))
-            IosPopupButton(
+            Text(stringResource(titleRes), modifier = Modifier.weight(1f).padding(horizontal = 13.dp, vertical = 14.dp))
+            GlasmioPopUpButton(
                 selected = selected,
                 items = values,
                 onSelected = onSelected,
@@ -448,6 +540,7 @@ private fun AppearanceFloatChoice(
     selected: Float,
     values: List<Float>,
     onSelected: (Float) -> Unit,
+    enabled: Boolean = true,
 ) {
-    AppearanceChoice(titleRes, systemName, selected, values, { "${(it * 100).toInt()}%" }, onSelected)
+    AppearanceChoice(titleRes, systemName, selected, values, { "${(it * 100).toInt()}%" }, onSelected, enabled)
 }

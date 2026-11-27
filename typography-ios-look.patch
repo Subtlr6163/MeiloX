@@ -1,0 +1,440 @@
+--- a/app/src/main/java/com/ljyh/mei/ui/theme/Type.kt
++++ b/app/src/main/java/com/ljyh/mei/ui/theme/Type.kt
+@@ -12,39 +12,95 @@
+ import androidx.compose.ui.text.font.FontStyle
+ import androidx.compose.ui.text.font.FontVariation
+ import androidx.compose.ui.text.font.FontWeight
+-import androidx.compose.ui.unit.TextUnit
+ import androidx.compose.ui.unit.sp
+ import com.ljyh.mei.R
+ 
+-private val sfProWeights = listOf(
+-    FontWeight.Light,
+-    FontWeight.Normal,
+-    FontWeight.Medium,
+-    FontWeight.SemiBold,
+-    FontWeight.Bold,
++/**
++ * iOS renders SF Pro with two optical sizes: SF Pro Text up to 17 pt and SF Pro Display from
++ * 20 pt. The bundled variable font defaults to the display cut (opsz 28), so a family that does
++ * not pin the axis draws body copy with display glyph widths: at 17 pt the letters are about
++ * 12 % narrower and the x-height is smaller than on iOS, which only reads correctly once the
++ * missing tracking is papered over with extra letter spacing.
++ *
++ * SF Pro carries no CJK glyphs, so Chinese is drawn with the bundled Noto Sans SC (SIL OFL 1.1)
++ * through a custom fallback instead of whatever sans the OEM happens to ship.
++ */
++private const val TextOpticalSize = 17
++private const val DisplayOpticalSize = 28
++private const val OpticalSizeBreakpoint = 20
++
++/** SF Pro's real 'wght' stops; Compose's Medium and SemiBold resolve onto 510 and 590. */
++private val sfProWeightAxes = listOf(
++    FontWeight(300) to 300,
++    FontWeight(400) to 400,
++    FontWeight(510) to 510,
++    FontWeight(590) to 590,
++    FontWeight(700) to 700,
+ )
+ 
+-private class SfProFont(override val weight: FontWeight) : AndroidFont(
++private class SfProFont(
++    override val weight: FontWeight,
++    val opticalSize: Int,
++    val axisWeight: Int,
++) : AndroidFont(
+     loadingStrategy = FontLoadingStrategy.Blocking,
+     typefaceLoader = SfProFontLoader,
+     variationSettings = FontVariation.Settings(),
+ ) {
+     override val style = FontStyle.Normal
++
++    override fun toString(): String = "SfProFont(weight=$weight, opsz=$opticalSize, wght=$axisWeight)"
+ }
+ 
+ private object SfProFontLoader : AndroidFont.TypefaceLoader {
+     private var regularFont: PlatformFont? = null
+-    private var textTypeface: Typeface? = null
++    private var cjkRegularFont: PlatformFont? = null
+     private var symbolTypeface: Typeface? = null
++    private val cjkFamilies = HashMap<Int, PlatformFontFamily>()
++    private val opticalFamilies = HashMap<Pair<Int, Int>, Typeface>()
+ 
+-    private fun getRegularFont(context: Context): PlatformFont =
++    private fun baseFont(context: Context): PlatformFont =
+         regularFont ?: PlatformFont.Builder(context.resources, R.font.sf_pro).build()
+             .also { regularFont = it }
++
++    private fun cjkBaseFont(context: Context): PlatformFont =
++        cjkRegularFont ?: PlatformFont.Builder(context.resources, R.font.noto_sans_sc).build()
++            .also { cjkRegularFont = it }
++
++    private fun face(base: PlatformFont, axisWeight: Int, opticalSize: Int): PlatformFont =
++        PlatformFont.Builder(base)
++            .setWeight(axisWeight)
++            .setFontVariationSettings("'wght' $axisWeight, 'opsz' $opticalSize")
++            .build()
++
++    private fun cjkFamily(context: Context, axisWeight: Int): PlatformFontFamily =
++        cjkFamilies.getOrPut(axisWeight) {
++            PlatformFontFamily.Builder(
++                PlatformFont.Builder(cjkBaseFont(context))
++                    .setWeight(axisWeight)
++                    .setFontVariationSettings("'wght' $axisWeight")
++                    .build(),
++            ).build()
++        }
++
++    /**
++     * SF Pro has no CJK glyphs, so without an explicit fallback Chinese resolves to the OEM
++     * font (MiSans, OPPO Sans, ...). Noto Sans SC is the open Source Han design and keeps the
++     * humanist shapes iOS ships as PingFang SC.
++     */
++    @Synchronized
++    private fun opticalFamilyTypeface(context: Context, opticalSize: Int, axisWeight: Int): Typeface =
++        opticalFamilies.getOrPut(opticalSize to axisWeight) {
++            val primary = PlatformFontFamily.Builder(face(baseFont(context), axisWeight, opticalSize)).build()
++            Typeface.CustomFallbackBuilder(primary)
++                .addCustomFallback(cjkFamily(context, axisWeight))
++                .build()
++        }
+ 
+     @Synchronized
+     fun getSymbolTypeface(context: Context): Typeface {
+         symbolTypeface?.let { return it }
+-        val regular = getRegularFont(context)
++        val regular = baseFont(context)
+         // Symbols keep their single-face weight resolution and share the text font's buffer.
+         return Typeface.CustomFallbackBuilder(PlatformFontFamily.Builder(regular).build())
+             .setStyle(regular.style)
+@@ -53,26 +109,10 @@
+     }
+ 
+     @Synchronized
+-    private fun getTextTypeface(context: Context): Typeface {
+-        textTypeface?.let { return it }
+-
+-        val regular = getRegularFont(context)
+-        val family = PlatformFontFamily.Builder(regular)
+-        for (weight in sfProWeights) {
+-            if (weight == FontWeight.Normal) continue
+-            // Apply the variation to SF Pro alone. Android chooses the system fallback by style.
+-            family.addFont(
+-                PlatformFont.Builder(regular)
+-                    .setWeight(weight.weight)
+-                    .setFontVariationSettings("'wght' ${weight.weight}")
+-                    .build(),
+-            )
+-        }
+-        return Typeface.CustomFallbackBuilder(family.build()).build().also { textTypeface = it }
++    override fun loadBlocking(context: Context, font: AndroidFont): Typeface {
++        val sfPro = font as SfProFont
++        return opticalFamilyTypeface(context, sfPro.opticalSize, sfPro.axisWeight)
+     }
+-
+-    override fun loadBlocking(context: Context, font: AndroidFont): Typeface =
+-        Typeface.create(getTextTypeface(context), font.weight.weight, false)
+ 
+     override suspend fun awaitLoad(context: Context, font: AndroidFont): Typeface =
+         loadBlocking(context, font)
+@@ -81,26 +121,56 @@
+ internal fun sfProSymbolTypeface(context: Context): Typeface =
+     SfProFontLoader.getSymbolTypeface(context)
+ 
+-val AppFontFamily = FontFamily(sfProWeights.map(::SfProFont))
++private fun sfProFamily(opticalSize: Int): FontFamily =
++    FontFamily(sfProWeightAxes.map { (weight, axisWeight) -> SfProFont(weight, opticalSize, axisWeight) })
++
++/** SF Pro Text: body sizes, 17 pt and below on iOS. */
++val SfProText = sfProFamily(TextOpticalSize)
++
++/** SF Pro Display: title sizes, 20 pt and above on iOS. */
++val SfProDisplay = sfProFamily(DisplayOpticalSize)
++
++// Apple's Large-category tracking, in points at the size each role uses. Applying these per
++// style is what separates iOS text from a single flat letter-spacing override: 17 pt body copy
++// is tightened, while 22 pt and larger titles open up.
++private const val LargeTitleTracking = 0.40f
++private const val Title1Tracking = 0.38f
++private const val Title2Tracking = -0.26f
++private const val Title3Tracking = -0.45f
++private const val HeadlineTracking = -0.43f
++private const val SubheadlineTracking = -0.23f
++private const val FootnoteTracking = -0.08f
++private const val Caption1Tracking = 0f
++private const val Caption2Tracking = 0.06f
++
++private fun iosTextStyle(
++    size: Int,
++    lineHeight: Int,
++    weight: FontWeight,
++    tracking: Float,
++): TextStyle = TextStyle(
++    fontFamily = if (size >= OpticalSizeBreakpoint) SfProDisplay else SfProText,
++    fontWeight = weight,
++    fontSize = size.sp,
++    lineHeight = lineHeight.sp,
++    letterSpacing = tracking.sp,
++)
+ 
+ /** Shared typography for Material controls, iOS components, inputs, and lyrics. */
+-fun appTypography(letterSpacing: TextUnit): Typography {
+-    val base = TextStyle(fontFamily = AppFontFamily, letterSpacing = letterSpacing)
+-    return Typography(
+-        displayLarge = base,
+-        displayMedium = base,
+-        displaySmall = base,
+-        headlineLarge = base.copy(fontWeight = FontWeight.Bold, fontSize = 34.sp, lineHeight = 41.sp),
+-        headlineMedium = base.copy(fontWeight = FontWeight.Bold, fontSize = 28.sp, lineHeight = 34.sp),
+-        headlineSmall = base.copy(fontWeight = FontWeight.Bold, fontSize = 22.sp, lineHeight = 28.sp),
+-        titleLarge = base.copy(fontWeight = FontWeight.SemiBold, fontSize = 20.sp, lineHeight = 25.sp),
+-        titleMedium = base.copy(fontWeight = FontWeight.SemiBold, fontSize = 17.sp, lineHeight = 22.sp),
+-        titleSmall = base.copy(fontWeight = FontWeight.SemiBold, fontSize = 15.sp, lineHeight = 20.sp),
+-        bodyLarge = base.copy(fontWeight = FontWeight.Normal, fontSize = 17.sp, lineHeight = 22.sp),
+-        bodyMedium = base.copy(fontWeight = FontWeight.Normal, fontSize = 15.sp, lineHeight = 20.sp),
+-        bodySmall = base.copy(fontWeight = FontWeight.Normal, fontSize = 13.sp, lineHeight = 18.sp),
+-        labelLarge = base.copy(fontWeight = FontWeight.SemiBold, fontSize = 17.sp, lineHeight = 22.sp),
+-        labelMedium = base.copy(fontWeight = FontWeight.Medium, fontSize = 12.sp, lineHeight = 16.sp),
+-        labelSmall = base.copy(fontWeight = FontWeight.Medium, fontSize = 10.sp, lineHeight = 12.sp),
+-    )
+-}
++fun appTypography(): Typography = Typography(
++    displayLarge = iosTextStyle(34, 41, FontWeight.Bold, LargeTitleTracking),
++    displayMedium = iosTextStyle(28, 34, FontWeight.Bold, Title1Tracking),
++    displaySmall = iosTextStyle(22, 28, FontWeight.Bold, Title2Tracking),
++    headlineLarge = iosTextStyle(34, 41, FontWeight.Bold, LargeTitleTracking),
++    headlineMedium = iosTextStyle(28, 34, FontWeight.Bold, Title1Tracking),
++    headlineSmall = iosTextStyle(22, 28, FontWeight.Bold, Title2Tracking),
++    titleLarge = iosTextStyle(20, 25, FontWeight(590), Title3Tracking),
++    titleMedium = iosTextStyle(17, 22, FontWeight(590), HeadlineTracking),
++    titleSmall = iosTextStyle(15, 20, FontWeight(590), SubheadlineTracking),
++    bodyLarge = iosTextStyle(17, 22, FontWeight.Normal, HeadlineTracking),
++    bodyMedium = iosTextStyle(15, 20, FontWeight.Normal, SubheadlineTracking),
++    bodySmall = iosTextStyle(13, 18, FontWeight.Normal, FootnoteTracking),
++    labelLarge = iosTextStyle(17, 22, FontWeight(590), HeadlineTracking),
++    labelMedium = iosTextStyle(12, 16, FontWeight.Normal, Caption1Tracking),
++    labelSmall = iosTextStyle(11, 13, FontWeight(510), Caption2Tracking),
++)
+--- a/app/src/main/java/com/ljyh/mei/ui/theme/Theme.kt
++++ b/app/src/main/java/com/ljyh/mei/ui/theme/Theme.kt
+@@ -17,7 +17,9 @@
+ import androidx.compose.runtime.staticCompositionLocalOf
+ import androidx.compose.ui.graphics.Color
+ import androidx.compose.ui.platform.LocalContext
++import androidx.compose.ui.unit.TextUnit
+ import androidx.compose.ui.unit.dp
++import androidx.compose.ui.unit.isSpecified
+ import androidx.compose.ui.unit.sp
+ import com.kyant.capsule.ContinuousRoundedRectangle
+ import com.ljyh.mei.constants.DefaultInterfaceLetterSpacing
+@@ -41,7 +43,9 @@
+ /** Raw custom or dynamic accent; null selects the current mode's default accent. */
+ val LocalAccentSeedColor = staticCompositionLocalOf<Color?> { null }
+ private val LocalDynamicAccent = staticCompositionLocalOf { false }
+-val LocalInterfaceLetterSpacing = compositionLocalOf { DefaultInterfaceLetterSpacing.sp }
++
++/** Unspecified keeps each text style's iOS tracking; a value overrides every style globally. */
++val LocalInterfaceLetterSpacing = compositionLocalOf { TextUnit.Unspecified }
+ 
+ private val AppShapes = GlasmioShapes(
+     extraSmall = ContinuousRoundedRectangle(2.dp),
+@@ -65,10 +69,16 @@
+     dynamicAccent: Boolean = LocalDynamicAccent.current,
+     content: @Composable () -> Unit,
+ ) {
+-    val savedLetterSpacing by rememberPreference(InterfaceLetterSpacingKey, LocalInterfaceLetterSpacing.current.value)
+-    val letterSpacing = (savedLetterSpacing.takeIf { it.isFinite() }
+-        ?: DefaultInterfaceLetterSpacing).coerceIn(0f, MaxInterfaceLetterSpacing).sp
+-    val typography = remember(letterSpacing) { appTypography(letterSpacing) }
++    val inheritedLetterSpacing = LocalInterfaceLetterSpacing.current
++    val savedLetterSpacing by rememberPreference(
++        InterfaceLetterSpacingKey,
++        if (inheritedLetterSpacing.isSpecified) inheritedLetterSpacing.value else DefaultInterfaceLetterSpacing,
++    )
++    val letterSpacingValue = (savedLetterSpacing.takeIf { it.isFinite() }
++        ?: DefaultInterfaceLetterSpacing).coerceIn(0f, MaxInterfaceLetterSpacing)
++    // Zero follows Apple's per-style tracking table; anything else is a deliberate global override.
++    val letterSpacing = if (letterSpacingValue == 0f) TextUnit.Unspecified else letterSpacingValue.sp
++    val typography = remember { appTypography() }
+     // A source change must not expose an uncorrected frame of the previous cover color.
+     val animatedSeed by key(dynamicAccent) {
+         animateColorAsState(seedColor, tween(600), label = "iOS accent")
+--- a/app/src/main/java/com/ljyh/mei/constants/PreferenceKeys.kt
++++ b/app/src/main/java/com/ljyh/mei/constants/PreferenceKeys.kt
+@@ -52,7 +52,8 @@
+ val DynamicThemeKey = booleanPreferencesKey("dynamicTheme")
+ const val DefaultAccentColorArgb = 0xFFFF3B30L
+ val AccentColorKey = longPreferencesKey("accentColor")
+-const val DefaultInterfaceLetterSpacing = 0.4f
++/** 0 keeps each iOS text style's own Apple tracking; any other value overrides all styles. */
++const val DefaultInterfaceLetterSpacing = 0f
+ const val MaxInterfaceLetterSpacing = 1.4f
+ val InterfaceLetterSpacingKey = floatPreferencesKey("interfaceLetterSpacing")
+ val PlayerActionKey = stringPreferencesKey("playerBottomAction")
+--- a/app/src/main/java/com/ljyh/mei/ui/screen/setting/AppearanceSettings.kt
++++ b/app/src/main/java/com/ljyh/mei/ui/screen/setting/AppearanceSettings.kt
+@@ -411,7 +411,9 @@
+     var draftSpacing by remember { mutableStateOf<Float?>(null) }
+     val displayedSpacing = draftSpacing ?: spacing
+     val title = stringResource(R.string.appearance_letter_spacing)
+-    val valueLabel = stringResource(R.string.appearance_letter_spacing_value, displayedSpacing)
++    // A zero spacing is not "no tracking": every style keeps the tracking Apple's design uses.
++    val valueLabel = if (displayedSpacing == 0f) stringResource(R.string.appearance_letter_spacing_ios)
++        else stringResource(R.string.appearance_letter_spacing_value, displayedSpacing)
+ 
+     SettingsCard(Modifier.fillMaxWidth()) {
+         Column(Modifier.fillMaxWidth().padding(14.dp)) {
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -230,6 +230,7 @@
+     <string name="appearance_theme">Theme</string>
+     <string name="appearance_letter_spacing">Interface letter spacing</string>
+     <string name="appearance_letter_spacing_value">%1$.1f sp</string>
++    <string name="appearance_letter_spacing_ios">iOS default</string>
+     <string name="appearance_bottom_floating_extra_spacing">Raise bottom floating controls</string>
+     <string name="appearance_bottom_floating_extra_spacing_value">%1$d dp</string>
+     <string name="appearance_bottom_floating_extra_spacing_description">Move bottom navigation, search, and the mini player farther from the screen edge.</string>
+--- a/app/src/main/res/values-zh/strings.xml
++++ b/app/src/main/res/values-zh/strings.xml
+@@ -230,6 +230,7 @@
+     <string name="appearance_theme">主题</string>
+     <string name="appearance_letter_spacing">界面字间距</string>
+     <string name="appearance_letter_spacing_value">%1$.1f sp</string>
++    <string name="appearance_letter_spacing_ios">iOS 默认</string>
+     <string name="appearance_bottom_floating_extra_spacing">底部悬浮内容额外抬高</string>
+     <string name="appearance_bottom_floating_extra_spacing_value">%1$d dp</string>
+     <string name="appearance_bottom_floating_extra_spacing_description">将底部导航、搜索栏和迷你播放器向上移动。</string>
+--- a/app/src/main/res/values-zh-rTW/strings.xml
++++ b/app/src/main/res/values-zh-rTW/strings.xml
+@@ -230,6 +230,7 @@
+     <string name="appearance_theme">主題</string>
+     <string name="appearance_letter_spacing">介面字間距</string>
+     <string name="appearance_letter_spacing_value">%1$.1f sp</string>
++    <string name="appearance_letter_spacing_ios">iOS 預設</string>
+     <string name="appearance_bottom_floating_extra_spacing">底部懸浮內容額外抬高</string>
+     <string name="appearance_bottom_floating_extra_spacing_value">%1$d dp</string>
+     <string name="appearance_bottom_floating_extra_spacing_description">將底部導覽、搜尋列和迷你播放器向上移動。</string>
+--- a/app/src/main/res/values-ja/strings.xml
++++ b/app/src/main/res/values-ja/strings.xml
+@@ -230,6 +230,7 @@
+   <string name="appearance_theme">テーマ</string>
+   <string name="appearance_letter_spacing">インターフェースの文字間隔</string>
+   <string name="appearance_letter_spacing_value">%1$.1f sp</string>
++  <string name="appearance_letter_spacing_ios">iOS 標準</string>
+   <string name="appearance_bottom_floating_extra_spacing">下部のフローティングコントロールを上げる</string>
+   <string name="appearance_bottom_floating_extra_spacing_value">%1$d dp</string>
+   <string name="appearance_bottom_floating_extra_spacing_description">下部ナビゲーション、検索、ミニプレーヤーを画面の端から離します。</string>
+--- a/THIRD_PARTY_NOTICES
++++ b/THIRD_PARTY_NOTICES
+@@ -181,3 +181,15 @@
+ glyphs used by MeloX. It must not be extracted or redistributed separately,
+ and public distribution of builds requires a fresh review of Apple's font
+ license terms. Apple retains all rights in SF Pro.
++
++Noto Sans SC
++------------
++
++es/font/noto_sans_sc.ttf is Noto Sans SC (variable), Copyright 2014-2021 Adobe
++(https://www.adobe.com/), with Reserved Font Name 'Source'. It is distributed under
++the SIL Open Font License, Version 1.1 and is bundled so CJK text can be rendered
++with an open, PingFang-like humanist design instead of the OEM system font.
++
++License: https://scripts.sil.org/OFL
++Full text: licenses/OFL-1.1-Noto-Sans-SC.txt
++Source: https://github.com/googlefonts/noto-cjk
+--- /dev/null
++++ b/licenses/OFL-1.1-Noto-Sans-SC.txt
+@@ -0,0 +1,93 @@
++Copyright 2014-2021 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source'
++
++This Font Software is licensed under the SIL Open Font License, Version 1.1.
++This license is copied below, and is also available with a FAQ at:
++https://scripts.sil.org/OFL
++
++
++-----------------------------------------------------------
++SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
++-----------------------------------------------------------
++
++PREAMBLE
++The goals of the Open Font License (OFL) are to stimulate worldwide
++development of collaborative font projects, to support the font creation
++efforts of academic and linguistic communities, and to provide a free and
++open framework in which fonts may be shared and improved in partnership
++with others.
++
++The OFL allows the licensed fonts to be used, studied, modified and
++redistributed freely as long as they are not sold by themselves. The
++fonts, including any derivative works, can be bundled, embedded, 
++redistributed and/or sold with any software provided that any reserved
++names are not used by derivative works. The fonts and derivatives,
++however, cannot be released under any other type of license. The
++requirement for fonts to remain under this license does not apply
++to any document created using the fonts or their derivatives.
++
++DEFINITIONS
++"Font Software" refers to the set of files released by the Copyright
++Holder(s) under this license and clearly marked as such. This may
++include source files, build scripts and documentation.
++
++"Reserved Font Name" refers to any names specified as such after the
++copyright statement(s).
++
++"Original Version" refers to the collection of Font Software components as
++distributed by the Copyright Holder(s).
++
++"Modified Version" refers to any derivative made by adding to, deleting,
++or substituting -- in part or in whole -- any of the components of the
++Original Version, by changing formats or by porting the Font Software to a
++new environment.
++
++"Author" refers to any designer, engineer, programmer, technical
++writer or other person who contributed to the Font Software.
++
++PERMISSION & CONDITIONS
++Permission is hereby granted, free of charge, to any person obtaining
++a copy of the Font Software, to use, study, copy, merge, embed, modify,
++redistribute, and sell modified and unmodified copies of the Font
++Software, subject to the following conditions:
++
++1) Neither the Font Software nor any of its individual components,
++in Original or Modified Versions, may be sold by itself.
++
++2) Original or Modified Versions of the Font Software may be bundled,
++redistributed and/or sold with any software, provided that each copy
++contains the above copyright notice and this license. These can be
++included either as stand-alone text files, human-readable headers or
++in the appropriate machine-readable metadata fields within text or
++binary files as long as those fields can be easily viewed by the user.
++
++3) No Modified Version of the Font Software may use the Reserved Font
++Name(s) unless explicit written permission is granted by the corresponding
++Copyright Holder. This restriction only applies to the primary font name as
++presented to the users.
++
++4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font
++Software shall not be used to promote, endorse or advertise any
++Modified Version, except to acknowledge the contribution(s) of the
++Copyright Holder(s) and the Author(s) or with their explicit written
++permission.
++
++5) The Font Software, modified or unmodified, in part or in whole,
++must be distributed entirely under this license, and must not be
++distributed under any other license. The requirement for fonts to
++remain under this license does not apply to any document created
++using the Font Software.
++
++TERMINATION
++This license becomes null and void if any of the above conditions are
++not met.
++
++DISCLAIMER
++THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
++EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF
++MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT
++OF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL THE
++COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
++INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
++DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
++OTHER DEALINGS IN THE FONT SOFTWARE.

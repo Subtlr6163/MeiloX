@@ -1,9 +1,19 @@
 package com.ljyh.mei.ui.screen.cloud
 
 import com.google.gson.JsonParser
-import com.ljyh.mei.data.model.melox.CloudMusicPage
-import com.ljyh.mei.data.model.melox.CloudSong
-import com.ljyh.mei.data.repository.parseCloudMusicPage
+import com.ljyh.mei.source.shared.OnlineCloudPage as CloudMusicPage
+import com.ljyh.mei.source.shared.OnlineCloudSong as CloudSong
+import com.ljyh.mei.source.shared.SourceOnlineParser
+import com.ljyh.mei.source.api.ProviderInstanceId
+import com.ljyh.mei.source.api.*
+import com.ljyh.mei.source.core.BoundSourceFeatures
+import com.ljyh.mei.source.core.ProviderRegistry
+import com.ljyh.mei.source.core.SourceRouter
+import com.ljyh.mei.source.core.SourceFeatureExecutor
+import com.ljyh.mei.source.shared.SourceCloudPageCache
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.MutableStateFlow
+import com.ljyh.mei.source.api.SourceException
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -41,33 +51,32 @@ class CloudMusicTest {
 
     @Test
     fun cloudCursorCountsRawRowsBeforeFilteringAndDeduplication() {
-        val parsed = parseCloudMusicPage(
-            JsonParser.parseString(
-                """{"data":[{"songId":1},{"songId":1},{},null],"count":205,"size":42,"maxSize":99}""",
-            ).asJsonObject,
-            offset = 200,
-        )
-        assertEquals(204, parsed.nextOffset)
-        assertTrue(parsed.hasMore)
-        assertEquals(42L, parsed.usedSize)
-        assertEquals(99L, parsed.maxSize)
-        val merged = CloudMusicUiState(page = page(listOf(song(1)), true, 200)).withCloudPage(parsed)
-        assertEquals(listOf(1L), merged.page!!.songs.map(CloudSong::id))
+        val parser = SourceOnlineParser("qq", ProviderInstanceId("fixture:qq"))
+        val online = parser.cloudPage(JsonParser.parseString(
+            """{"songs":[{"id":"1","name":"Song"},{"id":"1","name":"Song"}],
+                "count":205,"usedSize":42,"maxSize":99,"hasMore":true,"nextOffset":204}""",
+        ), offset = 200)
+        assertEquals(204, online.nextOffset)
+        assertTrue(online.hasMore)
+        assertEquals(42L, online.usedSize)
+        assertEquals(99L, online.maxSize)
+        val merged = CloudMusicUiState(page = page(listOf(song(1)), true, 200)).withCloudPage(online)
+        assertEquals(listOf("1"), merged.page!!.songs.map(CloudSong::id))
         assertEquals(204, merged.page.nextOffset)
         assertTrue(merged.page.hasMore)
     }
 
     @Test
     fun invalidContinuationIsRejectedAndEmptyFinalPageIsAccepted() {
-        assertThrows(IllegalStateException::class.java) {
-            parseCloudMusicPage(JsonParser.parseString("""{"data":[],"hasMore":true}""").asJsonObject, 200)
+        val parser = SourceOnlineParser("qq", ProviderInstanceId("fixture:qq"))
+        assertThrows(SourceException::class.java) {
+            parser.cloudPage(JsonParser.parseString("""{"songs":[],"hasMore":true,"nextOffset":200}"""), 200)
         }
-        assertThrows(IllegalStateException::class.java) {
-            parseCloudMusicPage(JsonParser.parseString("""{"count":201}""").asJsonObject, 200)
+        assertThrows(SourceException::class.java) {
+            parser.cloudPage(JsonParser.parseString("""{"count":201,"nextOffset":201}"""), 200)
         }
-        val finalPage = parseCloudMusicPage(
-            JsonParser.parseString("""{"data":[],"hasMore":false,"count":200}""").asJsonObject,
-            200,
+        val finalPage = parser.cloudPage(
+            JsonParser.parseString("""{"songs":[],"hasMore":false,"count":200,"nextOffset":200}"""), 200,
         )
         assertFalse(finalPage.hasMore)
         assertEquals(200, finalPage.nextOffset)
@@ -97,7 +106,7 @@ class CloudMusicTest {
         runCurrent()
 
         assertEquals(listOf(0, 200), requests)
-        assertEquals((1L..201L).toList(), viewModel.state.value.page!!.songs.map(CloudSong::id))
+        assertEquals((1L..201L).map(Long::toString), viewModel.state.value.page!!.songs.map(CloudSong::id))
         assertEquals(202, viewModel.state.value.page!!.nextOffset)
         assertFalse(viewModel.state.value.isLoadingMore)
     }
@@ -109,20 +118,20 @@ class CloudMusicTest {
         val viewModel = viewModel { offset ->
             requests += offset
             if (offset == 0) page(listOf(song(1)), true, 4)
-            else if (fail) error("Page unavailable")
+            else if (fail) throw IllegalStateException()
             else page(listOf(song(2)), false, 6)
         }
         runCurrent()
         viewModel.loadMore()
         runCurrent()
-        assertEquals(listOf(1L), viewModel.state.value.page!!.songs.map(CloudSong::id))
+        assertEquals(listOf("1"), viewModel.state.value.page!!.songs.map(CloudSong::id))
         assertEquals(4, viewModel.state.value.page!!.nextOffset)
         assertNotNull(viewModel.state.value.loadMoreError)
         fail = false
         viewModel.loadMore()
         runCurrent()
         assertEquals(listOf(0, 4, 4), requests)
-        assertEquals(listOf(1L, 2L), viewModel.state.value.page!!.songs.map(CloudSong::id))
+        assertEquals(listOf("1", "2"), viewModel.state.value.page!!.songs.map(CloudSong::id))
         assertNull(viewModel.state.value.loadMoreError)
     }
 
@@ -148,7 +157,7 @@ class CloudMusicTest {
             suspendCoroutine<Unit> { upload = it }
         }
         viewModel.upload { error("A second upload must not start") }
-        assertEquals(setOf(1L), viewModel.state.value.deletingIds)
+        assertEquals(setOf("1"), viewModel.state.value.deletingIds)
         assertTrue(viewModel.state.value.isUploading)
         runCurrent()
         assertEquals(1, deleteCalls)
@@ -159,7 +168,7 @@ class CloudMusicTest {
         assertFalse(viewModel.state.value.isLoading)
         assertTrue(viewModel.state.value.isUploading)
         assertEquals(0.4f, viewModel.state.value.uploadProgress)
-        assertEquals(setOf(1L), viewModel.state.value.deletingIds)
+        assertEquals(setOf("1"), viewModel.state.value.deletingIds)
         progress(70, 100)
         assertEquals(0.7f, viewModel.state.value.uploadProgress)
 
@@ -184,7 +193,7 @@ class CloudMusicTest {
         runCurrent()
         reads[0].resume(page(listOf(song(1)), false, 1))
         runCurrent()
-        assertEquals(listOf(2L), viewModel.state.value.page!!.songs.map(CloudSong::id))
+        assertEquals(listOf("2"), viewModel.state.value.page!!.songs.map(CloudSong::id))
 
         viewModel.refresh()
         runCurrent()
@@ -194,7 +203,7 @@ class CloudMusicTest {
         runCurrent()
         reads[2].resumeWithException(IllegalStateException("Retired refresh"))
         runCurrent()
-        assertEquals(listOf(3L), viewModel.state.value.page!!.songs.map(CloudSong::id))
+        assertEquals(listOf("3"), viewModel.state.value.page!!.songs.map(CloudSong::id))
         assertFalse(viewModel.state.value.isLoading)
         assertNull(viewModel.state.value.error)
     }
@@ -215,10 +224,134 @@ class CloudMusicTest {
         runCurrent()
         append.resume(page(listOf(song(2)), false, 8))
         runCurrent()
-        assertEquals(listOf(3L), viewModel.state.value.page!!.songs.map(CloudSong::id))
+        assertEquals(listOf("3"), viewModel.state.value.page!!.songs.map(CloudSong::id))
         assertEquals(4, viewModel.state.value.page!!.nextOffset)
         assertFalse(viewModel.state.value.isLoadingMore)
         assertNull(viewModel.state.value.loadMoreError)
+    }
+
+    @Test
+    fun initialReadCanReuseTheFirstPageWhileExplicitRefreshBypassesItAndRetainsRows() = runTest(dispatcher) {
+        var cachedReads = 0
+        var refreshReads = 0
+        lateinit var fresh: Continuation<CloudMusicPage>
+        val model = CloudMusicViewModel(
+            loadPage = { cachedReads++; page((1L..30L).map(::song), true, 30) },
+            deleteSong = {}, uploadSong = { _, _ -> },
+            loadFreshPage = { refreshReads++; suspendCoroutine { fresh = it } },
+        )
+        runCurrent()
+        assertEquals(1, cachedReads)
+        assertEquals(0, refreshReads)
+        assertEquals(30, model.state.value.page!!.songs.size)
+        model.refresh()
+        runCurrent()
+        assertEquals(1, refreshReads)
+        assertEquals(30, model.state.value.page!!.songs.size)
+        assertTrue(model.state.value.isLoading)
+        fresh.resume(page(listOf(song(31)), false, 1))
+        runCurrent()
+        assertEquals(listOf("31"), model.state.value.page!!.songs.map(CloudSong::id))
+        assertFalse(model.state.value.isLoading)
+    }
+
+    @Test
+    fun cloudCacheReusesOnlyTheSameImmutableSessionAndRejectsLateRefreshWrites() = runTest(dispatcher) {
+        var now = 0L
+        val cache = SourceCloudPageCache { now }
+        val provider = CloudFeatureProvider()
+        val registry = ProviderRegistry(listOf(provider))
+        val router = SourceRouter(registry)
+        fun bind(owner: CloudFeatureProvider = provider) = BoundSourceFeatures(router, SourceFeatureExecutor(router), owner,
+            owner.accountRevision.value, "cloud-cache-test", SourceHostEffectHandler.Unsupported)
+        val first = bind()
+        val ticket = cache.ticket(first)
+        val data = page((1L..30L).map(::song), true, 34)
+        cache.put(first, ticket, 30, data)
+        assertEquals(data, cache.get(bind(), 30))
+        assertNull(cache.get(bind(), 200))
+        @Suppress("UNCHECKED_CAST")
+        (cache.get(first, 30)!!.songs as MutableList<CloudSong>).clear()
+        assertEquals(30, cache.get(bind(), 30)!!.songs.size)
+        cache.invalidate(first)
+        cache.put(first, ticket, 30, data)
+        assertNull(cache.get(bind(), 30))
+        cache.put(first, cache.ticket(first), 30, data)
+        now = SourceCloudPageCache.TTL_MS
+        assertNull(cache.get(bind(), 30))
+        cache.put(first, cache.ticket(first), 30, data)
+        provider.accountRevision.value = "account-B"
+        assertNull(cache.get(bind(), 30))
+        assertTrue(runCatching { cache.get(first, 30) }.exceptionOrNull() is CancellationException)
+        val versionOne = bind()
+        cache.put(versionOne, cache.ticket(versionOne), 30, data)
+        provider.version = "2"
+        assertNull(cache.get(bind(), 30))
+        val replacement = CloudFeatureProvider().apply { version = "2"; accountRevision.value = "account-B" }
+        registry.register(replacement)
+        assertNull(cache.get(bind(replacement), 30))
+    }
+
+    @Test
+    fun ownLoginTransitionCannotRelabelCachedCloudDataOrCommitAnOldTicket() = runTest(dispatcher) {
+        val cache = SourceCloudPageCache()
+        val provider = CloudFeatureProvider()
+        val router = SourceRouter(ProviderRegistry(listOf(provider)))
+        val bound = BoundSourceFeatures(router, SourceFeatureExecutor(router), provider, provider.accountRevision.value,
+            "cloud-login-test", SourceHostEffectHandler.Unsupported)
+        val ticket = cache.ticket(bound)
+        cache.put(bound, ticket, 30, page(listOf(song(1)), false, 1))
+        provider.loginAccount = "account-B"
+        bound.invoke("account", "login", allowSessionChange = true)
+        bound.ensureCurrent()
+        assertNull(cache.get(bound, 30))
+        val retired = runCatching { cache.put(bound, ticket, 30, page(listOf(song(2)), false, 1)) }.exceptionOrNull()
+        assertTrue(retired is CancellationException)
+        assertNull(cache.get(bound, 30))
+    }
+
+    @Test
+    fun cloudCacheBoundsOwnersAndOversizedMetadataWithoutCachingAppendPages() = runTest(dispatcher) {
+        val cache = SourceCloudPageCache()
+        val providers = (1..5).map { CloudFeatureProvider("cloud-$it") }
+        val router = SourceRouter(ProviderRegistry(providers))
+        fun bind(provider: CloudFeatureProvider) = BoundSourceFeatures(router, SourceFeatureExecutor(router), provider,
+            provider.accountRevision.value, "cloud-bound-test", SourceHostEffectHandler.Unsupported)
+        for (provider in providers) {
+            val bound = bind(provider)
+            cache.put(bound, cache.ticket(bound), 30, page(listOf(song(1)), false, 1))
+        }
+        assertNull(cache.get(bind(providers.first()), 30))
+        val bound = bind(providers.last())
+        assertNotNull(cache.get(bound, 30))
+        cache.invalidate(bound)
+        val huge = song(1).copy(name = "x".repeat(SourceCloudPageCache.MAX_BYTES))
+        cache.put(bound, cache.ticket(bound), 30, page(listOf(huge), false, 1))
+        assertNull(cache.get(bound, 30))
+        cache.put(bound, cache.ticket(bound), 200, page((1L..200L).map(::song), false, 200))
+        assertNull(cache.get(bound, 200))
+    }
+
+    private class CloudFeatureProvider(override val id: String = "cloud-fixture") :
+        MusicProvider, AccountScopedFeatureCapability, AccountRevisionCapability {
+        override val displayName = "Cloud fixture"
+        override var version = "1"
+        override val capabilities = setOf(SourceCapability.FEATURES)
+        override val features = mapOf("cloud" to setOf("cloudSongs"), "account" to setOf("login"))
+        override val accountRevision = MutableStateFlow("account-A")
+        var loginAccount: String? = null
+        override suspend fun invokeFeature(feature: String, action: String, parameters: com.google.gson.JsonObject): com.google.gson.JsonElement =
+            com.google.gson.JsonPrimitive(true)
+        override suspend fun invokeFeature(feature: String, action: String, parameters: com.google.gson.JsonObject,
+            expectedAccountRevision: String?, onSessionCommitted: ((String?) -> Unit)?): com.google.gson.JsonElement {
+            if (accountRevision.value != expectedAccountRevision) throw CancellationException("Stale cloud account")
+            loginAccount?.let { next ->
+                onSessionCommitted?.invoke(next)
+                accountRevision.value = next
+                loginAccount = null
+            }
+            return com.google.gson.JsonPrimitive(true)
+        }
     }
 
     private fun viewModel(load: suspend (Int) -> CloudMusicPage) = CloudMusicViewModel(
@@ -231,5 +364,5 @@ class CloudMusicTest {
         songs, count = 205, usedSize = 42, maxSize = 99, hasMore = more, nextOffset = nextOffset,
     )
 
-    private fun song(id: Long) = CloudSong(id, "Song $id", "Artist", "Album", null, 1000, 42, 320, 0)
+    private fun song(id: Long) = CloudSong(id.toString(), "Song $id", "Artist", "Album", null, 1000, 42, 320, 0)
 }

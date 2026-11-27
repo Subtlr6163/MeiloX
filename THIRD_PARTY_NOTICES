@@ -5,23 +5,26 @@ MeiloX is distributed under the GNU General Public License, version 3 (see
 LICENSE). The components below remain under their own terms. This file is a
 notice and does not replace any upstream license text.
 
-AndroidLiquidGlass / Backdrop
------------------------------
-The `io.github.kyant0:backdrop:2.0.0` dependency is from AndroidLiquidGlass:
+Glasmio
+-------
+Glasmio provides the material renderer, backdrop API, UI components, and animations:
+https://github.com/NEORUAA/Glasmio
+
+Original Glasmio code is Copyright 2026 NEORUAA and licensed under the Apache
+License, Version 2.0:
+https://github.com/NEORUAA/Glasmio/blob/main/LICENSE
+
+Glasmio retains capture, effect, and interaction infrastructure adapted from
+AndroidLiquidGlass / Backdrop, Copyright (c) Kyant0 and contributors:
 https://github.com/Kyant0/AndroidLiquidGlass
 
-Copyright (c) Kyant0 and contributors. It is licensed under the Apache
-License, Version 2.0. The Apache license text is available at:
-https://www.apache.org/licenses/LICENSE-2.0
+Those retained portions remain licensed under the Apache License, Version 2.0.
+Their original copyright and license headers remain applicable. See Glasmio's
+third-party notices for source attribution:
+https://github.com/NEORUAA/Glasmio/blob/main/THIRD_PARTY_NOTICES.md
 
-Liquid-glass implementation skill
----------------------------------
-The interaction, damped-drag, toggle, slider, tab-bar, sheet, dialog, and
-popup-menu patterns in `ui/liquidglass` and `ui/glass` are adapted from the
-local `skill-liquid-glass` reference project, which is derived from
-AndroidLiquidGlass / Backdrop and is licensed under the Apache License,
-Version 2.0. Original copyright and license headers are retained where the
-reference source provides them.
+The Apache license text is available at:
+https://www.apache.org/licenses/LICENSE-2.0
 
 Lyricon Provider
 ----------------
@@ -29,6 +32,14 @@ The `io.github.proify.lyricon:provider:0.1.70` dependency and its lyric model
 are Copyright 2026 Proify, Tomakino and licensed under the Apache License,
 Version 2.0:
 https://github.com/tomakino/lyricon
+License: https://www.apache.org/licenses/LICENSE-2.0
+
+AndroidX JavaScriptEngine
+------------------------
+`androidx.javascriptengine:javascriptengine:1.1.1` provides the isolated script
+runtime used by imported music sources. Copyright The Android Open Source Project.
+Licensed under the Apache License, Version 2.0:
+https://android.googlesource.com/platform/frameworks/support/+/androidx-main/javascriptengine/
 License: https://www.apache.org/licenses/LICENSE-2.0
 
 The media metadata output follows this public player integration contract:
@@ -166,21 +177,19 @@ https://github.com/microsoft/onnxruntime
 SF Pro private project resource
 -------------------------------
 SF Pro is an Apple font included in this private, personal-use project as
-`res/font/sf_symbols.ttf` so debug and release builds can render the SF Symbols
+`res/font/sf_pro.ttf` so debug and release builds can render the SF Symbols
 glyphs used by MeloX. It must not be extracted or redistributed separately,
 and public distribution of builds requires a fresh review of Apple's font
 license terms. Apple retains all rights in SF Pro.
 
-Interface font family (app_font_*.ttf)
---------------------------------------
-The interface fonts shipped as `res/font/app_font_*.ttf` are build-time
-artifacts: the Latin / Greek / Cyrillic glyphs are static instances taken from
-the SF Pro variable font described above (Apple retains all rights in those
-outlines), and the CJK glyphs come from Noto Sans SC, Copyright (c) Google and
-contributors, licensed under the SIL Open Font License 1.1:
-https://scripts.sil.org/OFL
-Source: https://github.com/notofonts/noto-cjk
-The two sources were subsetted and merged with fontTools; each shipped weight
-is a real static cut rather than a synthesised fake bold. Public distribution
-of a build containing these files requires a fresh review of Apple's font
-license terms.
+Noto Sans SC
+------------
+
+es/font/noto_sans_sc.ttf is Noto Sans SC (variable), Copyright 2014-2021 Adobe
+(https://www.adobe.com/), with Reserved Font Name 'Source'. It is distributed under
+the SIL Open Font License, Version 1.1 and is bundled so CJK text can be rendered
+with an open, PingFang-like humanist design instead of the OEM system font.
+
+License: https://scripts.sil.org/OFL
+Full text: licenses/OFL-1.1-Noto-Sans-SC.txt
+Source: https://github.com/googlefonts/noto-cjk

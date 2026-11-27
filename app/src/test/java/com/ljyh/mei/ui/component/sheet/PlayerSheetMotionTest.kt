@@ -1,27 +1,290 @@
 package com.ljyh.mei.ui.component.sheet
 
+import io.github.neoruaa.glasmio.scaffold.GlasmioBottomSheetState
+import io.github.neoruaa.glasmio.scaffold.collapsedAnchor
+import io.github.neoruaa.glasmio.scaffold.dismissedAnchor
+import io.github.neoruaa.glasmio.scaffold.expandedAnchor
+
 import androidx.compose.runtime.BroadcastFrameClock
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
 import org.junit.Assert.*
 import org.junit.Test
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class PlayerSheetMotionTest {
     private val mini = Rect(12f, 700f, 388f, 748f)
     private val page = Rect(0f, 0f, 400f, 800f)
 
+    @Test fun coverSwipeMustStartInsideAnEnabledVisibleArtworkViewport() {
+        val artwork = Rect(40f, 60f, 240f, 260f)
+        val clip = Rect(0f, 100f, 300f, 300f)
+        val inside = androidx.compose.ui.geometry.Offset(100f, 150f)
+        assertTrue(playerCoverSwipeStartsInside(true, inside, artwork, clip, 1f))
+        assertFalse(playerCoverSwipeStartsInside(false, inside, artwork, clip, 1f))
+        assertFalse(playerCoverSwipeStartsInside(true, inside, artwork, clip, 0f))
+        assertFalse(playerCoverSwipeStartsInside(true, inside, Rect.Zero, null, 1f))
+        assertFalse(playerCoverSwipeStartsInside(true, androidx.compose.ui.geometry.Offset(100f, 80f), artwork, clip, 1f))
+        assertFalse(playerCoverSwipeStartsInside(true, androidx.compose.ui.geometry.Offset(260f, 150f), artwork, clip, 1f))
+        assertFalse(playerCoverSwipeStartsInside(true, androidx.compose.ui.geometry.Offset(100f, 350f), artwork, clip, 1f))
+    }
+
+    @Test fun landscapeContentKeepsItsFullSizeAndFollowsTheShellTopLeftThroughoutMotion() {
+        val host = Rect(20f, 30f, 820f, 430f)
+        val source = Rect(40f, 350f, 800f, 414f)
+        for (closing in listOf(false, true)) {
+            for (step in 0..100) {
+                val container = playerContainerRect(source, host, step / 100f)
+                val content = playerFullContentRect(container, host)
+                assertEquals(host.width, content.width, 0.001f)
+                assertEquals(host.height, content.height, 0.001f)
+                assertEquals(container.topLeft, content.topLeft)
+                if (step == 100) assertEquals(host, content)
+            }
+        }
+    }
+
+    @Test fun portraitContentRetainsItsExistingUniformScaling() {
+        for (step in 0..100) {
+            val container = playerContainerRect(mini, page, step / 100f)
+            val content = playerFullContentRect(container, page)
+            assertEquals(container.topLeft, content.topLeft)
+            assertEquals(container.width, content.width, 0.001f)
+            assertEquals(page.height * container.width / page.width, content.height, 0.001f)
+        }
+    }
+
+    @Test fun closingDragTracksActualDistanceWithoutMorphingInBothOrientations() {
+        for (host in listOf(page, Rect(20f, 30f, 820f, 430f))) {
+            val travel = host.height - 64f
+            for (p in listOf(1f, 0.99f, 0.8f, 0.7f, 0.3f, 0.01f, 0f)) {
+                val frame = playerClosingDragFrame(host, p, travel)
+                assertEquals(host.translate(androidx.compose.ui.geometry.Offset(0f, (1f - p) * travel)), frame.bounds)
+                assertEquals(host.width, frame.bounds.width, 0.001f)
+                assertEquals(host.height, frame.bounds.height, 0.001f)
+                assertEquals(1f, frame.morphProgress, 0f)
+                assertEquals(1f, playerContentAlpha(frame.morphProgress), 0f)
+                assertEquals(0f, playerMiniContentAlpha(frame.morphProgress), 0f)
+            }
+        }
+    }
+
+    @Test fun releaseMovesTheEntireShellWithoutBendingItsTopEdge() {
+        val start = playerClosingDragFrame(page, 0.6f, 736f)
+        for (p in listOf(1f, 0.5f, 0.1f, 0f)) {
+            val linear = playerContainerRect(mini, start.bounds, p)
+            val frame = playerReleaseFrame(start, mini, false, p, linear.top + 23f)
+            assertEquals(linear.width, frame.bounds.width, 0.001f)
+            assertEquals(linear.height, frame.bounds.height, 0.001f)
+            assertEquals(linear.top + 23f, frame.bounds.top, 0.001f)
+            assertEquals(linear.bottom + 23f, frame.bounds.bottom, 0.001f)
+            assertEquals(p, frame.morphProgress, 0f)
+        }
+    }
+
+    @Test fun releaseStartsAtTheFingerAndSettlesWithVelocityDependentRebound() = runBlocking {
+        for (host in listOf(page, Rect(20f, 30f, 820f, 430f))) {
+            val target = Rect(host.left + 12f, host.bottom - 64f, host.right - 12f, host.bottom)
+            val peaks = mutableListOf<Float>()
+            for (velocity in listOf(400f, 2400f)) {
+                val clock = BroadcastFrameClock()
+                val release = PlayerSheetRelease()
+                // Reaching the collapsed drag bound must still leave a complete size morph.
+                val start = playerClosingDragFrame(host, 0f, host.height - 64f)
+                val job = launch(clock, start = CoroutineStart.UNDISPATCHED) {
+                    release.settle(start, target, false, velocity)
+                }
+                try {
+                    assertEquals(start, release.frame)
+                    assertTrue(release.isRunning)
+                    var peak = target.top
+                    var sawMorph = false
+                    repeat(240) { step ->
+                        yield()
+                        clock.sendFrame(step * 16_666_667L)
+                        yield()
+                        val frame = checkNotNull(release.frame)
+                        peak = maxOf(peak, frame.bounds.top)
+                        sawMorph = sawMorph || frame.morphProgress in 0.1f..0.9f
+                        assertTrue(frame.bounds.width > 0f && frame.bounds.height > 0f)
+                    }
+                    assertTrue(sawMorph)
+                    assertTrue(peak > target.top)
+                    assertFalse(release.isRunning)
+                    assertEquals(PlayerSheetMotionFrame(target, 0f), release.frame)
+                    peaks += peak
+                } finally { job.cancelAndJoin() }
+            }
+            assertTrue(peaks[1] > peaks[0])
+        }
+    }
+
+    @Test fun cancelledClosingDragReturnsToTheExpandedHost() = runBlocking {
+        val clock = BroadcastFrameClock()
+        val release = PlayerSheetRelease()
+        val start = playerClosingDragFrame(page, 0.6f, 736f)
+        val job = launch(clock, start = CoroutineStart.UNDISPATCHED) {
+            release.settle(start, page, true, 0f)
+        }
+        try {
+            assertEquals(start, release.frame)
+            repeat(240) { step ->
+                yield(); clock.sendFrame(step * 16_666_667L); yield()
+                assertEquals(1f, release.frame!!.morphProgress, 0f)
+            }
+            assertFalse(release.isRunning)
+            assertEquals(PlayerSheetMotionFrame(page, 1f), release.frame)
+        } finally { job.cancelAndJoin() }
+    }
+
+    private fun reversalFrame(p: Float, closing: Boolean) = PlayerSheetMotionFrame(
+        playerContainerRect(mini, page, p), p,
+    )
+
+    private fun assertMotionFrame(expected: PlayerSheetMotionFrame, actual: PlayerSheetMotionFrame, tolerance: Float) {
+        assertEquals(expected.bounds.left, actual.bounds.left, tolerance)
+        assertEquals(expected.bounds.top, actual.bounds.top, tolerance)
+        assertEquals(expected.bounds.right, actual.bounds.right, tolerance)
+        assertEquals(expected.bounds.bottom, actual.bounds.bottom, tolerance)
+        assertEquals(expected.morphProgress, actual.morphProgress, tolerance)
+    }
+
+    @Test fun motionDirectionChangesOnlyAtCompleteEndpoints() {
+        for (p in listOf(0.5f, 0.95f, 0.9999f)) {
+            val path = PlayerSheetMotionPath(false)
+            path.frame(p, ::reversalFrame)
+            path.frame(p - 0.001f, ::reversalFrame)
+            assertFalse(path.closing)
+        }
+        val path = PlayerSheetMotionPath(false)
+        path.frame(1f, ::reversalFrame)
+        path.frame(0.9999f, ::reversalFrame)
+        assertTrue(path.closing)
+        path.frame(0.0001f, ::reversalFrame)
+        path.frame(0.0002f, ::reversalFrame)
+        assertTrue(path.closing)
+        path.frame(0f, ::reversalFrame)
+        path.frame(0.0001f, ::reversalFrame)
+        assertFalse(path.closing)
+    }
+
+    @Test fun middleReversalRetracesTheOriginalPath() {
+        for (closing in listOf(false, true)) {
+            val path = PlayerSheetMotionPath(closing)
+            val samples = if (closing) listOf(1f, 0.5f, 0.6f, 0.8f, 1f)
+                else listOf(0f, 0.5f, 0.4f, 0.2f, 0f)
+            for (p in samples) {
+                assertMotionFrame(reversalFrame(p, closing), path.frame(p, ::reversalFrame), 0f)
+                assertEquals(closing, path.closing)
+            }
+        }
+    }
+
+    @Test fun retainedMaterialBytecodeDoesNotReferenceCompilerPlaceholderTypes() {
+        for (name in listOf("PlayerSheetGlassMorphRenderer", "PlayerSheetGlassMorphRendererKt", "MorphNativeFilterScope")) {
+            val resource = "com/ljyh/mei/ui/component/sheet/$name.class"
+            val bytecode = checkNotNull(javaClass.classLoader?.getResourceAsStream(resource)) {
+                "Missing compiled renderer resource: $resource"
+            }.use { it.readBytes() }
+            val classFile = bytecode.toString(Charsets.ISO_8859_1)
+            assertFalse("$name must not contain an unresolved compiler type",
+                classFile.contains("error/NonExistentClass"))
+            assertFalse("$name must not erase material/filter objects to Void",
+                classFile.contains("java/lang/Void"))
+        }
+    }
+
+    @Test fun accessoryMorphStagesWidthBeforeCollapseAndHeightBeforeExpansion() {
+        val collapse = miniPlayerChromeTransition(true, MiniPlayerChromeFrame(0f, 0f), 63.dp)
+        assertEquals(MiniPlayerChromeFrame(1f, 0f), collapse.intermediate)
+        assertEquals(MiniPlayerChromeSpring(0.72f, 0.36f), collapse.intermediateSpring)
+        assertEquals(MiniPlayerChromeSpring(0.76f, 0.42f), collapse.finalSpring)
+        assertEquals(50L, collapse.finalDelayMillis)
+
+        val expand = miniPlayerChromeTransition(false, MiniPlayerChromeFrame(1f, 1f), 63.dp)
+        assertEquals(MiniPlayerChromeFrame(1f, 0f), expand.intermediate)
+        assertEquals(MiniPlayerChromeSpring(0.72f, 0.30f), expand.intermediateSpring)
+        assertEquals(MiniPlayerChromeSpring(0.72f, 0.36f), expand.finalSpring)
+        assertEquals(50L, expand.finalDelayMillis)
+    }
+
+    @Test fun shortAccessoryTravelUsesTheModelFrameAndIncludesTheFifteenPointBoundary() {
+        for (compact in listOf(false, true)) {
+            val model = if (compact) MiniPlayerChromeFrame(0f, 0f) else MiniPlayerChromeFrame(1f, 1f)
+            val short = miniPlayerChromeTransition(compact, model, 15.dp)
+            val target = if (compact) 1f else 0f
+            assertEquals(MiniPlayerChromeFrame(target, target), short.intermediate)
+            assertEquals(MiniPlayerChromeSpring(1f, 0.3f), short.intermediateSpring)
+            assertEquals(0L, short.finalDelayMillis)
+            assertEquals(50L, miniPlayerChromeTransition(compact, model, 15.01.dp).finalDelayMillis)
+        }
+    }
+
+    @Test fun accessoryStagesOverlapAndInterruptedReturnSettlesItsHiddenEndpoint() = runTest {
+        val clock = BroadcastFrameClock()
+        val motion = MiniPlayerChromeMotion(compact = false)
+        var frame = 0L
+        suspend fun frames(count: Int) {
+            repeat(count) {
+                advanceTimeBy(16)
+                frame += 16_000_000L
+                clock.sendFrame(frame)
+                runCurrent()
+            }
+        }
+        val collapse = launch(clock) { motion.update(true, playerVisible = false, centerTravel = 63.dp) }
+        runCurrent()
+        frames(2)
+        assertTrue(motion.horizontalProgress.value > 0f)
+        assertEquals(0f, motion.verticalProgress.value, 0f)
+        assertTrue(motion.contentProgress.value > 0f)
+        val beforeReverse = listOf(motion.horizontalProgress.value, motion.verticalProgress.value, motion.contentProgress.value)
+        collapse.cancelAndJoin()
+        val expand = launch(clock) { motion.update(false, playerVisible = false, centerTravel = 63.dp) }
+        runCurrent()
+        assertEquals(beforeReverse, listOf(motion.horizontalProgress.value, motion.verticalProgress.value, motion.contentProgress.value))
+        frames(2)
+        // The final model was committed before its delayed vertical presentation.
+        // Expansion therefore retains the compact width in its first stage.
+        assertTrue(motion.horizontalProgress.value > beforeReverse[0])
+        assertEquals(0f, motion.verticalProgress.value, 0f)
+        frames(180)
+        expand.join()
+        assertEquals(0f, motion.horizontalProgress.value, 0f)
+        assertEquals(0f, motion.verticalProgress.value, 0f)
+        assertEquals(0f, motion.contentProgress.value, 0f)
+
+        val interrupted = launch(clock) { motion.update(true, playerVisible = false, centerTravel = 63.dp) }
+        runCurrent()
+        frames(6)
+        assertTrue(motion.horizontalProgress.value < 1f)
+        assertTrue(motion.verticalProgress.value > 0f)
+        interrupted.cancelAndJoin()
+        motion.update(true, playerVisible = true, centerTravel = 63.dp)
+        assertEquals(1f, motion.horizontalProgress.value, 0f)
+        assertEquals(1f, motion.verticalProgress.value, 0f)
+        assertEquals(1f, motion.contentProgress.value, 0f)
+    }
+
     @Test fun lyricHeaderArtworkKeepsExactEndpointsAndShrinksItsTopInsetOnCollapse() {
         val source = Rect(20f, 708f, 52f, 740f)
         val header = Rect(24f, 76f, 70f, 122f)
-        assertEquals(source, playerTopAnchoredArtworkRect(source, header, mini, page, 0f))
-        assertEquals(header, playerTopAnchoredArtworkRect(source, header, mini, page, 1f))
+        assertEquals(source, playerContainerAnchoredArtworkRect(source, header, mini, page, 0f))
+        assertEquals(header, playerContainerAnchoredArtworkRect(source, header, mini, page, 1f))
         var previous = Float.POSITIVE_INFINITY
         for (step in 100 downTo 0) {
             val progress = step / 100f
-            val artwork = playerTopAnchoredArtworkRect(source, header, mini, page, progress)
+            val artwork = playerContainerAnchoredArtworkRect(source, header, mini, page, progress)
             val container = playerContainerRect(mini, page, progress)
             val inset = artwork.top - container.top
             assertTrue(inset <= previous + 0.001f)
@@ -33,9 +296,42 @@ class PlayerSheetMotionTest {
     @Test fun lyricHeaderTopInsetReversesWithoutASecondTrajectory() {
         val source = Rect(20f, 708f, 52f, 740f)
         val header = Rect(24f, 76f, 70f, 122f)
-        val opening = (0..100).map { playerTopAnchoredArtworkRect(source, header, mini, page, it / 100f) }
-        val closing = (100 downTo 0).map { playerTopAnchoredArtworkRect(source, header, mini, page, it / 100f) }
+        val opening = (0..100).map { playerContainerAnchoredArtworkRect(source, header, mini, page, it / 100f) }
+        val closing = (100 downTo 0).map { playerContainerAnchoredArtworkRect(source, header, mini, page, it / 100f) }
         assertEquals(opening, closing.reversed())
+    }
+
+    @Test fun containerAnchoredArtworkKeepsBothInsetsAndSizeThroughPortraitAndLandscapeReversals() {
+        val source = Rect(40f, 708f, 72f, 740f)
+        val portrait = Rect(16f, 24f, 416f, 824f)
+        val landscape = Rect(32f, 16f, 832f, 416f)
+        val targets = listOf(
+            portrait to Rect(56f, 124f, 376f, 444f),
+            portrait to Rect(40f, 100f, 86f, 146f),
+            landscape to Rect(100f, 60f, 400f, 360f),
+        )
+        for ((host, target) in targets) {
+            assertEquals(source, playerContainerAnchoredArtworkRect(source, target, mini, host, 0f))
+            assertEquals(target, playerContainerAnchoredArtworkRect(source, target, mini, host, 1f))
+            val opening = (0..100).map { step ->
+                val progress = step / 100f
+                val artwork = playerContainerAnchoredArtworkRect(source, target, mini, host, progress)
+                val container = playerContainerRect(mini, host, progress)
+                val expectedLeftInset = (source.left - mini.left) * (1f - progress) +
+                    (target.left - host.left) * progress
+                val expectedTopInset = (source.top - mini.top) * (1f - progress) +
+                    (target.top - host.top) * progress
+                assertEquals(expectedLeftInset, artwork.left - container.left, 0.001f)
+                assertEquals(expectedTopInset, artwork.top - container.top, 0.001f)
+                assertEquals(source.width * (1f - progress) + target.width * progress, artwork.width, 0.001f)
+                assertEquals(source.height * (1f - progress) + target.height * progress, artwork.height, 0.001f)
+                artwork
+            }
+            val closing = (100 downTo 0).map {
+                playerContainerAnchoredArtworkRect(source, target, mini, host, it / 100f)
+            }
+            assertEquals(opening, closing.reversed())
+        }
     }
 
     @Test fun pressedArtworkKeepsItsActualOriginAndReachesSquareTarget() {
@@ -126,6 +422,62 @@ class PlayerSheetMotionTest {
         assertEquals(outward, inward.reversed())
     }
 
+    @Test fun landscapeMiniContentKeepsLeadingAndTopInsetsThroughReversal() {
+        val container = Rect(250f, 700f, 950f, 764f)
+        val content = Rect(262f, 700f, 930f, 764f)
+        val host = Rect(17f, 23f, 1217f, 823f)
+        val leadingInset = content.left - container.left
+        val progress = listOf(0f, .2f, .5f, .8f, 1f, .8f, .5f, .2f, 0f)
+        val origins = progress.map { p ->
+            val moving = playerContainerRect(container, host, p)
+            val origin = playerMiniContentOrigin(content, container, moving)
+            val frame = Rect(origin, content.size)
+            assertEquals(content.size, frame.size)
+            assertEquals(leadingInset, frame.left - moving.left, .001f)
+            assertEquals(content.top - container.top, frame.top - moving.top, .001f)
+            origin
+        }
+        assertEquals(content.topLeft, origins.first())
+        assertEquals(origins.take(4), origins.takeLast(4).reversed())
+    }
+
+    @Test fun portraitMiniContentRetainsItsMeasuredTopAndLeadingInset() {
+        val content = Rect(20f, 700f, 380f, 748f)
+        listOf(0f, .25f, .5f, .75f, 1f).forEach { p ->
+            val moving = playerContainerRect(mini, page, p)
+            val origin = playerMiniContentOrigin(content, mini, moving)
+            assertEquals(content.left - mini.left, origin.x - moving.left, .001f)
+            assertEquals(content.top - mini.top, origin.y - moving.top, .001f)
+        }
+    }
+
+    @Test fun landscapeTrailingActionsAnchorRightOnOpenAndLeftOnClose() {
+        val mini = Rect(250f, 700f, 950f, 764f)
+        val actions = Rect(786f, 708f, 930f, 756f)
+        val host = Rect(17f, 23f, 1217f, 823f)
+        for (progress in listOf(0f, .25f, .5f, .75f, 1f)) {
+            val moving = playerContainerRect(mini, host, progress)
+            val opening = playerMiniTrailingOrigin(actions, mini, moving, rightAnchored = true)
+            val closing = playerMiniTrailingOrigin(actions, mini, moving, rightAnchored = false)
+            assertEquals(mini.right - actions.right, moving.right - (opening.x + actions.width), .001f)
+            assertEquals(actions.left - mini.left, closing.x - moving.left, .001f)
+            assertEquals(actions.top - mini.top, opening.y - moving.top, .001f)
+            assertEquals(actions.topLeft, playerMiniTrailingOrigin(actions, mini, mini, true))
+            assertEquals(actions.topLeft, playerMiniTrailingOrigin(actions, mini, mini, false))
+        }
+    }
+
+    @Test fun landscapeTrailingAnchorKeepsItsStartingSideAcrossDragReversals() {
+        val anchor = PlayerMiniTrailingAnchor()
+        for (progress in listOf(0f, .3f, .8f, .4f, 1f)) {
+            assertTrue(anchor.anchorsRight(progress))
+        }
+        anchor.reset()
+        for (progress in listOf(1f, .7f, .2f, .6f, 0f)) {
+            assertFalse(anchor.anchorsRight(progress))
+        }
+    }
+
     @Test fun artworkUsesUniformScaleAndMeloxCenterPath() {
         val source = Rect(20f, 708f, 52f, 740f)
         val target = Rect(60f, 100f, 340f, 380f)
@@ -164,7 +516,7 @@ class PlayerSheetMotionTest {
 
     @Test fun consecutiveDeltasAccumulateWithoutWaitingForCoroutines() = runBlocking {
         val clock = BroadcastFrameClock()
-        val state = BottomSheetState(CoroutineScope(coroutineContext + clock), 2f, {}, 0.dp, 100.dp,
+        val state = GlasmioBottomSheetState(CoroutineScope(coroutineContext + clock), 2f, {}, 0.dp, 100.dp,
             800.dp, 100.dp, collapsedAnchor)
         try {
             state.beginDrag()
@@ -179,7 +531,7 @@ class PlayerSheetMotionTest {
 
     @Test fun cancellationReturnsToTheStartingEndpoint() = runBlocking {
         val clock = BroadcastFrameClock()
-        val state = BottomSheetState(CoroutineScope(coroutineContext + clock), 1f, {}, 0.dp, 100.dp,
+        val state = GlasmioBottomSheetState(CoroutineScope(coroutineContext + clock), 1f, {}, 0.dp, 100.dp,
             800.dp, 800.dp, expandedAnchor)
         try {
             state.beginDrag()
@@ -192,7 +544,7 @@ class PlayerSheetMotionTest {
 
     @Test fun contentVisibilityDoesNotRestartAtExpandedDragBoundaries() = runBlocking {
         val clock = BroadcastFrameClock()
-        val state = BottomSheetState(CoroutineScope(coroutineContext + clock), 1f, {}, 0.dp, 100.dp,
+        val state = GlasmioBottomSheetState(CoroutineScope(coroutineContext + clock), 1f, {}, 0.dp, 100.dp,
             800.dp, 800.dp, expandedAnchor)
         try {
             assertTrue(state.isContentVisible)
@@ -211,7 +563,7 @@ class PlayerSheetMotionTest {
 
     @Test fun contentUpdatesStartOnOpeningAndStopOnlyAfterCollapseSettles() = runBlocking {
         val clock = BroadcastFrameClock()
-        val state = BottomSheetState(CoroutineScope(coroutineContext + clock), 1f, {}, 0.dp, 100.dp,
+        val state = GlasmioBottomSheetState(CoroutineScope(coroutineContext + clock), 1f, {}, 0.dp, 100.dp,
             800.dp, 100.dp, collapsedAnchor)
         try {
             assertFalse(state.isContentVisible)
@@ -228,7 +580,7 @@ class PlayerSheetMotionTest {
 
     @Test fun reversalAndMissingRenderLayersStillReachLiveEndpoints() = runBlocking {
         val clock = BroadcastFrameClock()
-        val state = BottomSheetState(CoroutineScope(coroutineContext + clock), 2f, {}, 0.dp, 100.dp,
+        val state = GlasmioBottomSheetState(CoroutineScope(coroutineContext + clock), 2f, {}, 0.dp, 100.dp,
             800.dp, 100.dp, collapsedAnchor)
         var frame = 0L
         suspend fun frames(count: Int) {
@@ -253,7 +605,7 @@ class PlayerSheetMotionTest {
 
     @Test fun grabDuringSpringStartsAtRenderedPositionAndReleaseUsesDirection() = runBlocking {
         val clock = BroadcastFrameClock()
-        val state = BottomSheetState(CoroutineScope(coroutineContext + clock), 2f, {}, 0.dp, 100.dp,
+        val state = GlasmioBottomSheetState(CoroutineScope(coroutineContext + clock), 2f, {}, 0.dp, 100.dp,
             800.dp, 100.dp, collapsedAnchor)
         try {
             state.expandSoft()
@@ -269,7 +621,7 @@ class PlayerSheetMotionTest {
 
     @Test fun clickTakesTransitionOwnershipBeforeTheFirstAnimationFrame() = runBlocking {
         val clock = BroadcastFrameClock()
-        val state = BottomSheetState(CoroutineScope(coroutineContext + clock), 1f, {}, 0.dp, 100.dp,
+        val state = GlasmioBottomSheetState(CoroutineScope(coroutineContext + clock), 1f, {}, 0.dp, 100.dp,
             800.dp, 100.dp, collapsedAnchor)
         try {
             assertFalse(state.hasBeenShown)
@@ -288,7 +640,7 @@ class PlayerSheetMotionTest {
 
     @Test fun cancelledOpeningRetainsTheHostButReleasesTransitionInput() = runBlocking {
         val clock = BroadcastFrameClock()
-        val state = BottomSheetState(CoroutineScope(coroutineContext + clock), 1f, {}, 0.dp, 100.dp,
+        val state = GlasmioBottomSheetState(CoroutineScope(coroutineContext + clock), 1f, {}, 0.dp, 100.dp,
             800.dp, 100.dp, collapsedAnchor)
         try {
             state.expandSoft()
@@ -303,7 +655,7 @@ class PlayerSheetMotionTest {
     @Test fun restoredPlaybackReversesDismissalBeforeOrAfterItFinishes() = runBlocking {
         for (restoreAfterFrames in listOf(0, 8, 180)) {
             val clock = BroadcastFrameClock()
-            val state = BottomSheetState(CoroutineScope(coroutineContext + clock), 1f, {}, 0.dp, 100.dp,
+            val state = GlasmioBottomSheetState(CoroutineScope(coroutineContext + clock), 1f, {}, 0.dp, 100.dp,
                 800.dp, 100.dp, collapsedAnchor)
             var frame = 0L
             suspend fun frames(count: Int) {
@@ -329,7 +681,7 @@ class PlayerSheetMotionTest {
     @Test fun playbackVisibilityUpdatesPreserveExpansionAndUserDragging() = runBlocking {
         val clock = BroadcastFrameClock()
         val anchors = mutableListOf<Int>()
-        val state = BottomSheetState(CoroutineScope(coroutineContext + clock), 1f, { anchors += it },
+        val state = GlasmioBottomSheetState(CoroutineScope(coroutineContext + clock), 1f, { anchors += it },
             0.dp, 100.dp, 800.dp, 100.dp, collapsedAnchor)
         var frame = 0L
         suspend fun frames(count: Int) {
@@ -367,7 +719,7 @@ class PlayerSheetMotionTest {
             for (clearAfterFrames in listOf(0, 8)) {
                 val clock = BroadcastFrameClock()
                 val initialValue = if (initialAnchor == dismissedAnchor) 0.dp else 100.dp
-                val state = BottomSheetState(CoroutineScope(coroutineContext + clock), 1f, {},
+                val state = GlasmioBottomSheetState(CoroutineScope(coroutineContext + clock), 1f, {},
                     0.dp, 100.dp, 800.dp, initialValue, initialAnchor)
                 var frame = 0L
                 suspend fun frames(count: Int) {
@@ -392,9 +744,9 @@ class PlayerSheetMotionTest {
         for (framesBeforeNavigation in listOf(0, 8)) {
             val clock = BroadcastFrameClock()
             val scope = CoroutineScope(coroutineContext + clock)
-            val previous = BottomSheetState(scope, 1f, {}, 0.dp, 150.dp,
+            val previous = GlasmioBottomSheetState(scope, 1f, {}, 0.dp, 150.dp,
                 800.dp, 800.dp, expandedAnchor)
-            var replacement: BottomSheetState? = null
+            var replacement: GlasmioBottomSheetState? = null
             var frame = 0L
             suspend fun frames(count: Int) {
                 repeat(count) { yield(); frame += 16_666_667L; clock.sendFrame(frame); yield() }
@@ -402,7 +754,7 @@ class PlayerSheetMotionTest {
             try {
                 previous.collapseSoft()
                 frames(framesBeforeNavigation)
-                val current = BottomSheetState(scope, 1f, {}, 0.dp, 100.dp,
+                val current = GlasmioBottomSheetState(scope, 1f, {}, 0.dp, 100.dp,
                     800.dp, previous.value, previous.targetAnchor,
                     previouslyShown = previous.hasBeenShown,
                     previouslyCollapsed = previous.isCollapsed)
@@ -428,7 +780,7 @@ class PlayerSheetMotionTest {
 
     @Test fun movingCollapsedNavigationAnchorDoesNotOpenThePlayer() = runBlocking {
         val clock = BroadcastFrameClock()
-        val state = BottomSheetState(CoroutineScope(coroutineContext + clock), 1f, {}, 0.dp, 150.dp,
+        val state = GlasmioBottomSheetState(CoroutineScope(coroutineContext + clock), 1f, {}, 0.dp, 150.dp,
             800.dp, 100.dp, collapsedAnchor, previouslyShown = true)
         try {
             state.relocate()

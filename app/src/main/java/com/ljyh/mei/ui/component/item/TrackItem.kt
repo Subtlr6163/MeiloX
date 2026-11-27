@@ -1,13 +1,13 @@
 package com.ljyh.mei.ui.component.item
 
-import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.layout.boundsInWindow
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import io.github.neoruaa.glasmio.core.LocalGlassColors
+import io.github.neoruaa.glasmio.glass.GlasmioMenuAnchorState
+import io.github.neoruaa.glasmio.icons.SfIcon
+import io.github.neoruaa.glasmio.icons.SfSymbol
 
+import androidx.compose.ui.geometry.Rect
+
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.ui.semantics.Role
@@ -24,9 +24,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalRippleConfiguration
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -40,9 +42,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kyant.capsule.ContinuousRoundedRectangle
+import com.ljyh.mei.R
 import com.ljyh.mei.constants.CommonImageRadius
 import com.ljyh.mei.constants.TrackThumbnailSize
 import com.ljyh.mei.data.model.MediaMetadata
+import com.ljyh.mei.ui.component.copyNameActions
 import com.ljyh.mei.ui.component.playlist.PlayingImageView
 import com.ljyh.mei.utils.TimeUtils.formatDuration
 import com.ljyh.mei.utils.smallImage
@@ -56,22 +60,39 @@ fun Track(
     selected: Boolean? = null,
     onMoreClick: ((Rect) -> Unit)?,
     detailInkBlend: Boolean = false,
+    showPressIndication: Boolean = false,
+    menuAnchorState: GlasmioMenuAnchorState? = null,
 ) {
-    var menuAnchor by remember { mutableStateOf(Rect.Zero) }
+    val indication = if (showPressIndication) LocalIndication.current else trackRowPressIndication()
+    val artist = track.artists.joinToString(" / ") { it.name }
+    val copyNamesOnLongPress = selected == null
+    val alternateVersionAction = trackAlternateVersionAction(track.trackRef, track.title, track.hasAlternateVersion)
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .background(if (isPlaying) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f) else Color.Transparent)
-            .then(if (selected == null) Modifier.clickable(onClick = onClick)
-                else Modifier.selectable(selected = selected, role = Role.Checkbox, onClick = onClick))
+            .copyNameActions(
+                trackName = track.title,
+                artistName = artist,
+                enabled = copyNamesOnLongPress,
+            )
+            .then(
+                if (selected == null) Modifier.clickable(
+                    interactionSource = null, indication = indication, onClick = alternateVersionAction?.onRowClick ?: onClick,
+                )
+                else Modifier.selectable(
+                    selected = selected, interactionSource = null, indication = indication,
+                    role = Role.Checkbox, onClick = onClick,
+                )
+            )
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (selected != null) {
-            com.ljyh.mei.ui.glass.SfIcon(
+            io.github.neoruaa.glasmio.icons.SfIcon(
                 if (selected) "checkmark.circle.fill" else "circle", null,
                 modifier = Modifier.trackDetailInkBlend(detailInkBlend),
-                size = 24.dp, tint = com.ljyh.mei.ui.glass.LocalGlassColors.current.content,
+                size = 24.dp, tint = io.github.neoruaa.glasmio.core.LocalGlassColors.current.content,
             )
             Spacer(Modifier.width(12.dp))
         }
@@ -95,6 +116,7 @@ fun Track(
             PlayingImageView(
                 imageUrl = track.coverUrl.smallImage(),
                 isPlaying = isPlaying,
+                trackRef = track.trackRef,
                 modifier = Modifier
                     .size(if (isTablet) 40.dp else 48.dp)
                     .clip(ContinuousRoundedRectangle(CommonImageRadius))
@@ -104,24 +126,29 @@ fun Track(
                 modifier = Modifier.padding(start = 16.dp).fillMaxWidth().trackDetailInkBlend(detailInkBlend),
                 verticalArrangement = Arrangement.Center
             ) {
-                Text(
+                MediaRowName(
                     text = track.title,
                     style = MaterialTheme.typography.titleMedium.copy(
                         fontWeight = if (isPlaying) FontWeight.Bold else FontWeight.Medium,
                         fontSize = if (isTablet) 15.sp else 16.sp
                     ),
                     color = if (isPlaying) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    copyAction = R.string.track_action_copy_name.takeIf { copyNamesOnLongPress },
                 )
 
-                Text(
-                    text = track.artists.joinToString(" / ") { it.name },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                val subtitleColor = MaterialTheme.colorScheme.onSurfaceVariant
+                AlternateVersionSubtitle(
+                    showBadge = alternateVersionAction != null,
+                    color = subtitleColor,
+                    onBadgeClick = alternateVersionAction?.onBadgeClick,
+                ) {
+                    MediaRowName(
+                        text = artist,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = subtitleColor,
+                        copyAction = R.string.artist_action_copy_name.takeIf { copyNamesOnLongPress },
+                    )
+                }
             }
         }
 
@@ -155,19 +182,24 @@ fun Track(
                     .size(44.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                IconButton(
-                    onClick = { it(menuAnchor) },
-                    modifier = Modifier.size(44.dp)
-                        .then(if (detailInkBlend) Modifier.offset(x = 13.dp) else Modifier)
-                        .onGloballyPositioned { menuAnchor = it.boundsInWindow() },
-                ) {
-                    com.ljyh.mei.ui.glass.SfIcon(
-                        symbol = com.ljyh.mei.ui.glass.SfSymbol.Ellipsis,
-                        contentDescription = androidx.compose.ui.res.stringResource(com.ljyh.mei.R.string.more_actions_title),
-                        modifier = Modifier.trackDetailInkBlend(detailInkBlend),
-                        tint = com.ljyh.mei.ui.glass.LocalGlassColors.current.content,
-                        size = 18.dp,
-                    )
+                val ripple = LocalRippleConfiguration.current.takeIf { showPressIndication }
+                CompositionLocalProvider(LocalRippleConfiguration provides ripple) {
+                    TrackMenuTrigger(menuAnchorState, it) { trigger, openMenu ->
+                        IconButton(
+                            onClick = openMenu,
+                            modifier = Modifier.size(44.dp)
+                                .then(if (detailInkBlend) Modifier.offset(x = 13.dp) else Modifier)
+                                .then(trigger),
+                        ) {
+                            SfIcon(
+                                symbol = SfSymbol.Ellipsis,
+                                contentDescription = androidx.compose.ui.res.stringResource(com.ljyh.mei.R.string.more_actions_title),
+                                modifier = Modifier.trackDetailInkBlend(detailInkBlend),
+                                tint = LocalGlassColors.current.content,
+                                size = 18.dp,
+                            )
+                        }
+                    }
                 }
             }
         }

@@ -1,5 +1,8 @@
 package com.ljyh.mei.ui.screen.local
 
+import android.net.Uri
+import com.ljyh.mei.ui.component.home.homeArtworkBorder
+import com.ljyh.mei.ui.navigation.MeiloXLoadingPage
 import androidx.compose.ui.geometry.Rect
 
 import androidx.compose.animation.AnimatedVisibility
@@ -7,9 +10,9 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.asPaddingValues
@@ -27,10 +30,7 @@ import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Person
-import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Warning
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
@@ -63,24 +63,32 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.kyant.capsule.ContinuousRoundedRectangle
+import com.ljyh.mei.R
+import com.ljyh.mei.data.model.mediaId
 import com.ljyh.mei.data.model.MediaMetadata
 import com.ljyh.mei.data.model.room.Song
 import com.ljyh.mei.data.model.toMediaItem
 import com.ljyh.mei.data.model.toMediaMetadata
 import com.ljyh.mei.di.AppDatabase
 import com.ljyh.mei.playback.queue.ListQueue
+import com.ljyh.mei.ui.component.CopyNamePopover
 import com.ljyh.mei.ui.component.playlist.FinalPerfectCollage
 import com.ljyh.mei.ui.component.playlist.PlaylistBackground
 import com.ljyh.mei.ui.component.playlist.TrackActionMenu
+import io.github.neoruaa.glasmio.scaffold.GlasmioOverscrollHost
 import com.ljyh.mei.ui.component.utils.rememberDeviceInfo
-import com.ljyh.mei.ui.glass.GlassIconButton
-import com.ljyh.mei.ui.glass.IosTopToolbar
-import com.ljyh.mei.ui.glass.SfIcon
+import io.github.neoruaa.glasmio.ui.GlasmioIconButton
+import io.github.neoruaa.glasmio.ui.GlasmioButton
+import io.github.neoruaa.glasmio.ui.GlasmioButtonSize
+import io.github.neoruaa.glasmio.glass.GlassEmphasis
+import io.github.neoruaa.glasmio.glass.rememberGlasmioMenuAnchorState
+import com.ljyh.mei.ui.navigation.MeiloXPinnedPage
+import io.github.neoruaa.glasmio.icons.SfIcon
 import com.ljyh.mei.ui.local.LocalNavController
 import com.ljyh.mei.ui.local.LocalPlayerAwareWindowInsets
 import com.ljyh.mei.ui.local.LocalPlayerConnection
+import com.ljyh.mei.ui.screen.Screen
 import com.ljyh.mei.ui.screen.playlist.component.PlaylistTrackList
-import com.ljyh.mei.utils.setClipboard
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -92,7 +100,14 @@ fun LocalSongListScreen(
 ) {
     val navController = LocalNavController.current
     val context = LocalContext.current
-    val playerConnection = LocalPlayerConnection.current ?: return
+    val playerConnection = LocalPlayerConnection.current
+    if (playerConnection == null) {
+        MeiloXLoadingPage(
+            title = title,
+            onNavigateBack = { navController.popBackStack() },
+        )
+        return
+    }
     val db = AppDatabase.getDatabase(context)
 
     val songs by when (filterType) {
@@ -108,6 +123,7 @@ fun LocalSongListScreen(
         songs.map { it.toMediaMetadata() }
     }
     var actionAnchor by remember { mutableStateOf<Rect?>(null) }
+    val trackMenuAnchor = rememberGlasmioMenuAnchorState()
     var shareTrack by remember { mutableStateOf<MediaMetadata?>(null) }
     var actionTrack by remember { mutableStateOf<MediaMetadata?>(null) }
     val coverUrl = remember(songs) {
@@ -125,7 +141,7 @@ fun LocalSongListScreen(
     }
 
     fun buildQueue(index: Int = 0): ListQueue {
-        val items = tracks.map { it.id.toString() to it.toMediaItem() }
+        val items = tracks.map { it.mediaId to it.toMediaItem() }
         return ListQueue(
             id = "local_$filterType+$filterValue",
             title = title,
@@ -135,89 +151,86 @@ fun LocalSongListScreen(
     }
 
     Box(Modifier.fillMaxSize()) {
-        if (coverUrl != null) {
-            PlaylistBackground(coverUrl = coverUrl)
-        }
-
-        Scaffold(
-            containerColor = Color.Transparent,
-            topBar = {
-                IosTopToolbar(
-                    title = title,
-                    collapseProgress = topBarCollapseProgress,
-                    navigation = {
-                        GlassIconButton(onClick = navController::navigateUp) {
-                            SfIcon("chevron.left", null, mirrored = true)
-                        }
-                    },
-                )
+        val blurDistancePx = with(LocalDensity.current) { 56.dp.toPx() }
+        val topBarBlurProgress by remember(lazyListState, blurDistancePx) {
+            derivedStateOf {
+                if (lazyListState.firstVisibleItemIndex > 0) 1f
+                else (lazyListState.firstVisibleItemScrollOffset / blurDistancePx).coerceIn(0f, 1f)
             }
+        }
+        MeiloXPinnedPage(
+            title = title,
+            collapseProgress = topBarCollapseProgress,
+            topBarBlurProgress = topBarBlurProgress,
+            onNavigateBack = navController::navigateUp,
+            bottomPadding = LocalPlayerAwareWindowInsets.current.asPaddingValues().calculateBottomPadding(),
+            background = { coverUrl?.let { PlaylistBackground(coverUrl = it) } },
         ) { padding ->
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .padding(padding)
-            ) {
-                if (device.isTablet && device.isLandscape) {
-                    Row(Modifier.fillMaxSize()) {
-                        Box(Modifier.weight(0.4f).align(Alignment.CenterVertically)) {
-                            LocalSongListHeader(
-                                songs = songs,
-                                title = title,
-                                filterType = filterType,
-                                onPlayAll = { playerConnection.playQueue(buildQueue(0)) }
-                            )
-                        }
-                        PlaylistTrackList(
-                            modifier = Modifier.weight(0.6f),
-                            pagingItems = null,
-                            staticTracks = tracks,
-                            isTablet = true,
-                            onTrackClick = { track, index ->
-                                val isLost = songs.find { it.toMediaMetadata().id == track.id }?.let {
-                                    !localAudioPathExists(it.path)
-                                } ?: false
-                                if (!isLost) {
-                                    playerConnection.onTrackClicked(
-                                        trackId = track.id.toString(),
-                                        buildQueue = { buildQueue(index) }
-                                    )
-                                }
-                            },
-                            onMoreClick = { track, anchor -> actionTrack = track; actionAnchor = anchor }
+            if (device.isTablet && device.isLandscape) {
+                Row(Modifier.fillMaxSize()) {
+                    Box(Modifier.weight(0.4f).align(Alignment.CenterVertically).padding(top = padding.calculateTopPadding())) {
+                        LocalSongListHeader(
+                            songs = songs,
+                            title = title,
+                            filterType = filterType,
+                            onPlayAll = { playerConnection.playQueue(buildQueue(0)) },
                         )
                     }
-                } else {
                     PlaylistTrackList(
+                        modifier = Modifier.weight(0.6f),
                         pagingItems = null,
                         staticTracks = tracks,
                         lazyListState = lazyListState,
-                        headerContent = {
-                            LocalSongListHeader(
-                                songs = songs,
-                                title = title,
-                                filterType = filterType,
-                                onPlayAll = { playerConnection.playQueue(buildQueue(0)) }
-                            )
-                        },
+                        contentPadding = padding,
+                        isTablet = true,
                         onTrackClick = { track, index ->
-                            val isLost = songs.find { it.toMediaMetadata().id == track.id }?.let {
+                            val isLost = songs.find { it.toMediaMetadata().trackRef == track.trackRef }?.let {
                                 !localAudioPathExists(it.path)
                             } ?: false
                             if (!isLost) {
                                 playerConnection.onTrackClicked(
-                                    trackId = track.id.toString(),
-                                    buildQueue = { buildQueue(index) }
+                                    trackId = track.mediaId,
+                                    buildQueue = { buildQueue(index) },
                                 )
                             }
                         },
                         onMoreClick = { track, anchor -> actionTrack = track; actionAnchor = anchor },
-                        contentPadding = PaddingValues(
-                            bottom = LocalPlayerAwareWindowInsets.current.asPaddingValues()
-                                .calculateBottomPadding()
-                        )
+                        menuAnchorState = trackMenuAnchor,
                     )
                 }
+            } else {
+                PlaylistTrackList(
+                    pagingItems = null,
+                    staticTracks = tracks,
+                    lazyListState = lazyListState,
+                    headerContent = {
+                        LocalSongListHeader(
+                            songs = songs,
+                            title = title,
+                            filterType = filterType,
+                            onPlayAll = { playerConnection.playQueue(buildQueue(0)) },
+                        )
+                    },
+                    onTrackClick = { track, index ->
+                        val isLost = songs.find { it.toMediaMetadata().trackRef == track.trackRef }?.let {
+                            !localAudioPathExists(it.path)
+                        } ?: false
+                        if (!isLost) {
+                            playerConnection.onTrackClicked(
+                                trackId = track.mediaId,
+                                buildQueue = { buildQueue(index) },
+                            )
+                        }
+                    },
+                    onMoreClick = { track, anchor -> actionTrack = track; actionAnchor = anchor },
+                    menuAnchorState = trackMenuAnchor,
+                    flatDetailStyle = device.isPortrait,
+                    contentPadding = PaddingValues(
+                        start = if (device.isPortrait) 20.dp else 24.dp,
+                        end = if (device.isPortrait) 20.dp else 24.dp,
+                        top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding(),
+                    ),
+                )
             }
         }
 
@@ -228,13 +241,23 @@ fun LocalSongListScreen(
             )
         }
         actionTrack?.let { track ->
+            fun openCollection(type: String, name: String) {
+                Screen.LocalSongList.navigate(navController) {
+                    addPath(type)
+                    addPath(Uri.encode(name))
+                }
+            }
             TrackActionMenu(
                 targetTrack = track,
                 anchorBounds = actionAnchor,
-                onShare = { shareTrack = track },
+                menuAnchorState = trackMenuAnchor,
+                onShare = if (track.isLocal || track.isPodcast) null else ({ shareTrack = track }),
                 onDismiss = { actionTrack = null },
-                onCopyId = { setClipboard(context, track.id.toString(), "id") },
-                onCopyName = { setClipboard(context, track.title, "name") },
+                artistActions = track.artists.map { it.name }.filter(String::isNotBlank).distinct()
+                    .map { name -> name to { openCollection("artist", name) } },
+                onOpenAlbum = track.album.title.takeIf(String::isNotBlank)?.let { name ->
+                    { openCollection("album", name) }
+                },
             )
         }
     }
@@ -269,10 +292,11 @@ private fun LocalSongListHeader(
     ) {
         Spacer(Modifier.height(24.dp))
 
+        val coverShape = ContinuousRoundedRectangle(16.dp)
         Card(
-            shape = ContinuousRoundedRectangle(16.dp),
+            shape = coverShape,
             elevation = CardDefaults.cardElevation(defaultElevation = 12.dp),
-            modifier = Modifier.size(220.dp)
+            modifier = Modifier.size(220.dp).homeArtworkBorder(coverShape)
         ) {
             if (coverList.size >= 5) {
                 FinalPerfectCollage(imageUrls = coverList, modifier = Modifier.fillMaxSize())
@@ -302,14 +326,22 @@ private fun LocalSongListHeader(
 
         Spacer(Modifier.height(24.dp))
 
-        Text(
-            text = title,
-            style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center
-        )
+        CopyNamePopover(
+            name = title,
+            actionLabel = if (filterType == "artist") R.string.artist_action_copy_name
+                else R.string.album_action_copy_name,
+            enabled = filterType == "artist" || filterType == "album",
+        ) { copyModifier, _ ->
+            Text(
+                text = title,
+                modifier = copyModifier,
+                style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+            )
+        }
 
         Spacer(Modifier.height(8.dp))
 
@@ -349,17 +381,12 @@ private fun LocalSongListHeader(
 
         Spacer(Modifier.height(24.dp))
 
-        Button(
+        GlasmioButton(
             onClick = onPlayAll,
-            contentPadding = PaddingValues(horizontal = 32.dp, vertical = 12.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+            emphasis = GlassEmphasis.Prominent,
+            size = GlasmioButtonSize.Large,
         ) {
-            Icon(
-                Icons.Rounded.PlayArrow,
-                contentDescription = null,
-                modifier = Modifier.size(24.dp)
-            )
-            Spacer(Modifier.width(8.dp))
+            SfIcon("play.fill", contentDescription = null, size = 18.dp)
             Text("播放全部")
         }
 

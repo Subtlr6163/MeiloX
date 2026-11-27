@@ -4,7 +4,11 @@ import android.media.MediaDataSource
 import androidx.media3.common.C
 import androidx.media3.datasource.DataSourceException
 import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.DataSource
+import com.ljyh.mei.source.api.CachePolicy
+import androidx.media3.datasource.cache.Cache
 import androidx.media3.datasource.cache.CacheDataSource
+import androidx.media3.datasource.cache.CacheSpan
 import androidx.media3.datasource.cache.ContentMetadata
 import androidx.media3.datasource.cache.ContentMetadataMutations
 import java.io.IOException
@@ -12,10 +16,11 @@ import java.io.IOException
 /** Lets platform extractors share the exact compressed bytes used by playback. */
 internal class CacheMediaDataSource(
     private val source: ResolvedMediaSource,
-    private val factory: CacheDataSource.Factory,
+    private val cache: Cache,
+    factory: (Cache) -> CacheDataSource.Factory,
+    private val uncachedFactory: DataSource.Factory? = null,
     private val checkActive: () -> Unit,
 ) : MediaDataSource() {
-    private val cache = requireNotNull(factory.cache)
     private val cacheKey = source.cacheKey ?: source.uri.toString()
     private val readAhead = ByteArray(READ_AHEAD_SIZE)
     private var bufferedStart = 0L
@@ -24,9 +29,23 @@ internal class CacheMediaDataSource(
     @Volatile
     private var closed = false
 
+    private val readerCache = object : Cache by cache {
+        override fun startReadWrite(key: String, position: Long, length: Long): CacheSpan {
+            // Platform extractors can call MediaDataSource from a different thread, so
+            // cancellation cannot depend on interrupting the decoder's calling thread.
+            while (true) {
+                checkActive()
+                if (closed) throw IOException("Analysis data source is closed")
+                cache.startReadWriteNonBlocking(key, position, length)?.let { return it }
+                Thread.sleep(CACHE_WAIT_INTERVAL_MS)
+            }
+        }
+    }
+    private val readerFactory = factory(readerCache)
+
     init {
         val contentLength = source.contentLength ?: C.LENGTH_UNSET.toLong()
-        if (contentLength > 0 &&
+        if (source.cachePolicy != CachePolicy.NO_STORE && contentLength > 0 &&
             ContentMetadata.getContentLength(cache.getContentMetadata(cacheKey)) == C.LENGTH_UNSET.toLong()
         ) {
             val mutations = ContentMetadataMutations()
@@ -36,7 +55,8 @@ internal class CacheMediaDataSource(
     }
 
     override fun getSize(): Long = source.contentLength?.takeIf { it > 0 }
-        ?: ContentMetadata.getContentLength(cache.getContentMetadata(cacheKey))
+        ?: if (source.cachePolicy == CachePolicy.NO_STORE) C.LENGTH_UNSET.toLong()
+        else ContentMetadata.getContentLength(cache.getContentMetadata(cacheKey))
 
     @Synchronized
     override fun readAt(position: Long, buffer: ByteArray, offset: Int, size: Int): Int {
@@ -71,7 +91,11 @@ internal class CacheMediaDataSource(
         val length = if (contentLength >= 0) {
             minOf(READ_AHEAD_SIZE.toLong(), contentLength - position).toInt()
         } else READ_AHEAD_SIZE
-        val dataSource = factory.createDataSource()
+        // Background extraction waits for the foreground writer instead of downloading
+        // the same cache hole through a second upstream connection.
+        val dataSource = if (source.cachePolicy == CachePolicy.NO_STORE) {
+            checkNotNull(uncachedFactory) { "Uncached resource needs a direct transport" }.createDataSource()
+        } else readerFactory.createDataSourceForDownloading()
         var totalRead = 0
         try {
             // Batch tiny extractor reads without retaining a song or an open network request.
@@ -79,6 +103,7 @@ internal class CacheMediaDataSource(
             dataSource.open(
                 DataSpec.Builder()
                     .setUri(source.uri)
+                    .setHttpRequestHeaders(source.headers)
                     .setKey(cacheKey)
                     .setPosition(position)
                     .setLength(length.toLong())
@@ -109,5 +134,6 @@ internal class CacheMediaDataSource(
 
     private companion object {
         const val READ_AHEAD_SIZE = 64 * 1024
+        const val CACHE_WAIT_INTERVAL_MS = 25L
     }
 }

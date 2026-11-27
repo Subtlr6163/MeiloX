@@ -15,9 +15,9 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.LocalTextStyle
-import androidx.compose.material3.SheetState
+import io.github.neoruaa.glasmio.ui.GlasmioSheetState
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
+import io.github.neoruaa.glasmio.ui.rememberGlasmioSheetState
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -43,6 +43,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertHeightIsAtLeast
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.captureToImage
@@ -60,30 +61,41 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.test.performScrollTo
-import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.window.DialogWindowProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import com.kyant.backdrop.backdrops.emptyBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.emptyBackdrop
 import com.ljyh.mei.R
+import com.ljyh.mei.constants.MusicQuality
 import com.ljyh.mei.data.model.MediaMetadata
 import com.ljyh.mei.ui.component.player.FloatingLyricsPipContent
 import com.ljyh.mei.ui.component.player.component.applemusic.playerAdditiveBlend
 import com.ljyh.mei.ui.component.player.component.applemusic.playerContentFade
 import com.ljyh.mei.ui.component.player.component.sheet.LyricSelectionSheet
-import com.ljyh.mei.ui.glass.IosModalSheet
-import com.ljyh.mei.ui.glass.LocalBlurBackdrop
-import com.ljyh.mei.ui.glass.LocalGlassBackdrop
-import com.ljyh.mei.ui.glass.LocalGlassColors
-import com.ljyh.mei.ui.glass.defaultGlassColors
+import com.ljyh.mei.ui.component.player.component.sheet.ArtistSelectionSheet
+import com.ljyh.mei.ui.component.sheet.rememberMeiloXSheetDismissal
+import io.github.neoruaa.glasmio.ui.GlasmioBottomSheet
+import io.github.neoruaa.glasmio.ui.GlasmioListRow
+import io.github.neoruaa.glasmio.ui.GlasmioSheetValue
+import io.github.neoruaa.glasmio.ui.GlasmioSheetGroupedListStyle
+import io.github.neoruaa.glasmio.ui.LocalGlasmioSheetGroupedListStyle
+import io.github.neoruaa.glasmio.glass.LocalBlurBackdrop
+import io.github.neoruaa.glasmio.glass.LocalGlassBackdrop
+import io.github.neoruaa.glasmio.glass.GlasmioBackdropHost
+import io.github.neoruaa.glasmio.core.GlasmioTheme
+import io.github.neoruaa.glasmio.core.LocalGlassColors
+import io.github.neoruaa.glasmio.core.defaultGlassColors
 import com.ljyh.mei.ui.model.LyricCandidate
 import com.ljyh.mei.ui.model.LyricData
 import com.ljyh.mei.ui.model.LyricVariant
@@ -102,6 +114,7 @@ import java.util.concurrent.atomic.AtomicReference
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -112,7 +125,115 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class PlayerLyricsRenderingTest {
     @get:Rule val compose = createComposeRule()
+
+    @Test
+    fun primaryCenterMatchesWrappedTextWithoutIncludingTranslation() {
+        val line = SyncedLine("Primary lyric wrapping across several lines", "Translation\nSecond translation line", 1_000, 5_000)
+        var measuredCenter = 0f
+        var measuredTop = 0f
+        compose.setContent {
+            MaterialTheme {
+                val density = LocalDensity.current
+                val measurer = rememberTextMeasurer()
+                val style = TextStyle(fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                measuredCenter = mainLyricAnchorOffset(line, false, style, false,
+                    with(density) { 180.dp.roundToPx() }, measurer, density)
+                measuredTop = mainLyricAnchorOffset(line, false, style, false,
+                    with(density) { 180.dp.roundToPx() }, measurer, density, anchorFraction = 0f)
+                Box(Modifier.width(180.dp).testTag("CenteredLyricRow")) {
+                    com.mocharealm.accompanist.lyrics.ui.composable.lyrics.SyncedLineText(
+                        line = line, isLineRtl = false, textStyle = style.copy(lineHeight = 1.2.em),
+                        textColor = Color.White,
+                    )
+                }
+            }
+        }
+        val row = compose.onNodeWithTag("CenteredLyricRow").fetchSemanticsNode().boundsInRoot
+        val primary = compose.onNodeWithText(line.content).fetchSemanticsNode().boundsInRoot
+        assertEquals(primary.center.y - row.top, measuredCenter, 1f)
+        assertEquals(primary.top - row.top, measuredTop, 1f)
+        assertTrue(primary.height < row.height)
+    }
     private val clickedLine = AtomicReference<ISyncedLine>()
+
+    @Test
+    fun qualityMenuPausesLyricsAutoHideThroughCollapseAndRestartsTheIdleTimer() {
+        val quality = mutableStateOf(MusicQuality.EXHIGH)
+        val mediaId = mutableStateOf("fixture:first")
+        var qualityRequests = 0
+        val menuVisible = mutableStateOf(false)
+        val controlsVisible = mutableStateOf(true)
+        val showBadge = mutableStateOf(true)
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        compose.setContent {
+            MaterialTheme {
+                CompositionLocalProvider(
+                    LocalGlassBackdrop provides emptyBackdrop(),
+                    LocalBlurBackdrop provides emptyBackdrop(),
+                ) {
+                    PlayerLyricsControlsAutoHide(
+                        controlsVisible = controlsVisible.value,
+                        expanded = true,
+                        active = true,
+                        isPlaying = true,
+                        blocked = menuVisible.value,
+                        onHide = { controlsVisible.value = false },
+                    )
+                    if (showBadge.value) PlayerQualityDropdown(
+                        quality = quality.value,
+                        mediaId = mediaId.value,
+                        availableQualities = listOf(MusicQuality.EXHIGH, MusicQuality.LOSSLESS),
+                        isLoading = false,
+                        localPlaybackInfo = null,
+                        isPlayingLocalSource = false,
+                        onMenuOpened = { qualityRequests++ },
+                        onQualitySelected = { quality.value = it },
+                        onLocalSourceSelected = {},
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White,
+                        onMenuVisibilityChanged = { menuVisible.value = it },
+                    )
+                }
+            }
+        }
+
+        compose.onNodeWithText(context.getString(MusicQuality.EXHIGH.labelRes)).performClick()
+        compose.mainClock.advanceTimeBy(10_000)
+        compose.runOnIdle {
+            assertTrue(menuVisible.value)
+            assertTrue("The quality menu must keep playback controls visible", controlsVisible.value)
+            assertEquals("Opening the menu requests qualities once", 1, qualityRequests)
+            mediaId.value = "fixture:second"
+        }
+        compose.runOnIdle {
+            assertEquals("An open menu must refresh when its source track changes", 2, qualityRequests)
+            assertTrue(menuVisible.value)
+        }
+        try {
+            compose.mainClock.autoAdvance = false
+            compose.onNodeWithText(context.getString(MusicQuality.LOSSLESS.labelRes)).performClick()
+            compose.runOnIdle {
+                assertEquals(MusicQuality.LOSSLESS, quality.value)
+                assertTrue("The collapsing popup still owns its anchor", menuVisible.value)
+            }
+            compose.mainClock.advanceTimeBy(1_000)
+            compose.runOnIdle {
+                assertFalse(menuVisible.value)
+                assertTrue(controlsVisible.value)
+            }
+            compose.mainClock.advanceTimeBy(3_500)
+            compose.runOnIdle { assertTrue("Dismissal starts a fresh idle interval", controlsVisible.value) }
+            compose.mainClock.advanceTimeBy(2_000)
+            compose.runOnIdle { assertFalse(controlsVisible.value) }
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
+
+        compose.onNodeWithText(context.getString(MusicQuality.LOSSLESS.labelRes)).performClick()
+        compose.runOnIdle { assertTrue(menuVisible.value) }
+        compose.runOnIdle { showBadge.value = false }
+        compose.runOnIdle { assertFalse(menuVisible.value) }
+    }
 
     @Test
     fun floatingLyricsRemainReadableWhenTheCardThemeChanges() {
@@ -722,7 +843,7 @@ class PlayerLyricsRenderingTest {
                     LocalGlassBackdrop provides emptyBackdrop(),
                     LocalBlurBackdrop provides emptyBackdrop(),
                 ) {
-                    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+                    val sheetState = rememberGlasmioSheetState(skipPartiallyExpanded = false)
                     LaunchedEffect(expandSheet.value) {
                         if (expandSheet.value) sheetState.expand()
                     }
@@ -784,7 +905,7 @@ class PlayerLyricsRenderingTest {
                     LocalGlassBackdrop provides emptyBackdrop(),
                     LocalBlurBackdrop provides emptyBackdrop(),
                 ) {
-                    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+                    val sheetState = rememberGlasmioSheetState(skipPartiallyExpanded = false)
                     LaunchedEffect(expandSheet.value) { if (expandSheet.value) sheetState.expand() }
                     LyricSelectionSheet(
                         mediaMetadata = lyricReference,
@@ -823,7 +944,7 @@ class PlayerLyricsRenderingTest {
                     LocalGlassBackdrop provides emptyBackdrop(),
                     LocalBlurBackdrop provides emptyBackdrop(),
                 ) {
-                    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+                    val sheetState = rememberGlasmioSheetState(skipPartiallyExpanded = false)
                     LaunchedEffect(expandSheet.value) {
                         if (expandSheet.value) sheetState.expand()
                     }
@@ -876,11 +997,12 @@ class PlayerLyricsRenderingTest {
     @Test
     fun closingOrSelectingLyricsKeepsTheSheetComposedUntilItsHideAnimationFinishes() {
         val open = mutableStateOf(true)
-        val sheet = AtomicReference<SheetState>()
+        val sheet = AtomicReference<GlasmioSheetState>()
         val selected = AtomicReference<LyricCandidate>()
         val candidate = lyricCandidate(LyricSource.AM, "Apple candidate")
         var dismissed = 0
         var disposed = 0
+        var selections = 0
         compose.setContent {
             MaterialTheme {
                 CompositionLocalProvider(
@@ -889,7 +1011,7 @@ class PlayerLyricsRenderingTest {
                     LocalBlurBackdrop provides emptyBackdrop(),
                 ) {
                     if (open.value) {
-                        val state = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+                        val state = rememberGlasmioSheetState(skipPartiallyExpanded = false)
                         SideEffect { sheet.set(state) }
                         DisposableEffect(Unit) { onDispose { disposed++ } }
                         LyricSelectionSheet(
@@ -898,7 +1020,12 @@ class PlayerLyricsRenderingTest {
                             offsetMs = 0,
                             isLoading = false,
                             errorMessage = null,
-                            onSelectCandidate = selected::set,
+                            onSelectCandidate = {
+                                assertEquals(GlasmioSheetValue.Hidden, state.currentValue)
+                                assertFalse("Navigation must wait until the native sheet is hidden", state.isVisible)
+                                selections++
+                                selected.set(it)
+                            },
                             onAdjustOffset = {},
                             onResetOffset = {},
                             onResetSource = {},
@@ -917,12 +1044,16 @@ class PlayerLyricsRenderingTest {
         compose.runOnIdle {
             assertEquals(0, dismissed)
             assertEquals(0, disposed)
+            assertEquals(0, selections)
+            assertNull(selected.get())
             assertTrue(sheet.get().isVisible)
         }
         compose.mainClock.advanceTimeBy(2_000)
         compose.runOnIdle {
             assertEquals(1, dismissed)
             assertEquals(1, disposed)
+            assertEquals(0, selections)
+            assertNull(selected.get())
             assertFalse(sheet.get().isVisible)
         }
 
@@ -933,7 +1064,8 @@ class PlayerLyricsRenderingTest {
         compose.onNodeWithText(candidate.title).performClick()
         compose.mainClock.advanceTimeByFrame()
         compose.runOnIdle {
-            assertSame(candidate, selected.get())
+            assertNull("Selecting must retain the source until its close animation finishes", selected.get())
+            assertEquals(0, selections)
             assertEquals(1, dismissed)
             assertEquals(1, disposed)
             assertTrue(sheet.get().isVisible)
@@ -942,7 +1074,56 @@ class PlayerLyricsRenderingTest {
         compose.runOnIdle {
             assertEquals(2, dismissed)
             assertEquals(2, disposed)
+            assertSame(candidate, selected.get())
+            assertEquals(1, selections)
             assertFalse(sheet.get().isVisible)
+        }
+    }
+
+    @Test
+    fun deferredSheetActionKeepsTheTrackSnapshotFromItsClick() {
+        val original = lyricReference
+        val currentTrack = mutableStateOf(original)
+        val open = mutableStateOf(true)
+        val selected = AtomicReference<MediaMetadata>()
+        var dismissals = 0
+        var actions = 0
+        compose.setContent {
+            GlasmioTheme(isDark = false) {
+                if (open.value) {
+                    val displayedTrack = currentTrack.value
+                    val dismissal = rememberMeiloXSheetDismissal({ dismissals++; open.value = false })
+                    GlasmioBottomSheet(
+                        sheetState = dismissal.state,
+                        skipPartiallyExpanded = false,
+                        backdrop = emptyBackdrop(),
+                        onDismissRequest = dismissal::onDismissed,
+                    ) {
+                        GlasmioListRow("Use displayed track", showTopSeparator = false, onClick = {
+                            dismissal.requestDismiss {
+                                assertEquals(GlasmioSheetValue.Hidden, dismissal.state.currentValue)
+                                actions++
+                                selected.set(displayedTrack)
+                            }
+                        })
+                    }
+                }
+            }
+        }
+        compose.waitForIdle()
+        compose.mainClock.autoAdvance = false
+        compose.onNodeWithText("Use displayed track").performClick()
+        compose.mainClock.advanceTimeByFrame()
+        compose.runOnIdle {
+            currentTrack.value = original.copy(id = 2, title = "Next track")
+            assertEquals(0, dismissals)
+            assertEquals(0, actions)
+        }
+        compose.mainClock.advanceTimeBy(2_000)
+        compose.runOnIdle {
+            assertEquals(1, dismissals)
+            assertEquals(1, actions)
+            assertSame("Advancing playback during dismissal must not retarget the queued action", original, selected.get())
         }
     }
 
@@ -957,7 +1138,7 @@ class PlayerLyricsRenderingTest {
                     LocalGlassBackdrop provides emptyBackdrop(),
                     LocalBlurBackdrop provides emptyBackdrop(),
                 ) {
-                    IosModalSheet(onDismissRequest = {}) {
+                    GlasmioBottomSheet(onDismissRequest = {}) {
                         val dialogWindow = (LocalView.current.parent as? DialogWindowProvider)?.window
                         SideEffect { window.set(dialogWindow) }
                         Text("Sheet content", Modifier.padding(24.dp))
@@ -978,6 +1159,147 @@ class PlayerLyricsRenderingTest {
     }
 
     @Test
+    fun artistSheetStartsAtMediumAndUsesOpaqueNativeTableColorsOnlyWhenExpanded() {
+        val artists = List(3) { MediaMetadata.Artist(it + 1L, "Artist ${it + 1}") }
+        compose.setContent {
+            GlasmioTheme(isDark = false) {
+                GlasmioBackdropHost(
+                    modifier = Modifier.fillMaxSize(),
+                    sampledContent = { Box(Modifier.fillMaxSize().background(Color(0xFF163D80))) },
+                    overlayContent = {
+                        ArtistSelectionSheet(artists, onDismiss = {}, onArtistClick = {})
+                    },
+                )
+            }
+        }
+        val sheet = compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.Expand))
+        fun waitForDetent(value: GlasmioSheetValue) {
+            compose.waitUntil(10_000) {
+                sheet.fetchSemanticsNode().config[SemanticsProperties.StateDescription] == value.name
+            }
+            compose.waitForIdle()
+        }
+        fun cellColor(): Color {
+            val dialog = compose.onNode(isDialog())
+            val origin = dialog.fetchSemanticsNode().boundsInRoot.topLeft
+            val row = compose.onNode(hasText(artists[1].name) and hasClickAction())
+                .fetchSemanticsNode().boundsInRoot
+            val pixels = dialog.captureToImage().toPixelMap()
+            val x = (row.left + row.width * 0.65f - origin.x).toInt()
+            val y = (row.center.y - origin.y).toInt()
+            return pixels[x, y]
+        }
+        waitForDetent(GlasmioSheetValue.Medium)
+        val dialogBounds = compose.onNode(isDialog()).fetchSemanticsNode().boundsInRoot
+        val mediumBounds = sheet.fetchSemanticsNode().boundsInRoot
+        assertTrue("A standard sheet must initially leave the upper page visible",
+            mediumBounds.top > dialogBounds.top + dialogBounds.height * 0.3f)
+        val medium = cellColor()
+        assertTrue("Medium grouped cells must retain the colored native backdrop", medium.blue > medium.red + 0.08f)
+
+        sheet.performSemanticsAction(SemanticsActions.Expand) { it() }
+        waitForDetent(GlasmioSheetValue.Large)
+        val largeBounds = sheet.fetchSemanticsNode().boundsInRoot
+        assertTrue("Expanding must use the screen-height detent rather than fit the short list",
+            largeBounds.height > mediumBounds.height * 1.4f)
+        val expanded = cellColor()
+        assertEquals("Large grouped cells must use the native opaque white carrier", 1f, expanded.red, 2f / 255f)
+        assertEquals(1f, expanded.green, 2f / 255f)
+        assertEquals(1f, expanded.blue, 2f / 255f)
+
+        sheet.performSemanticsAction(SemanticsActions.Collapse) { it() }
+        waitForDetent(GlasmioSheetValue.Medium)
+        val restored = cellColor()
+        assertEquals("Returning to Medium must restore its vibrant carrier", medium.red, restored.red, 3f / 255f)
+        assertEquals(medium.green, restored.green, 3f / 255f)
+        assertEquals(medium.blue, restored.blue, 3f / 255f)
+    }
+
+    @Test
+    fun playerSheetMediumCellsMatchToolbarTintWhileLargeCellsStayOpaqueInBothAppearances() {
+        val artists = List(3) { MediaMetadata.Artist(it + 1L, "Artist ${it + 1}") }
+        val dark = mutableStateOf(false)
+        val backdropColor = mutableStateOf(Color(0xFF163D80))
+        val density = AtomicReference<Density>()
+        compose.setContent {
+            GlasmioTheme(isDark = dark.value) {
+                val currentDensity = LocalDensity.current
+                SideEffect { density.set(currentDensity) }
+                GlasmioBackdropHost(
+                    modifier = Modifier.fillMaxSize(),
+                    sampledContent = { Box(Modifier.fillMaxSize().background(backdropColor.value)) },
+                    overlayContent = {
+                        CompositionLocalProvider(
+                            LocalGlasmioSheetGroupedListStyle provides GlasmioSheetGroupedListStyle.ToolbarTint,
+                        ) {
+                            key(dark.value) {
+                                ArtistSelectionSheet(artists, onDismiss = {}, onArtistClick = {})
+                            }
+                        }
+                    },
+                )
+            }
+        }
+        val sheet = compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.Expand))
+        fun waitForDetent(value: GlasmioSheetValue) {
+            compose.waitUntil(10_000) {
+                sheet.fetchSemanticsNode().config[SemanticsProperties.StateDescription] == value.name
+            }
+            compose.waitForIdle()
+        }
+        fun assertColor(expected: Color, actual: Color, message: String) {
+            assertEquals("$message red", expected.red, actual.red, 3f / 255f)
+            assertEquals("$message green", expected.green, actual.green, 3f / 255f)
+            assertEquals("$message blue", expected.blue, actual.blue, 3f / 255f)
+        }
+        fun sampleRegions(): Pair<Color, Color> {
+            val dialog = compose.onNode(isDialog())
+            val origin = dialog.fetchSemanticsNode().boundsInRoot.topLeft
+            val button = compose.onNodeWithContentDescription(text(R.string.cancel))
+                .fetchSemanticsNode().boundsInRoot
+            val row = compose.onNode(hasText(artists[1].name) and hasClickAction())
+                .fetchSemanticsNode().boundsInRoot
+            val pixels = dialog.captureToImage().toPixelMap()
+            // The xmark's horizontal centerline is clear six points beside its center.
+            // Both samples avoid glass rims, row labels and separators.
+            val buttonColor = pixels[
+                (button.center.x + with(density.get()) { 6.dp.toPx() } - origin.x).toInt(),
+                (button.center.y - origin.y).toInt(),
+            ]
+            val cellColor = pixels[
+                (row.left + row.width * 0.65f - origin.x).toInt(),
+                (row.center.y - origin.y).toInt(),
+            ]
+            return buttonColor to cellColor
+        }
+        for (isDark in listOf(false, true)) {
+            compose.runOnIdle {
+                dark.value = isDark
+                backdropColor.value = Color(0xFF163D80)
+            }
+            waitForDetent(GlasmioSheetValue.Medium)
+            val (blueButton, blueCell) = sampleRegions()
+            assertColor(blueButton, blueCell, "Medium cells and toolbar buttons must share their tint")
+
+            compose.runOnIdle { backdropColor.value = Color(0xFF945416) }
+            compose.waitForIdle()
+            val (warmButton, warmCell) = sampleRegions()
+            assertColor(warmButton, warmCell, "Medium tint opacity must match over another live backdrop")
+            val response = maxOf(kotlin.math.abs(blueCell.red - warmCell.red),
+                kotlin.math.abs(blueCell.green - warmCell.green), kotlin.math.abs(blueCell.blue - warmCell.blue))
+            assertTrue("Medium tint must retain visible backdrop transmission", response > 0.035f)
+
+            sheet.performSemanticsAction(SemanticsActions.Expand) { it() }
+            waitForDetent(GlasmioSheetValue.Large)
+            val opaque = if (isDark) Color(0xFF2C2C2E) else Color.White
+            assertColor(opaque, sampleRegions().second, "Large must retain its native opaque cell color")
+            compose.runOnIdle { backdropColor.value = Color(0xFF163D80) }
+            compose.waitForIdle()
+            assertColor(opaque, sampleRegions().second, "Large cells must remain opaque when the backdrop changes")
+        }
+    }
+
+    @Test
     fun lyricSelectionScrollsBehindNavigationWhileItsLastCandidateRemainsSafe() {
         val expandSheet = mutableStateOf(false)
         val density = AtomicReference<Density>()
@@ -994,7 +1316,7 @@ class PlayerLyricsRenderingTest {
                 ) {
                     val currentDensity = LocalDensity.current
                     SideEffect { density.set(currentDensity) }
-                    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+                    val sheetState = rememberGlasmioSheetState(skipPartiallyExpanded = false)
                     LaunchedEffect(expandSheet.value) {
                         if (expandSheet.value) sheetState.expand()
                     }
@@ -1021,6 +1343,11 @@ class PlayerLyricsRenderingTest {
         val rootBounds = compose.onNode(isDialog()).fetchSemanticsNode().boundsInRoot
         val listBounds = list.fetchSemanticsNode().boundsInRoot
         assertEquals("The scrolling viewport must extend to the dialog bottom", rootBounds.bottom, listBounds.bottom, 1f)
+        val toolbarBefore = compose.onNodeWithText(text(R.string.lyric_selection_title))
+            .fetchSemanticsNode().boundsInRoot
+        assertTrue("The scrolling viewport must extend behind the pinned header", listBounds.top <= toolbarBefore.top)
+        val firstReference = compose.onNodeWithText(lyricReference.title).fetchSemanticsNode().boundsInRoot
+        assertTrue("Initial content must clear the pinned header", firstReference.top >= toolbarBefore.bottom)
 
         // Read the real sheet window's insets; no synthetic navigation area is supplied.
         var navigationBottom = 0
@@ -1039,14 +1366,17 @@ class PlayerLyricsRenderingTest {
                 .getInsets(android.view.WindowInsets.Type.navigationBars()).bottom
         }
 
-        // Reference and timing rows precede the candidates. Reaching the final index
-        // must reveal the complete row plus its content-owned navigation padding.
-        list.performScrollToIndex(candidates.size + 1)
+        // The final production row must remain reachable independently of optional sections.
+        list.performScrollToNode(hasTestTag("lyric-candidate-${candidates.last().key}"))
+        val toolbarAfter = compose.onNodeWithText(text(R.string.lyric_selection_title))
+            .fetchSemanticsNode().boundsInRoot
+        assertEquals("Scrolling must not move the pinned header", toolbarBefore.top, toolbarAfter.top, 1f)
+        assertEquals(toolbarBefore.center.x, toolbarAfter.center.x, 1f)
         val lastCandidate = compose.onNodeWithText(candidates.last().title).assertIsDisplayed()
         val lastBounds = lastCandidate.getUnclippedBoundsInRoot()
         val lastTop = with(density.get()) { lastBounds.top.toPx() }
         val lastBottom = with(density.get()) { lastBounds.bottom.toPx() }
-        val expectedEndPadding = with(density.get()) { 24.dp.toPx() } + navigationBottom
+        val expectedEndPadding = with(density.get()) { 16.dp.toPx() } + navigationBottom
         assertTrue("The complete final candidate must fit inside the viewport", lastTop >= listBounds.top - 1f)
         assertEquals(
             "The final candidate must leave the navigation safe area inside the scrolling content",

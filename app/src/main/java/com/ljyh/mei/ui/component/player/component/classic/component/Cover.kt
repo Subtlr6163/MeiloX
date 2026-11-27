@@ -1,7 +1,6 @@
 package com.ljyh.mei.ui.component.player.component.classic.component
 
 import androidx.annotation.OptIn
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -9,6 +8,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
@@ -58,6 +58,9 @@ import com.ljyh.mei.constants.OriginalCoverKey
 import com.ljyh.mei.constants.PlayerStyle
 import com.ljyh.mei.constants.PlayerStyleKey
 import com.ljyh.mei.data.model.MediaMetadata
+import com.ljyh.mei.source.api.TrackRef
+import com.ljyh.mei.source.script.sourceTrackArtwork
+import com.ljyh.mei.ui.component.player.PlayerArtworkTransition
 import com.ljyh.mei.ui.component.player.component.applemusic.rememberAppleMusicPlaybackScale
 import com.ljyh.mei.playback.PlayerConnection
 import com.ljyh.mei.utils.image.saveImageToGallery
@@ -76,6 +79,8 @@ fun Cover(
     mediaMetadata: MediaMetadata,
     isPlaying: Boolean,
     modifier: Modifier,
+    pausedScale: Float = 0.75f,
+    onClick: (() -> Unit)? = null,
     onDoubleClick: (Offset, Int) -> Unit = { _, _ ->}
 ) {
     val context = LocalContext.current
@@ -99,7 +104,7 @@ fun Cover(
     }
 
     val animatedCoverScale by if (playerStyle == PlayerStyle.AppleMusic) {
-        rememberAppleMusicPlaybackScale(isPlaying, sheetExpanded)
+        rememberAppleMusicPlaybackScale(isPlaying, sheetExpanded, pausedScale)
     } else animateFloatAsState(
         targetValue = if (isPlaying) 1f else 0.9f,
         animationSpec = if (sheetExpanded) spring(
@@ -110,21 +115,18 @@ fun Cover(
     )
 
     val coverScale = rememberUpdatedState(
-        if (sheetExpanded) animatedCoverScale else if (isPlaying) 1f else if (playerStyle == PlayerStyle.AppleMusic) 0.75f else 0.9f,
+        if (sheetExpanded) animatedCoverScale else if (isPlaying) 1f else if (playerStyle == PlayerStyle.AppleMusic) pausedScale else 0.9f,
     )
 
+    val currentOnClick by rememberUpdatedState(onClick)
+    val currentOnDoubleClick by rememberUpdatedState(onDoubleClick)
     var showFullImage by remember { mutableStateOf(false) }
     Box(
         modifier = modifier,
         contentAlignment = Alignment.Center
     ) {
 
-        AnimatedContent(
-            targetState = mediaMetadata.coverUrl,
-            transitionSpec = {
-                fadeIn(tween(500)) togetherWith fadeOut(tween(500))
-            },
-            label = "CoverTransition",
+        Surface(
             modifier = Modifier.graphicsLayer {
                 scaleX = coverScale.value
                 scaleY = coverScale.value
@@ -133,36 +135,38 @@ fun Cover(
                 shadowElevation = { 12.dp },
                 backgroundColor = MaterialTheme.colorScheme.surfaceContainerHighest,
                 playbackScale = { coverScale.value },
-            )
-        ) { url ->
-
-            Surface(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .aspectRatio(1f)
-                    .shadow(12.dp, coverShape)
-                    .pointerInput(Unit) {
-                        detectTapGestures(
-                            onDoubleTap = { offset ->
-                                onDoubleClick(offset, size.width)
-                            },
-                            onLongPress = {
-                                showFullImage = true
-                            }
-                        )
-                    },
-                shape = coverShape,
-                color = MaterialTheme.colorScheme.surfaceContainerHighest
-            ) {
+            ).fillMaxSize()
+                .aspectRatio(1f)
+                .shadow(12.dp, coverShape)
+                .pointerInput(onClick != null) {
+                    detectTapGestures(
+                        onTap = { currentOnClick?.invoke() },
+                        onDoubleTap = if (currentOnClick == null) {
+                            { offset -> currentOnDoubleClick(offset, size.width) }
+                        } else null,
+                        onLongPress = { showFullImage = true },
+                    )
+                },
+            shape = coverShape,
+            color = MaterialTheme.colorScheme.surfaceContainerHighest,
+        ) {
+            PlayerArtworkTransition(
+                coverUrl = mediaMetadata.coverUrl,
+                modifier = Modifier.fillMaxSize(),
+                transitionSpec = { fadeIn(tween(500)) togetherWith fadeOut(tween(500)) },
+            ) { coverUrl ->
+                val url = coverUrl.orEmpty()
+                val trackRef = mediaMetadata.trackRef.takeIf { coverUrl == mediaMetadata.coverUrl }
                 AsyncImage(
                     model = ImageRequest.Builder(context)
                         .placeholderMemoryCacheKey(url.smallImage())
                         .data(if (originalCover) url else url.size1600())
+                        .sourceTrackArtwork(trackRef)
                         .crossfade(false)
                         .build(),
                     contentScale = ContentScale.Crop,
                     contentDescription = null,
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.fillMaxSize(),
                 )
             }
         }
@@ -170,6 +174,7 @@ fun Cover(
         if (showFullImage) {
             FullScreenImageViewer(
                 imageUrl = mediaMetadata.coverUrl,
+                trackRef = mediaMetadata.trackRef,
                 onDismiss = { showFullImage = false }
             )
         }
@@ -185,7 +190,8 @@ fun Cover(
 @Composable
 fun FullScreenImageViewer(
     imageUrl: String,
-    onDismiss: () -> Unit
+    trackRef: TrackRef? = null,
+    onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -210,7 +216,7 @@ fun FullScreenImageViewer(
             AsyncImage(
                 model = ImageRequest.Builder(context)
                     .data(imageUrl)
-
+                    .sourceTrackArtwork(trackRef)
                     .crossfade(true)
                     .build(),
                 contentDescription = "Full Screen Image",

@@ -19,6 +19,8 @@ import com.ljyh.mei.constants.LoopPlaybackKey
 import com.ljyh.mei.constants.MusicQuality
 import com.ljyh.mei.constants.MusicQualityKey
 import com.ljyh.mei.constants.PreviousPlaybackKey
+import com.ljyh.mei.constants.PrivateFmModeKey
+import com.ljyh.mei.constants.PrivateFmSceneKey
 import com.ljyh.mei.data.model.metadata
 import com.ljyh.mei.data.model.toMediaItem
 import com.ljyh.mei.data.model.toMediaMetadata
@@ -31,16 +33,20 @@ import com.ljyh.mei.extensions.mediaItems
 import com.ljyh.mei.playback.queue.ListQueue
 import com.ljyh.mei.playback.queue.Queue
 import com.ljyh.mei.utils.dataStore
-import com.ljyh.mei.utils.get
 import com.ljyh.mei.utils.reportException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import androidx.datastore.preferences.core.edit
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -50,7 +56,7 @@ import timber.log.Timber
 
 @UnstableApi
 class PlayerConnection(
-    context: Context,
+    private val context: Context,
     binder: MusicService.MusicBinder,
     val database: AppDatabase,
     private val scope: CoroutineScope,
@@ -62,6 +68,10 @@ class PlayerConnection(
 
     val service = binder.service
     val player = service.player
+    internal val autoMixStatus = service.autoMixStatus
+    internal val upcomingAutoMixTrack = service.upcomingAutoMixTrack
+    internal val autoMixTracks = service.autoMixTracks
+    internal fun incomingMixPositionMs() = service.incomingMixPositionMs()
 
     val playbackState = MutableStateFlow(player.playbackState)
     private val playWhenReady = MutableStateFlow(player.playWhenReady)
@@ -80,6 +90,8 @@ class PlayerConnection(
     val currentMediaItemIndex = MutableStateFlow(-1)
     val currentWindowIndex = MutableStateFlow(-1)
     val isFMMode = MutableStateFlow(service.isFmMode())
+    val privateFmMode = service.queueManager.privateFmMode
+    val privateFmScene = service.queueManager.privateFmScene
     val queueAutoplayEnabled = service.queueManager.queueAutoplayEnabled
     val queueAutoplayStartEntryId = service.queueManager.queueAutoplayStartEntryId
 
@@ -87,6 +99,9 @@ class PlayerConnection(
     val repeatMode = MutableStateFlow(PlayMode.SHUFFLE_MODE_ALL.mode)
     // 同时也暴露原始的 shuffle 状态
     val shuffleModeEnabled = MutableStateFlow(false)
+    private val shuffleModeJob = scope.launch {
+        service.queueManager.shuffleModeIntent.collect { updatePlayModeState() }
+    }
 
     val canSkipPrevious = MutableStateFlow(true)
     val canSkipNext = MutableStateFlow(true)
@@ -94,15 +109,38 @@ class PlayerConnection(
     val error = MutableStateFlow<PlaybackException?>(null)
     val availableMusicQualities = service.availableMusicQualities
     val currentMusicQuality = service.currentMusicQuality
+    val currentPlaybackResolution = service.currentPlaybackResolution
     val localPlaybackInfo = service.localPlaybackInfo
     val isPlayingLocalSource = service.isPlayingLocalSource
     val isLoadingMusicQualities = service.isLoadingMusicQualities
 
     private var qualityChangeJob: Job? = null
+    private val previousPlayback = MutableStateFlow<Boolean?>(null)
+    private val previousPlaybackJob = scope.launch {
+        service.dataStore.data.map { it[PreviousPlaybackKey] ?: true }
+            .distinctUntilChanged()
+            .collect { previousPlayback.value = it }
+    }
+
 
     init {
         player.addListener(this)
         updateAllStates()
+        scope.launch {
+            context.dataStore.data.map { it[PrivateFmModeKey] to it[PrivateFmSceneKey] }
+                .distinctUntilChanged().collect { (savedCode, sceneValue) ->
+                val savedMode = PrivateFmMode.entries.firstOrNull {
+                    it.storageKey == savedCode
+                } ?: PrivateFmMode.DEFAULT
+                val scene = PrivateFmScene.decode(sceneValue)
+                service.queueManager.setPrivateFmMode(
+                    savedMode.takeUnless { it == PrivateFmMode.SCENE && scene == null } ?: PrivateFmMode.DEFAULT,
+                    scene,
+                    refreshActiveSession = false,
+                )
+            }
+        }
+        scope.launch { service.queueManager.fmModeActive.collect { isFMMode.value = it } }
     }
 
     private fun updateAllStates() {
@@ -139,20 +177,42 @@ class PlayerConnection(
         )
     }
 
-    fun fmStart(firstSongId: String? = null) {
+    fun fmStart(firstSongId: String? = null, providerId: String? = null) {
 
         service.scope.launch {
             service.queueTitle = "私人 FM"
             queueTitle.value = service.queueTitle
-            service.queueManager.startFmModeById(firstSongId)
+            service.queueManager.startFmModeById(firstSongId, providerId)
         }
     }
+
+    fun setPrivateFmMode(mode: PrivateFmMode) {
+        selectPrivateFmMode(mode, null)
+    }
+
+    fun setPrivateFmScene(scene: PrivateFmScene) = selectPrivateFmMode(PrivateFmMode.SCENE, scene)
+
+    private fun selectPrivateFmMode(mode: PrivateFmMode, scene: PrivateFmScene?) {
+        service.queueManager.setPrivateFmMode(mode, scene)
+        scope.launch { context.dataStore.edit {
+            it[PrivateFmModeKey] = mode.storageKey
+            if (scene != null) it[PrivateFmSceneKey] = scene.encode() else it.remove(PrivateFmSceneKey)
+        } }
+    }
+
+    suspend fun loadPrivateFmScenes(): List<PrivateFmScene> = service.queueManager.loadPrivateFmScenes()
 
     suspend fun similarFmStart(
         songIds: List<String>,
         shouldPlay: () -> Boolean = { true },
+    ): Boolean = similarFmStart(songIds, providerId = null, shouldPlay = shouldPlay)
+
+    suspend fun similarFmStart(
+        songIds: List<String>,
+        providerId: String?,
+        shouldPlay: () -> Boolean = { true },
     ): Boolean = service.scope.async(Dispatchers.Main.immediate) {
-        service.queueManager.startSimilarFmMode(songIds, shouldPlay).await().also { started ->
+        service.queueManager.startSimilarFmMode(songIds, providerId, shouldPlay).await().also { started ->
             if (started) {
                 service.queueTitle = SIMILAR_FM_TITLE
                 queueTitle.value = service.queueTitle
@@ -170,14 +230,15 @@ class PlayerConnection(
     }
 
 
-    fun playQueue(queue: ListQueue, shuffle: Boolean? = null, repeatMode: Int = REPEAT_MODE_ALL) {
+    fun playQueue(queue: Queue, shuffle: Boolean? = null, repeatMode: Int = REPEAT_MODE_ALL, randomStart: Boolean = false) {
         // 判断当前 UI 上的模式是否是随机模式
         val startInShuffle = shuffle ?: (this.repeatMode.value == PlayMode.SHUFFLE_MODE_ALL.mode)
         service.queueTitle = queue.title
         queueTitle.value = queue.title
         // 调用新的 playQueue 方法，传入随机意图
         service.scope.launch {
-            service.queueManager.playQueue(queue, startInShuffleMode = startInShuffle, repeatMode = repeatMode)
+            service.queueManager.playQueue(queue, startInShuffleMode = startInShuffle, repeatMode = repeatMode,
+                randomStart = randomStart)
         }
     }
     fun playNext(item: MediaItem) = playNext(listOf(item))
@@ -250,17 +311,20 @@ class PlayerConnection(
     }
 
     fun seekToPrevious() {
-        if(service.dataStore[PreviousPlaybackKey] ?: true){
-            if (player.hasPreviousMediaItem()) {
-                player.seekToPreviousMediaItem()
+        scope.launch {
+            // Await a cold preference cache without blocking input or animation frames.
+            val alwaysPrevious = previousPlayback.filterNotNull().first()
+            if (alwaysPrevious) {
+                if (player.hasPreviousMediaItem()) {
+                    player.seekToPreviousMediaItem()
+                } else {
+                    player.seekTo(0)
+                }
             } else {
-                player.seekTo(0)
+                player.seekToPrevious()
             }
-        }else{
-            player.seekToPrevious()
+            if (!player.playWhenReady) player.playWhenReady = true
         }
-
-        if (!player.playWhenReady) player.playWhenReady = true
     }
 
     fun switchPlayMode() = service.switchPlayMode()
@@ -319,7 +383,7 @@ class PlayerConnection(
      * 解决了之前两个 Listener 互相冲突或者覆盖状态的问题
      */
     private fun updatePlayModeState() {
-        val isShuffle = player.shuffleModeEnabled
+        val isShuffle = player.shuffleModeEnabled || service.queueManager.shuffleModeIntent.value
         val pRepeat = player.repeatMode
 
         shuffleModeEnabled.value = isShuffle
@@ -351,6 +415,8 @@ class PlayerConnection(
     }
 
     fun dispose() {
+        shuffleModeJob.cancel()
+        previousPlaybackJob.cancel()
         qualityChangeJob?.cancel()
         qualityChangeJob = null
         player.removeListener(this)

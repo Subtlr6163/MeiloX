@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.constrainWidth
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.offset
+import com.ljyh.mei.ui.component.CopyNameAnchor
 
 @Composable
 internal fun AppleMusicMarqueeText(
@@ -36,6 +37,7 @@ internal fun AppleMusicMarqueeText(
     edgeWidth: Dp,
     enabled: Boolean,
     modifier: Modifier = Modifier,
+    copyAnchor: CopyNameAnchor? = null,
 ) {
     val density = LocalDensity.current
     val edgeWidthPx = with(density) { edgeWidth.toPx() }
@@ -49,7 +51,10 @@ internal fun AppleMusicMarqueeText(
             maxLines = 1,
             softWrap = false,
             overflow = TextOverflow.Clip,
-            onTextLayout = { textWidth = it.size.width },
+            onTextLayout = {
+                textWidth = it.size.width
+                copyAnchor?.updateLayout(it)
+            },
             modifier = modifier
                 .fillMaxWidth()
                 .layout { measurable, constraints ->
@@ -100,7 +105,8 @@ internal fun AppleMusicMarqueeText(
                     spacing = MarqueeSpacing(30.dp - edgeWidth),
                     velocity = with(density) { viewportWidth.toDp() / 13.5f }.coerceAtLeast(1.dp),
                 )
-                .padding(start = edgeWidth),
+                .padding(start = edgeWidth)
+                .then(copyAnchor?.modifier ?: Modifier),
         )
     }
 }

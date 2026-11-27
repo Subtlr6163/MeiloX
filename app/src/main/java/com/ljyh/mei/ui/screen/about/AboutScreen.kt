@@ -33,33 +33,26 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.datastore.preferences.core.edit
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kyant.capsule.ContinuousRoundedRectangle
 import com.ljyh.mei.BuildConfig
 import com.ljyh.mei.R
 import com.ljyh.mei.constants.BetaUpdatesEnabledKey
 import com.ljyh.mei.constants.DevModeKey
 import com.ljyh.mei.constants.Github
-import com.ljyh.mei.ui.glass.GlassCard
-import com.ljyh.mei.ui.glass.GlassIconButton
-import com.ljyh.mei.ui.glass.GlassToggle
-import com.ljyh.mei.ui.glass.IosGroupedList
-import com.ljyh.mei.ui.glass.IosPinnedListPage
-import com.ljyh.mei.ui.glass.LocalGlassColors
-import com.ljyh.mei.ui.glass.SfIcon
-import com.ljyh.mei.ui.glass.SfSymbol
+import io.github.neoruaa.glasmio.ui.GlasmioIconButton
+import com.ljyh.mei.ui.component.MeiloXSwitch
+import io.github.neoruaa.glasmio.ui.GlasmioGroupedList
+import io.github.neoruaa.glasmio.ui.GlasmioListRow
+import com.ljyh.mei.ui.navigation.MeiloXPinnedListPage
+import io.github.neoruaa.glasmio.icons.SfIcon
+import io.github.neoruaa.glasmio.icons.SfSymbol
 import com.ljyh.mei.ui.local.LocalNavController
 import com.ljyh.mei.ui.local.LocalPlayerAwareWindowInsets
 import com.ljyh.mei.ui.screen.Screen
 import com.ljyh.mei.ui.component.VersionUpdateAlert
 import com.ljyh.mei.utils.rememberPreference
-import com.ljyh.mei.utils.dataStore
-import com.ljyh.mei.utils.VersionUpdateChecker
-import com.ljyh.mei.utils.VersionUpdateResult
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
 import java.time.LocalDate
 
 @Composable
@@ -70,50 +63,11 @@ fun AboutScreen(viewModel: AboutViewModel = hiltViewModel()) {
     val (devMode, onDevModeChange) = rememberPreference(DevModeKey, false)
     val betaUpdatesEnabled by rememberPreference(BetaUpdatesEnabledKey, false)
     var clickCount by remember { mutableIntStateOf(0) }
-    val updateCheckScope = rememberCoroutineScope()
-    var isCheckingUpdate by remember { mutableStateOf(false) }
-    var isSavingBetaPreference by remember { mutableStateOf(false) }
-    var updateResult by remember { mutableStateOf<VersionUpdateResult?>(null) }
+    val isCheckingUpdate by viewModel.isCheckingUpdate.collectAsStateWithLifecycle()
+    val isSavingBetaPreference by viewModel.isSavingBetaPreference.collectAsStateWithLifecycle()
+    val updateResult by viewModel.updateResult.collectAsStateWithLifecycle()
 
-    fun setBetaUpdatesEnabled(enabled: Boolean) {
-        if (isCheckingUpdate || isSavingBetaPreference) return
-        isSavingBetaPreference = true
-        updateCheckScope.launch {
-            try {
-                context.dataStore.edit { preferences ->
-                    preferences[BetaUpdatesEnabledKey] = enabled
-                }
-            } catch (cancellation: CancellationException) {
-                throw cancellation
-            } catch (_: Exception) {
-                updateResult = VersionUpdateResult.Failed
-            } finally {
-                isSavingBetaPreference = false
-            }
-        }
-    }
-
-    fun checkForUpdates() {
-        if (isCheckingUpdate || isSavingBetaPreference) return
-        isCheckingUpdate = true
-        updateCheckScope.launch {
-            try {
-                val checkBetaUpdates = context.dataStore.data.first()[BetaUpdatesEnabledKey] ?: false
-                updateResult = VersionUpdateChecker.check(
-                    BuildConfig.VERSION_NAME,
-                    betaUpdatesEnabled = checkBetaUpdates,
-                )
-            } catch (cancellation: CancellationException) {
-                throw cancellation
-            } catch (_: Exception) {
-                updateResult = VersionUpdateResult.Failed
-            } finally {
-                isCheckingUpdate = false
-            }
-        }
-    }
-
-    IosPinnedListPage(
+    MeiloXPinnedListPage(
         title = stringResource(R.string.settings_about),
         onNavigateBack = navController::navigateUp,
         bottomPadding = insets.calculateBottomPadding(),
@@ -140,7 +94,11 @@ fun AboutScreen(viewModel: AboutViewModel = hiltViewModel()) {
                 )
                 Text("MeiloX", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
                 Text(
-                    stringResource(R.string.about_version, BuildConfig.VERSION_NAME),
+                    stringResource(
+                        R.string.about_version,
+                        BuildConfig.VERSION_NAME,
+                        BuildConfig.BUILD_COMMIT_SHA.take(8).ifBlank { "unknown" },
+                    ),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -157,34 +115,29 @@ fun AboutScreen(viewModel: AboutViewModel = hiltViewModel()) {
                     } else {
                         stringResource(R.string.about_check_updates)
                     },
-//                    stringResource(R.string.about_check_updates_description),
-                ) { checkForUpdates() }
-                GlassCard(
-                    Modifier.fillMaxWidth(),
-                    onClick = if (isCheckingUpdate || isSavingBetaPreference) null else ({ setBetaUpdatesEnabled(!betaUpdatesEnabled) }),
-                ) {
-                    Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                        SfIcon("moon", null, size = 21.dp)
-                        Text(
-                            stringResource(R.string.about_check_beta_updates),
-                            modifier = Modifier.weight(1f).padding(horizontal = 13.dp),
-                        )
-                        GlassToggle(
+                ) { viewModel.checkForUpdates() }
+                GlasmioListRow(
+                    title = stringResource(R.string.about_check_beta_updates),
+                    systemName = "moon",
+                    enabled = !isCheckingUpdate && !isSavingBetaPreference,
+                    onClick = { viewModel.setBetaUpdatesEnabled(!betaUpdatesEnabled) },
+                    trailing = {
+                        MeiloXSwitch(
                             checked = betaUpdatesEnabled,
-                            onCheckedChange = ::setBetaUpdatesEnabled,
+                            onCheckedChange = viewModel::setBetaUpdatesEnabled,
                             enabled = !isCheckingUpdate && !isSavingBetaPreference,
                         )
-                    }
-                }
+                    },
+                )
             }
         }
         item {
             com.ljyh.mei.ui.screen.setting.SettingsGroup(stringResource(R.string.about_acknowledgements)) {
                 AboutEntry("chevron.left.forwardslash.chevron.right", "Mei", stringResource(R.string.about_upstream_description)) { openUrl(context, "https://github.com/ljyh223/Mei") }
                 AboutEntry("iphone", "MeloX", stringResource(R.string.about_melox_description)) { openUrl(context, "https://github.com/youshen2/MeloX") }
+                AboutEntry("square.stack.3d.up", "Glasmio", stringResource(R.string.about_glasmio_description)) { openUrl(context, "https://github.com/NEORUAA/Glasmio") }
                 AboutEntry("quote.bubble", "amll-ttml-db", stringResource(R.string.about_amll_description)) { openUrl(context, "https://github.com/Steve-xmh/amll-ttml-db") }
                 AboutEntry("music.note.list", "accompanist-lyrics-ui", stringResource(R.string.about_lyrics_ui_description)) { openUrl(context, "https://github.com/6xingyv/accompanist-lyrics-ui") }
-                AboutEntry("circle.lefthalf.filled", "Backdrop", stringResource(R.string.about_backdrop_description)) { openUrl(context, "https://github.com/Kyant0/AndroidLiquidGlass") }
             }
         }
         if (devMode) {
@@ -213,7 +166,7 @@ fun AboutScreen(viewModel: AboutViewModel = hiltViewModel()) {
 
     VersionUpdateAlert(
         result = updateResult,
-        onDismiss = { updateResult = null },
+        onDismiss = viewModel::dismissUpdateResult,
     )
 }
 
@@ -229,18 +182,12 @@ private fun AboutSectionTitle(title: String) {
 
 @Composable
 private fun AboutEntry(systemName: String, title: String, subtitle: String? = null, onClick: () -> Unit) {
-    GlassCard(Modifier.fillMaxWidth(), onClick = onClick) {
-        Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-            SfIcon(systemName, null, size = 21.dp)
-            Column(Modifier.weight(1f).padding(horizontal = 13.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(title)
-                subtitle?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-            SfIcon("chevron.forward", null, size = 15.dp, tint = LocalGlassColors.current.separator)
-        }
-    }
+    GlasmioListRow(
+        title = title,
+        subtitle = subtitle,
+        systemName = systemName,
+        onClick = onClick,
+    )
 }
 
 private fun openUrl(context: Context, url: String) {

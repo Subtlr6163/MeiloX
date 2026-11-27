@@ -7,6 +7,7 @@ import com.google.gson.JsonParser
 import com.ljyh.mei.constants.RestorePlaybackPositionKey
 import com.ljyh.mei.constants.RestorePlaybackStateKey
 import com.ljyh.mei.playback.queue.PlaylistQueueSource
+import com.ljyh.mei.source.api.LibraryCollection
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -16,6 +17,27 @@ import org.junit.Test
 
 class PlaybackShuffleSnapshotTest {
     private val gson = Gson()
+
+    @Test
+    fun sourceShuffleLocatorsRoundTripWithStableDiskFieldsAndLegacyAliases() {
+        listOf(
+            PlaylistQueueSource(0L, providerId = "external", sourcePlaylistId = "opaque:playlist"),
+            PlaylistQueueSource(0L, providerId = "external", libraryCollection = LibraryCollection.LIKED_TRACKS),
+        ).forEach { source ->
+            val original = PlaybackSnapshot(playlistSource = source)
+            val encoded = gson.toJson(original)
+            assertEquals(original, gson.fromJson(encoded, PlaybackSnapshot::class.java))
+            val stored = JsonParser.parseString(encoded).asJsonObject.getAsJsonObject("playlistSource")
+            assertEquals("external", stored.get("providerId").asString)
+            assertTrue(source.supportsShuffle)
+            if (source.libraryCollection != null) assertEquals("LIKED_TRACKS", stored.get("libraryCollection").asString)
+            else assertEquals("opaque:playlist", source.playlistIdentity)
+        }
+        assertEquals(PlaylistQueueSource(123L, "legacy"),
+            gson.fromJson("""{"a":123,"b":"legacy"}""", PlaylistQueueSource::class.java))
+        assertEquals("123", gson.fromJson("""{"playlistId":123,"alg":"legacy"}""",
+            PlaylistQueueSource::class.java).playlistIdentity)
+    }
 
     @Test
     fun versionTwoRoundTripKeepsOrderSourceCurrentIndexAndProgress() {
@@ -47,6 +69,27 @@ class PlaybackShuffleSnapshotTest {
         assertNull(restored.playlistSource)
         assertFalse(restored.queueAutoplayEnabled)
         assertNull(restored.queueAutoplayStartIndex)
+        assertNull(restored.sourceContentContext)
+    }
+
+    @Test
+    fun versionThreeSourceContinuationRoundTripStoresOnlySafeLocationAndFingerprint() {
+        val context = SourceContentQueueSnapshot(providerId = "external", instanceId = "script:example:default",
+            providerVersion = "1.0+2", contentType = "playlist", contentId = "playlist-id", loadedCount = 30,
+            nextOffset = 30, hasMore = true, knownTotalCount = 633, accountFingerprint = "a".repeat(64))
+        val snapshot = PlaybackSnapshot(items = listOf(PlaybackItemSnapshot("external-track")),
+            sourceContentContext = context, playlistSource = PlaylistQueueSource(123))
+        val encoded = gson.toJson(snapshot)
+        val restored = gson.fromJson(encoded, PlaybackSnapshot::class.java)
+        assertEquals(snapshot, restored)
+        assertEquals(3, restored.schemaVersion)
+        assertFalse(encoded.contains("cursor", ignoreCase = true))
+        assertFalse(encoded.contains("session", ignoreCase = true))
+        listOf(1, 2, 3).forEach { version ->
+            val old = gson.fromJson("""{"schemaVersion":$version,"items":[{"mediaId":"11"}]}""", PlaybackSnapshot::class.java)
+            assertEquals("11", old.items.single().mediaId)
+            assertNull(old.sourceContentContext)
+        }
     }
 
     @Test
@@ -84,7 +127,7 @@ class PlaybackShuffleSnapshotTest {
         val restored = gson.fromJson(gson.toJson(original), PlaybackSnapshot::class.java)
         assertTrue(restored.isFmMode)
         assertEquals(listOf("42", "19", "7"), restored.similarFmSourceIds)
-        assertEquals("[42,19,7]", SimilarFmRequest.fromSongIds(restored.similarFmSourceIds!!)!!.body()["sourceIds"])
+        assertEquals("[\"42\",\"19\",\"7\"]", SimilarFmRequest.fromSongIds(restored.similarFmSourceIds!!)!!.body()["seedTrackIds"])
     }
 
     @Test

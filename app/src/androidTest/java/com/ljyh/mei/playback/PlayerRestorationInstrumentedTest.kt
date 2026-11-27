@@ -4,14 +4,25 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.os.IBinder
+import android.view.WindowInsets
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsNotFocused
+import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
 import androidx.lifecycle.Lifecycle
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
@@ -126,6 +137,90 @@ class PlayerRestorationInstrumentedTest {
     }
 
     @Test
+    fun openingPlayerFromSearchDismissesKeyboardAndPreservesQuery() {
+        val query = "Unsubmitted playback query"
+        val searchInput = compose.onNode(hasSetTextAction())
+        fun awaitKeyboard(visible: Boolean) {
+            compose.waitUntil(5_000) {
+                onMain {
+                    compose.activity.window.decorView.rootWindowInsets
+                        ?.isVisible(WindowInsets.Type.ime()) == visible
+                }
+            }
+        }
+
+        compose.onNodeWithContentDescription(context.getString(R.string.app_tab_search)).performClick()
+        searchInput.performTextInput(query)
+        searchInput.assertIsFocused()
+        awaitKeyboard(true)
+
+        compose.onNodeWithText(TITLE).performClick()
+
+        awaitKeyboard(false)
+        searchInput.assertIsNotFocused()
+        onMain { compose.activity.onBackPressedDispatcher.onBackPressed() }
+        compose.waitForIdle()
+        searchInput.assertIsDisplayed().assertIsNotFocused().assertTextEquals(query)
+        awaitKeyboard(false)
+        // Editing remains available when the user explicitly focuses search again.
+        searchInput.performClick().assertIsFocused()
+        awaitKeyboard(true)
+    }
+
+    @Test
+    fun landscapePlayerRestoresStatusBarAfterCollapseRotationAndBackgroundReturn() {
+        val originalOrientation = onMain { compose.activity.requestedOrientation }
+        fun rotate(orientation: Int, configuration: Int) {
+            onMain { compose.activity.requestedOrientation = orientation }
+            compose.waitUntil(10_000) {
+                onMain { compose.activity.resources.configuration.orientation == configuration }
+            }
+        }
+        fun awaitStatusBar(visible: Boolean) {
+            compose.waitUntil(10_000) {
+                onMain {
+                    compose.activity.window.decorView.rootWindowInsets
+                        ?.isVisible(WindowInsets.Type.statusBars()) == visible
+                }
+            }
+        }
+        try {
+            rotate(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT, Configuration.ORIENTATION_PORTRAIT)
+            awaitStatusBar(true)
+            compose.onNodeWithText(TITLE).performClick()
+            compose.waitForIdle()
+            awaitStatusBar(true)
+
+            rotate(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE, Configuration.ORIENTATION_LANDSCAPE)
+            awaitStatusBar(false)
+            onMain {
+                assertFalse(service.player.playWhenReady)
+                assertTrue(compose.activity.window.decorView.rootWindowInsets
+                    .isVisible(WindowInsets.Type.navigationBars()))
+            }
+            saveScreenshot("issue66-landscape-player.png", contentOnly = true)
+
+            onMain { compose.activity.onBackPressedDispatcher.onBackPressed() }
+            awaitStatusBar(true)
+            assertMiniPlayer()
+            saveScreenshot("issue66-landscape-collapsed.png", contentOnly = true)
+
+            compose.onNodeWithText(TITLE).performClick()
+            awaitStatusBar(false)
+            compose.activityRule.scenario.moveToState(Lifecycle.State.CREATED)
+            compose.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
+            awaitStatusBar(false)
+
+            rotate(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT, Configuration.ORIENTATION_PORTRAIT)
+            awaitStatusBar(true)
+            onMain { compose.activity.onBackPressedDispatcher.onBackPressed() }
+            assertMiniPlayer()
+        } finally {
+            onMain { compose.activity.requestedOrientation = originalOrientation }
+        }
+    }
+
+    @Test
     fun restoredQueueReappearsDuringAndAfterDismissalAndCanResumeFromTheMiniPlayer() {
         for (restoreDelayMs in listOf(0L, 64L, 1_200L)) {
             compose.mainClock.autoAdvance = false
@@ -212,8 +307,9 @@ class PlayerRestorationInstrumentedTest {
         assertMiniPlayer()
     }
 
-    private fun saveScreenshot(name: String) {
-        val bitmap = checkNotNull(instrumentation.uiAutomation.takeScreenshot())
+    private fun saveScreenshot(name: String, contentOnly: Boolean = false) {
+        val bitmap = if (contentOnly) compose.onRoot().captureToImage().asAndroidBitmap()
+        else checkNotNull(instrumentation.uiAutomation.takeScreenshot())
         try {
             File(context.getExternalFilesDir(null), name).outputStream().use {
                 assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it))

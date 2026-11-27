@@ -30,11 +30,21 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
+import android.content.pm.ActivityInfo
+import android.os.Build
+import androidx.activity.compose.LocalActivity
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.node.CompositionLocalConsumerModifierNode
+import androidx.compose.ui.node.DrawModifierNode
+import androidx.compose.ui.node.ModifierNodeElement
+import androidx.compose.ui.node.currentValueOf
+import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.ExperimentalTextApi
@@ -56,7 +66,7 @@ import com.ljyh.mei.constants.LyricLongToneEnabledKey
 import com.ljyh.mei.constants.LyricRomanizationEnabledKey
 import com.ljyh.mei.constants.LyricTranslationEnabledKey
 import com.ljyh.mei.constants.LyricVisualStyle
-import com.ljyh.mei.ui.glass.GlassSurface
+import io.github.neoruaa.glasmio.glass.GlassSurface
 import com.ljyh.mei.ui.model.LyricData
 import com.ljyh.mei.utils.rememberPreference
 import com.mocharealm.accompanist.lyrics.core.model.ISyncedLine
@@ -118,6 +128,7 @@ private fun AppleLiquidLyrics(
     autoFollow: Boolean,
     modifier: Modifier,
 ) {
+    val mainLyricSize = 26.sp
     val activeIndex = activeLineIndex(lines, position)
     val state = rememberLazyListState()
     LaunchedEffect(activeIndex, autoFollow) {
@@ -150,13 +161,13 @@ private fun AppleLiquidLyrics(
                         position = position,
                         active = active,
                         longTone = longTone,
-                        style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold, fontSize = 26.sp),
+                        style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold, fontSize = mainLyricSize),
                     )
                 } else {
-                    Text(line.content(), fontWeight = FontWeight.Bold, fontSize = 26.sp, lineHeight = 31.sp)
+                    Text(line.content(), fontWeight = FontWeight.Bold, fontSize = mainLyricSize, lineHeight = 31.sp)
                 }
                 if (showRomanization) line.phonetic()?.takeIf(String::isNotBlank)?.let {
-                    Text(it, color = Color.White.copy(alpha = 0.72f), fontSize = 14.sp)
+                    Text(it, color = Color.White.copy(alpha = 0.72f), fontSize = (mainLyricSize.value * 0.5f).coerceAtLeast(12f).sp)
                 }
                 if (showTranslation) line.translation()?.takeIf(String::isNotBlank)?.let {
                     Text(it, color = Color.White.copy(alpha = 0.72f), fontSize = 15.sp)
@@ -176,6 +187,7 @@ private fun EvaLiquidLyrics(
     showRomanization: Boolean,
     modifier: Modifier,
 ) {
+    val mainLyricSize = 34.sp
     val index = activeLineIndex(lines, position)
     val active = lines.getOrNull(index)
     val next = lines.getOrNull(index + 1)
@@ -196,8 +208,8 @@ private fun EvaLiquidLyrics(
                 ),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Text(line.content(), color = Color(0xFF8BFFB0), fontSize = 34.sp, lineHeight = 39.sp, fontWeight = FontWeight.Black)
-                if (showRomanization) line.phonetic()?.let { Text(it.uppercase(), color = Color(0xFFFFB1D6), fontSize = 13.sp) }
+                Text(line.content(), color = Color(0xFF8BFFB0), fontSize = mainLyricSize, lineHeight = 39.sp, fontWeight = FontWeight.Black)
+                if (showRomanization) line.phonetic()?.let { Text(it.uppercase(), color = Color(0xFFFFB1D6), fontSize = (mainLyricSize.value * 0.5f).coerceAtLeast(12f).sp) }
                 if (showTranslation) line.translation()?.let { Text(it, color = Color.White.copy(.7f), fontSize = 15.sp) }
             }
         }
@@ -215,6 +227,7 @@ private fun TextPvLiquidLyrics(
     showRomanization: Boolean,
     modifier: Modifier,
 ) {
+    val mainLyricSize = 33.sp
     val index = activeLineIndex(lines, position)
     val line = lines.getOrNull(index)
     val phase = if (line == null || line.duration <= 0) 0f else ((position - line.start).toFloat() / line.duration).coerceIn(0f, 1f)
@@ -240,8 +253,8 @@ private fun TextPvLiquidLyrics(
                 shape = ContinuousRoundedRectangle(30.dp),
             ) {
                 Column(Modifier.padding(horizontal = 22.dp, vertical = 28.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(it.content(), fontSize = 33.sp, lineHeight = 39.sp, fontWeight = FontWeight.Black)
-                    if (showRomanization) it.phonetic()?.let { text -> Text(text, color = Color(0xFFFFD4E2), fontSize = 14.sp) }
+                    Text(it.content(), fontSize = mainLyricSize, lineHeight = 39.sp, fontWeight = FontWeight.Black)
+                    if (showRomanization) it.phonetic()?.let { text -> Text(text, color = Color(0xFFFFD4E2), fontSize = (mainLyricSize.value * 0.5f).coerceAtLeast(12f).sp) }
                     if (showTranslation) it.translation()?.let { text -> Text(text, color = Color.White.copy(.72f), fontSize = 15.sp) }
                 }
             }
@@ -267,6 +280,7 @@ private fun SkylineLiquidLyrics(
     showRomanization: Boolean,
     modifier: Modifier,
 ) {
+    val mainLyricSize = 30.sp
     val index = activeLineIndex(lines, position)
     val active = lines.getOrNull(index)
     Box(modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF04111C), Color(0xFF0D2630), Color(0xFF171526))))) {
@@ -296,8 +310,8 @@ private fun SkylineLiquidLyrics(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text(it.content(), textAlign = TextAlign.Center, fontSize = 30.sp, lineHeight = 36.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                if (showRomanization) it.phonetic()?.let { text -> Text(text, color = Color(0xFF87E8FF), fontSize = 14.sp, textAlign = TextAlign.Center) }
+                Text(it.content(), textAlign = TextAlign.Center, fontSize = mainLyricSize, lineHeight = 36.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                if (showRomanization) it.phonetic()?.let { text -> Text(text, color = Color(0xFF87E8FF), fontSize = (mainLyricSize.value * 0.5f).coerceAtLeast(12f).sp, textAlign = TextAlign.Center) }
                 if (showTranslation) it.translation()?.let { text -> Text(text, color = Color.White.copy(.68f), fontSize = 15.sp, textAlign = TextAlign.Center) }
             }
         }
@@ -354,10 +368,49 @@ private fun ISyncedLine.phonetic(): String? = when (this) {
     else -> null
 }
 
-private fun Modifier.lyricGlow(): Modifier = drawWithContent {
-    drawContent()
-    drawRect(
-        brush = Brush.radialGradient(listOf(Color.White.copy(.10f), Color.Transparent), radius = size.maxDimension * .62f),
-        blendMode = androidx.compose.ui.graphics.BlendMode.Plus,
-    )
+private fun Modifier.lyricGlow(): Modifier = this then LyricGlowElement
+
+private data object LyricGlowElement : ModifierNodeElement<LyricGlowNode>() {
+    override fun create() = LyricGlowNode()
+    override fun update(node: LyricGlowNode) = Unit
+    override fun InspectorInfo.inspectableProperties() { name = "lyricGlow" }
+}
+
+private class LyricGlowNode : Modifier.Node(), DrawModifierNode, CompositionLocalConsumerModifierNode {
+    private var cachedPaint: android.graphics.Paint? = null
+    private var cachedSize: androidx.compose.ui.geometry.Size = androidx.compose.ui.geometry.Size.Unspecified
+
+    override fun androidx.compose.ui.graphics.drawscope.ContentDrawScope.draw() {
+        drawContent()
+        val hdr = currentValueOf(LocalActivity)?.window?.colorMode == ActivityInfo.COLOR_MODE_HDR
+        if (hdr && Build.VERSION.SDK_INT >= 36) {
+            val paint = if (cachedPaint != null && cachedSize == size) {
+                cachedPaint!!
+            } else {
+                android.graphics.Paint().apply {
+                    xfermode = PlayerBlendApi36.additiveXfermode
+                    shader = android.graphics.RadialGradient(
+                        size.width / 2f,
+                        size.height / 2f,
+                        (size.maxDimension * 0.62f).coerceAtLeast(1f),
+                        intArrayOf(0x1AFFFFFF, 0x00FFFFFF),
+                        null,
+                        android.graphics.Shader.TileMode.CLAMP,
+                    )
+                }.also {
+                    cachedPaint = it
+                    cachedSize = size
+                }
+            }
+            drawContext.canvas.nativeCanvas.drawRect(0f, 0f, size.width, size.height, paint)
+        } else {
+            drawRect(
+                brush = Brush.radialGradient(
+                    listOf(Color.White.copy(.10f), Color.Transparent),
+                    radius = size.maxDimension * .62f,
+                ),
+                blendMode = if (hdr) BlendMode.Screen else BlendMode.Plus,
+            )
+        }
+    }
 }

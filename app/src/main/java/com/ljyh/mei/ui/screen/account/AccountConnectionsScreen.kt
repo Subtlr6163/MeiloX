@@ -27,17 +27,20 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import coil3.compose.AsyncImage
 import com.ljyh.mei.R
-import com.ljyh.mei.data.model.melox.AccountConnectionPage
+import com.ljyh.mei.source.shared.OnlineAccountConnectionPage as AccountConnectionPage
 import com.ljyh.mei.data.model.melox.AccountConnectionType
-import com.ljyh.mei.data.model.melox.AccountProfile
-import com.ljyh.mei.data.repository.MeloXRepository
-import com.ljyh.mei.ui.glass.GlassButton
-import com.ljyh.mei.ui.glass.GlassCard
-import com.ljyh.mei.ui.glass.GlassIconButton
-import com.ljyh.mei.ui.glass.IosListRow
-import com.ljyh.mei.ui.glass.IosPinnedListPage
-import com.ljyh.mei.ui.glass.SfIcon
-import com.ljyh.mei.ui.glass.SfSymbol
+import com.ljyh.mei.source.shared.OnlineAccountProfile as AccountProfile
+import com.ljyh.mei.source.shared.SharedOnlineRepository
+import com.ljyh.mei.source.shared.SharedOnlineSession
+import com.ljyh.mei.ui.component.AutomaticPagination
+import io.github.neoruaa.glasmio.ui.GlasmioButton
+import io.github.neoruaa.glasmio.ui.GlasmioCard
+import io.github.neoruaa.glasmio.ui.GlasmioIconButton
+import io.github.neoruaa.glasmio.ui.GlasmioListRow
+import com.ljyh.mei.ui.navigation.meiloxHeaderAction
+import com.ljyh.mei.ui.navigation.MeiloXPinnedListPage
+import io.github.neoruaa.glasmio.icons.SfIcon
+import io.github.neoruaa.glasmio.icons.SfSymbol
 import com.ljyh.mei.ui.local.LocalNavController
 import com.ljyh.mei.ui.local.LocalPlayerAwareWindowInsets
 import com.ljyh.mei.ui.screen.Screen
@@ -61,20 +64,31 @@ data class AccountConnectionsState(
 
 @HiltViewModel
 class AccountConnectionsViewModel internal constructor(
-    private val loadPage: suspend (Long, AccountConnectionType, Int) -> AccountConnectionPage,
+    private val loadPage: suspend (String, AccountConnectionType, Int) -> AccountConnectionPage,
 ) : ViewModel() {
     @Inject
-    constructor(repository: MeloXRepository) : this(
-        { userId, type, offset -> repository.accountConnections(userId, type, offset) },
+    constructor(repository: SharedOnlineRepository, savedStateHandle: androidx.lifecycle.SavedStateHandle) : this(
+        repository.screen("account-connections", savedStateHandle["providerId"]),
     )
+    private constructor(repository: SharedOnlineSession) : this(
+        { userId, type, offset -> repository.accountConnections(userId, type, offset) },
+    ) {
+        viewModelScope.launch { repository.sessionChanges.collect { owner ->
+            if (owner.isBlank()) {
+                revision++
+                loadJob?.cancel()
+                _state.value = AccountConnectionsState(loading = false)
+            }
+        } }
+    }
 
     private val _state = MutableStateFlow(AccountConnectionsState())
     val state = _state.asStateFlow()
-    private var selection: Pair<Long, AccountConnectionType>? = null
+    private var selection: Pair<String, AccountConnectionType>? = null
     private var loadJob: Job? = null
     private var revision = 0L
 
-    fun load(userId: Long, type: AccountConnectionType) {
+    fun load(userId: String, type: AccountConnectionType) {
         if (selection == (userId to type)) return
         selection = userId to type
         _state.value = AccountConnectionsState()
@@ -135,7 +149,7 @@ class AccountConnectionsViewModel internal constructor(
 
 @Composable
 fun AccountConnectionsScreen(
-    userId: Long,
+    userId: String,
     type: AccountConnectionType,
     viewModel: AccountConnectionsViewModel = hiltViewModel(key = "account-connections:$userId:$type"),
 ) {
@@ -144,7 +158,7 @@ fun AccountConnectionsScreen(
     val insets = LocalPlayerAwareWindowInsets.current.asPaddingValues()
     LaunchedEffect(userId, type) { viewModel.load(userId, type) }
 
-    IosPinnedListPage(
+    MeiloXPinnedListPage(
         title = stringResource(
             if (type == AccountConnectionType.Following) R.string.account_follows else R.string.account_followers,
         ),
@@ -152,13 +166,13 @@ fun AccountConnectionsScreen(
         bottomPadding = insets.calculateBottomPadding(),
         verticalArrangement = Arrangement.spacedBy(0.dp),
         actions = {
-            GlassIconButton(viewModel::refresh, enabled = !state.loading) {
-                if (state.loading && state.page != null) {
-                    CircularProgressIndicator(Modifier.size(20.dp))
-                } else {
-                    SfIcon(SfSymbol.ArrowClockwise, stringResource(R.string.refresh))
-                }
-            }
+            listOf(meiloxHeaderAction(
+                "refresh", stringResource(R.string.refresh), viewModel::refresh,
+                enabled = !state.loading, visualKey = state.loading && state.page != null,
+            ) {
+                if (state.loading && state.page != null) CircularProgressIndicator(Modifier.size(20.dp))
+                else SfIcon(SfSymbol.ArrowClockwise, null)
+            })
         },
     ) {
         if (state.loading && state.page == null) {
@@ -171,8 +185,9 @@ fun AccountConnectionsScreen(
         state.error?.let { message ->
             item(key = "connections-error") { ConnectionsError(message, viewModel::refresh) }
         }
-        val users = state.page?.users.orEmpty()
-        if (!state.loading && state.error == null && users.isEmpty()) {
+        val page = state.page
+        val users = page?.users.orEmpty()
+        if (!state.loading && state.error == null && page?.hasMore != true && users.isEmpty()) {
             item(key = "connections-empty") {
                 Text(
                     stringResource(
@@ -191,7 +206,7 @@ fun AccountConnectionsScreen(
             contentType = "account-connection",
             firstItemTopPadding = 10.dp,
         ) { user, index ->
-            IosListRow(
+            GlasmioListRow(
                 title = user.nickname,
                 subtitle = user.signature?.takeIf(String::isNotBlank),
                 showTopSeparator = index > 0,
@@ -203,27 +218,26 @@ fun AccountConnectionsScreen(
                         modifier = Modifier.size(44.dp).clip(CircleShape),
                     )
                 },
-                onClick = user.artistId?.takeIf { it > 0 }?.let { artistId ->
+                onClick = user.artistId?.let { artistId ->
                     {
-                        Screen.Artist.navigate(navController) { addPath(artistId.toString()) }
+                        com.ljyh.mei.ui.screen.source.navigateSourceContent(navController, com.ljyh.mei.source.api.ArtistRef(user.providerId, artistId))
                     }
                 },
             )
         }
-        if (state.loadingMore) {
-            item(key = "connections-loading-more") {
-                Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(Modifier.size(24.dp))
-                }
-            }
-        } else if (state.loadMoreError != null) {
-            item(key = "connections-load-more-error") {
-                ConnectionsError(checkNotNull(state.loadMoreError), viewModel::loadMore)
-            }
-        } else if (state.page?.hasMore == true && !state.loading && state.error == null) {
-            item(key = "connections-load-more") {
-                Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
-                    GlassButton(viewModel::loadMore) { Text(stringResource(R.string.account_load_more)) }
+        val loadMoreError = state.loadMoreError
+        val nextOffset = page?.takeIf { it.hasMore && !state.loading && state.error == null }?.nextOffset
+        if (loadMoreError != null || nextOffset != null || state.loadingMore) {
+            item(key = "connections-pagination") {
+                if (loadMoreError != null) {
+                    ConnectionsError(loadMoreError, viewModel::loadMore)
+                } else {
+                    if (nextOffset != null && !state.loadingMore) {
+                        AutomaticPagination(listOf(userId, type, nextOffset), viewModel::loadMore)
+                    }
+                    Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(Modifier.size(24.dp))
+                    }
                 }
             }
         }
@@ -232,10 +246,10 @@ fun AccountConnectionsScreen(
 
 @Composable
 private fun ConnectionsError(message: String, onRetry: () -> Unit) {
-    GlassCard(Modifier.fillMaxWidth().padding(top = 10.dp)) {
+    GlasmioCard(Modifier.fillMaxWidth().padding(top = 10.dp)) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(message, color = MaterialTheme.colorScheme.error)
-            GlassButton(onRetry) { Text(stringResource(R.string.retry)) }
+            GlasmioButton(onRetry) { Text(stringResource(R.string.retry)) }
         }
     }
 }

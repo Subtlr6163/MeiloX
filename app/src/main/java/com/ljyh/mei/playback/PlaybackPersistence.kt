@@ -16,12 +16,19 @@ import com.google.gson.annotations.SerializedName
 import com.ljyh.mei.constants.PlaybackSnapshotKey
 import com.ljyh.mei.constants.RestorePlaybackPositionKey
 import com.ljyh.mei.constants.RestorePlaybackStateKey
+import com.ljyh.mei.data.model.EXTRA_HAS_ALTERNATE_VERSION
 import com.ljyh.mei.data.model.MediaMetadata
 import com.ljyh.mei.data.model.PLACEHOLDER_URI
 import com.ljyh.mei.data.model.createPlaceholder
+import com.ljyh.mei.data.model.hasAlternateVersion
 import com.ljyh.mei.data.model.metadata
 import com.ljyh.mei.utils.dataStore
 import com.ljyh.mei.playback.queue.PlaylistQueueSource
+import com.ljyh.mei.source.api.AlbumRef
+import com.ljyh.mei.source.api.ArtistRef
+import com.ljyh.mei.source.api.ProviderIds
+import com.ljyh.mei.source.api.TrackRef
+import com.ljyh.mei.source.api.TrackRefCodec
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -71,7 +78,7 @@ internal fun PlaybackSnapshot.withRestorePreferences(preferences: Preferences): 
 )
 
 data class PlaybackSnapshot(
-    val schemaVersion: Int = 2,
+    val schemaVersion: Int = 3,
     val savedAtEpochMs: Long = System.currentTimeMillis(),
     val items: List<PlaybackItemSnapshot> = emptyList(),
     val currentIndex: Int = 0,
@@ -86,6 +93,7 @@ data class PlaybackSnapshot(
     val similarFmSourceIds: List<String>? = null,
     val queueAutoplayEnabled: Boolean = false,
     val queueAutoplayStartIndex: Int? = null,
+    val sourceContentContext: SourceContentQueueSnapshot? = null,
 ) {
     val isFmMode: Boolean
         get() = sourceType == SOURCE_PERSONAL_FM || queueAutoplayEnabled
@@ -96,8 +104,24 @@ data class PlaybackSnapshot(
     }
 }
 
+/** Safe continuation locator. Opaque cursors and account/session values never reach disk. */
+data class SourceContentQueueSnapshot(
+    @field:SerializedName("providerId") val providerId: String = "",
+    @field:SerializedName("instanceId") val instanceId: String = "",
+    @field:SerializedName("providerVersion") val providerVersion: String = "",
+    @field:SerializedName("contentType") val contentType: String? = null,
+    @field:SerializedName("contentId") val contentId: String? = null,
+    @field:SerializedName("libraryCollection") val libraryCollection: String? = null,
+    @field:SerializedName("loadedCount") val loadedCount: Int = 0,
+    @field:SerializedName("nextOffset") val nextOffset: Int = 0,
+    @field:SerializedName("pageSize") val pageSize: Int = 30,
+    @field:SerializedName("hasMore") val hasMore: Boolean = false,
+    @field:SerializedName("knownTotalCount") val knownTotalCount: Int? = null,
+    @field:SerializedName("accountFingerprint") val accountFingerprint: String = "",
+)
+
 data class PlaybackItemSnapshot(
-    val mediaId: String,
+    val mediaId: String = "",
     val title: String = "",
     val artists: List<PlaybackArtistSnapshot> = emptyList(),
     val albumTitle: String = "",
@@ -109,11 +133,18 @@ data class PlaybackItemSnapshot(
     val isPodcast: Boolean = false,
     val isLocal: Boolean = false,
     val isPlaceholder: Boolean = false,
+    val trackRef: String? = null,
+    val albumRef: AlbumRef? = null,
+    val isrc: String? = null,
+    val recordingVersion: String? = null,
+    @field:SerializedName("hasAlternateVersion")
+    val hasAlternateVersion: Boolean = false,
 )
 
 data class PlaybackArtistSnapshot(
     val id: Long = 0L,
-    val name: String,
+    val name: String = "",
+    val ref: ArtistRef? = null,
 )
 
 @UnstableApi
@@ -140,6 +171,7 @@ class PlaybackPersistence(
         similarFmSourceIds: List<String>? = null,
         queueAutoplayEnabled: Boolean = false,
         queueAutoplayStartEntryId: String? = null,
+        sourceContentContext: SourceContentQueueSnapshot? = null,
     ): PlaybackSnapshot {
         val items = cachedItems ?: buildList(player.mediaItemCount) {
             repeat(player.mediaItemCount) { index ->
@@ -160,6 +192,7 @@ class PlaybackPersistence(
             queueTitle = queueTitle,
             shuffleOrder = cachedOrder ?: player.playbackOrderIndices(true).also { cachedOrder = it },
             playlistSource = if (!isFmMode || preserveQueueAutoplay) playlistSource else null,
+            sourceContentContext = sourceContentContext?.takeUnless { isFmMode },
             similarFmSourceIds = if (isFmMode) similarFmSourceIds else null,
             queueAutoplayEnabled = preserveQueueAutoplay,
             queueAutoplayStartIndex = queueAutoplayStartEntryId?.takeIf { preserveQueueAutoplay }?.let { id ->
@@ -182,7 +215,8 @@ class PlaybackPersistence(
                     previous.sourceType == snapshot.sourceType && previous.playlistSource == snapshot.playlistSource &&
                     previous.similarFmSourceIds == snapshot.similarFmSourceIds &&
                     previous.queueAutoplayEnabled == snapshot.queueAutoplayEnabled &&
-                    previous.queueAutoplayStartIndex == snapshot.queueAutoplayStartIndex
+                    previous.queueAutoplayStartIndex == snapshot.queueAutoplayStartIndex &&
+                    previous.sourceContentContext == snapshot.sourceContentContext
                 if (!sameQueue) {
                     val queue = snapshot.copy(savedAtEpochMs = maxOf(snapshot.savedAtEpochMs, (previous?.savedAtEpochMs ?: 0L) + 1))
                     val encoded = gson.toJson(queue)
@@ -213,7 +247,7 @@ class PlaybackPersistence(
         val encoded = context.dataStore.data.first()[PlaybackSnapshotKey] ?: return null
         return runCatching {
             gson.fromJson(encoded, PlaybackSnapshot::class.java)
-                ?.takeIf { it.schemaVersion in 1..2 }
+                ?.takeIf { it.schemaVersion in 1..3 }
                 ?.let { snapshot ->
                     val checkpoint = runCatching {
                         context.playbackProgressStore.data.first()[ProgressKey]
@@ -234,7 +268,7 @@ class PlaybackPersistence(
         val displayMetadata = mediaMetadata
         val placeholder = localConfiguration?.uri?.toString() == PLACEHOLDER_URI
         val artistNames = domainMetadata?.artists?.map {
-            PlaybackArtistSnapshot(id = it.id, name = it.name)
+            PlaybackArtistSnapshot(id = it.id, name = it.name, ref = it.ref)
         }.orEmpty().ifEmpty {
             displayMetadata.extras?.getStringArrayList("artist_list")
                 ?.filter { it.isNotBlank() }
@@ -263,6 +297,11 @@ class PlaybackPersistence(
             isPodcast = domainMetadata?.isPodcast ?: false,
             isLocal = domainMetadata?.isLocal ?: false,
             isPlaceholder = placeholder,
+            trackRef = domainMetadata?.trackRef?.let(TrackRefCodec::encode),
+            albumRef = domainMetadata?.album?.ref,
+            isrc = domainMetadata?.isrc,
+            recordingVersion = domainMetadata?.recordingVersion,
+            hasAlternateVersion = hasAlternateVersion,
         )
     }
 
@@ -272,25 +311,45 @@ class PlaybackPersistence(
         val resolvedArtists = artists
             .filter { it.name.isNotBlank() }
             .ifEmpty { listOf(PlaybackArtistSnapshot(name = UNKNOWN_ARTIST)) }
+        val ref = trackRef?.let { TrackRefCodec.decode(it) }
+            ?: TrackRefCodec.decode(mediaId, isLocal, isPodcast)
+            ?: TrackRef(ProviderIds.NETEASE, mediaId.ifEmpty { "0" })
+        val legacyId = when (ref.providerId) {
+            ProviderIds.NETEASE -> ref.trackId.toLongOrNull() ?: 0L
+            ProviderIds.LOCAL -> ref.trackId.removePrefix("local_").toLongOrNull()
+                ?.takeIf { it > 0L }?.let { -it } ?: 0L
+            else -> 0L
+        }
+        val transportId = if (ref.providerId == ProviderIds.NETEASE && legacyId < 0L) {
+            TrackRefCodec.mediaId(ref)
+        } else mediaId
         val domainMetadata = MediaMetadata(
-            id = stableId(mediaId),
+            id = legacyId,
             title = title.ifBlank { UNKNOWN_TITLE },
             coverUrl = artworkUri,
             artists = resolvedArtists.map { artist ->
                 MediaMetadata.Artist(
-                    id = artist.id.takeIf { it != 0L } ?: stableId(artist.name),
+                    id = artist.id.takeIf { it != 0L }
+                        ?: if (ref.providerId == ProviderIds.NETEASE || ref.providerId == ProviderIds.LOCAL) stableId(artist.name) else 0L,
                     name = artist.name,
+                    ref = artist.ref,
                 )
             },
             duration = durationMs,
             album = MediaMetadata.Album(
-                id = albumId.takeIf { it != 0L } ?: stableId(albumTitle),
+                id = albumId.takeIf { it != 0L }
+                    ?: if (ref.providerId == ProviderIds.NETEASE || ref.providerId == ProviderIds.LOCAL) stableId(albumTitle) else 0L,
                 title = albumTitle,
+                ref = albumRef,
             ),
             explicit = explicit,
             tns = translatedName,
             isPodcast = isPodcast,
             isLocal = isLocal,
+            trackRef = ref,
+            isrc = isrc,
+            recordingVersion = recordingVersion,
+            hasAlternateVersion = hasAlternateVersion,
         )
         val displayMetadata = androidx.media3.common.MediaMetadata.Builder()
             .setTitle(domainMetadata.title)
@@ -301,15 +360,16 @@ class PlaybackPersistence(
             .setExtras(Bundle().apply {
                 putLong("duration", durationMs)
                 putStringArrayList("artist_list", ArrayList(resolvedArtists.map { it.name }))
+                if (hasAlternateVersion) putBoolean(EXTRA_HAS_ALTERNATE_VERSION, true)
             })
             .apply {
                 artworkUri.takeIf { it.isNotBlank() }?.let { setArtworkUri(Uri.parse(it)) }
             }
             .build()
         return MediaItem.Builder()
-            .setMediaId(mediaId)
-            .setUri(mediaId)
-            .setCustomCacheKey(mediaId)
+            .setMediaId(transportId)
+            .setUri(transportId)
+            .setCustomCacheKey(transportId)
             .setTag(domainMetadata)
             .setMediaMetadata(displayMetadata)
             .build()

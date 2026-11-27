@@ -1,0 +1,1217 @@
+package io.github.neoruaa.glasmio.ui
+
+import kotlin.math.roundToInt
+
+import io.github.neoruaa.glasmio.core.*
+import io.github.neoruaa.glasmio.glass.*
+import io.github.neoruaa.glasmio.glass.render.ProvideGlassMaterialContext
+import io.github.neoruaa.glasmio.glass.render.rememberGlassMaterialContext
+import io.github.neoruaa.glasmio.icons.*
+
+import android.view.View
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.LocalOverscrollFactory
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.absoluteOffset
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.foundation.layout.wrapContentSize
+import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.movableContentOf
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.BlurredEdgeTreatment
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.GraphicsLayerScope
+import androidx.compose.ui.graphics.LayerOutsets
+import androidx.compose.ui.graphics.Paint
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.window.PopupProperties
+import io.github.neoruaa.glasmio.glass.render.Backdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.LayerBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.emptyBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.rememberLayerBackdrop
+import io.github.neoruaa.glasmio.glass.render.effects.blur
+import io.github.neoruaa.glasmio.glass.render.shadow.Shadow
+import com.kyant.capsule.ContinuousRoundedRectangle
+import com.kyant.shapes.Capsule
+import io.github.neoruaa.glasmio.glass.InteractiveHighlight
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+
+
+internal val LocalIosPopupMenuInteractive = staticCompositionLocalOf { true }
+
+internal class MenuBackdropHost(val view: View, val isSettled: () -> Boolean)
+
+internal class MenuScaleMotion(
+    private val scale: () -> Float,
+    val isSettled: () -> Boolean,
+) : () -> Float {
+    override fun invoke(): Float = scale()
+}
+
+internal val LocalMenuBackdropHost = staticCompositionLocalOf<MenuBackdropHost?> { null }
+
+internal data class MenuSurfaceReveal(
+    val progress: Float,
+    val cornerRadius: Dp,
+    val contentWidth: Dp,
+    val surfaceOutset: Dp,
+) {
+    val contentInset: Dp get() = 10.dp * progress
+}
+
+internal val LocalMenuSurfaceReveal = compositionLocalOf<MenuSurfaceReveal?> { null }
+private const val MenuDragReadyProgress = 0.5f
+
+@Composable
+internal fun rememberMenuBackdropHost(isSettled: () -> Boolean): MenuBackdropHost {
+    val parent = LocalMenuBackdropHost.current
+    val view = parent?.view ?: LocalView.current
+    val latestSettled by rememberUpdatedState(isSettled)
+    return remember(view, parent) {
+        MenuBackdropHost(view) { latestSettled() && parent?.isSettled?.invoke() != false }
+    }
+}
+
+// AnimationKit MorphAnimationSettings.liquidMorph copies this content spring to
+// width, height, position and transform (UIKitCore/AnimationKit iOS 27).
+// Stiffness is (2 * PI / response)^2 for the native 0.3 s response and unit mass.
+private val DropdownMorphSpring = spring<Float>(
+    dampingRatio = 0.8f,
+    stiffness = 438.64908f,
+    visibilityThreshold = 0.001f,
+)
+
+/** Overflow room around the menu so spring overshoot, velocity deformation, blur bleed and the
+ *  drop shadow can draw past the resting bounds without being clipped by the popup host. The
+ *  visible menu is offset back onto the anchor edge, so its position and physics are unchanged. */
+// Match the material renderer's full three-sigma shadow support, including its offset.
+private val PopupMenuShadowMargin = NavigationGlassMaterial.RegularMedium.let {
+    it.shadowRadius * 1.5f + it.shadowOffsetY + 1.dp
+}
+private val PopupMenuOvershootMarginStart = maxOf(64.dp, PopupMenuShadowMargin)
+private val PopupMenuOvershootMarginVertical = maxOf(32.dp, PopupMenuShadowMargin)
+private val PopupMenuShadowOutsets = LayerOutsets(
+    PopupMenuShadowMargin, PopupMenuShadowMargin, PopupMenuShadowMargin, PopupMenuShadowMargin,
+)
+internal val PopupMenuWidth = 238.dp
+
+/** The stable shell is larger than the resting menu so the spring overshoot (up to 1.12x)
+ *  fits inside the shell's constraints and actually renders. */
+private const val PopupMenuOvershootScale = 1.15f
+
+@Composable
+internal fun menuSafeViewport(viewportBounds: Rect?): IntRect {
+    val density = LocalDensity.current
+    val direction = LocalLayoutDirection.current
+    val safe = WindowInsets.glasmioSafeDrawing
+    return menuSafeViewport(
+        LocalWindowInfo.current.containerSize,
+        IntRect(
+            safe.getLeft(density, direction), safe.getTop(density),
+            safe.getRight(density, direction), safe.getBottom(density),
+        ),
+        viewportBounds,
+    )
+}
+
+internal fun menuSafeViewport(window: IntSize, insets: IntRect, viewport: Rect?): IntRect {
+    val width = window.width.coerceAtLeast(1)
+    val height = window.height.coerceAtLeast(1)
+    val safeLeft = insets.left.coerceIn(0, width - 1)
+    val safeTop = insets.top.coerceIn(0, height - 1)
+    val safeRight = (width - insets.right).coerceIn(safeLeft + 1, width)
+    val safeBottom = (height - insets.bottom).coerceIn(safeTop + 1, height)
+    val left = viewport?.left?.roundToInt()?.coerceIn(safeLeft, safeRight - 1) ?: safeLeft
+    val top = viewport?.top?.roundToInt()?.coerceIn(safeTop, safeBottom - 1) ?: safeTop
+    val right = viewport?.right?.roundToInt()?.coerceIn(left + 1, safeRight) ?: safeRight
+    val bottom = viewport?.bottom?.roundToInt()?.coerceIn(top + 1, safeBottom) ?: safeBottom
+    return IntRect(left, top, right, bottom)
+}
+
+internal class IosPopupPositionProvider(
+    private val targetMenuHeightPx: Int,
+    private val targetMenuWidthPx: Int,
+    private val horizontalInsetPx: Int,
+    private val viewport: IntRect,
+    private val forceBelowAnchor: Boolean,
+    private val centerHorizontally: Boolean,
+    private val viewportCenterXPx: Int?,
+    private val alignToAnchorStart: Boolean,
+    private val anchorAlignment: Alignment.Horizontal,
+    private val horizontalOvershootMarginPx: Int,
+    private val visualHostWidthPx: Int,
+    private val visualHostHeightPx: Int,
+    private val anchorOvershootVerticalPx: Int,
+    initialOpensAbove: Boolean? = null,
+    private val onAnchorOriginResolved: (Float) -> Unit,
+    private val onDirectionResolved: (opensAbove: Boolean) -> Unit,
+) : PopupPositionProvider {
+    private var opensAbove: Boolean? = initialOpensAbove
+
+    override fun calculatePosition(
+        anchorBounds: IntRect,
+        windowSize: IntSize,
+        layoutDirection: LayoutDirection,
+        popupContentSize: IntSize,
+    ): IntOffset {
+        val resolvedDirection = if (forceBelowAnchor) {
+            false
+        } else {
+            opensAbove ?: run {
+                val roomBelow = viewport.bottom - anchorBounds.bottom
+                val roomAbove = anchorBounds.top - viewport.top
+                (roomBelow < targetMenuHeightPx && roomAbove > roomBelow).also {
+                    opensAbove = it
+                    onDirectionResolved(it)
+                }
+            }
+        }
+        // The transparent animation shell can extend past the safe viewport.
+        val inset = horizontalInsetPx.coerceAtMost(
+            ((viewport.width - targetMenuWidthPx) / 2).coerceAtLeast(0),
+        )
+        val requestedLeft = if (centerHorizontally) {
+            (viewportCenterXPx ?: windowSize.width / 2) - targetMenuWidthPx / 2
+        } else if (alignToAnchorStart) {
+            if (layoutDirection == LayoutDirection.Rtl) anchorBounds.right - targetMenuWidthPx else anchorBounds.left
+        } else {
+            anchorBounds.right - targetMenuWidthPx
+        }
+        val minLeft = viewport.left + inset
+        val menuLeft = requestedLeft.coerceIn(minLeft, (viewport.right - targetMenuWidthPx - inset).coerceAtLeast(minLeft))
+        val anchorX = anchorBounds.left + anchorAlignment.align(0, anchorBounds.width, layoutDirection)
+        onAnchorOriginResolved((anchorX - menuLeft).toFloat() / targetMenuWidthPx.coerceAtLeast(1))
+        val menuLeftInHost = if (layoutDirection == LayoutDirection.Rtl) {
+            horizontalOvershootMarginPx
+        } else {
+            visualHostWidthPx - targetMenuWidthPx
+        }
+        val x = menuLeft - menuLeftInHost
+        // Clamp the visible menu, leaving its transparent shadow shell free to overflow
+        // the window. Its extra backing pixels must not change the native target position.
+        val menuTopInHost = if (resolvedDirection) {
+            visualHostHeightPx - targetMenuHeightPx
+        } else anchorOvershootVerticalPx
+        val requestedTop = when {
+            forceBelowAnchor -> anchorBounds.bottom
+            resolvedDirection -> anchorBounds.bottom - targetMenuHeightPx
+            else -> anchorBounds.top
+        }
+        val menuTop = requestedTop.coerceIn(viewport.top, (viewport.bottom - targetMenuHeightPx).coerceAtLeast(viewport.top))
+        val y = menuTop - menuTopInHost
+        return IntOffset(x, y)
+    }
+}
+
+/** Context-menu surface using the shared Regular Medium material. */
+
+@Composable
+fun GlasmioContextMenu(
+    visible: Boolean,
+    modifier: Modifier = Modifier,
+    backdrop: Backdrop = LocalBlurBackdrop.current,
+    animationProgress: Float = 1f,
+    transformOriginProgress: Float = animationProgress,
+    menuAlpha: Float = animationProgress,
+    contentAlpha: Float = animationProgress,
+    shadowAlpha: Float = animationProgress,
+    highlightAlpha: Float? = null,
+    opensAbove: Boolean = false,
+    itemCount: Int = 1,
+    compact: Boolean = false,
+    heightOverride: androidx.compose.ui.unit.Dp? = null,
+    menuWidth: androidx.compose.ui.unit.Dp = PopupMenuWidth,
+    menuScale: () -> Float = { 1f },
+    exportChildBackdrop: Boolean = true,
+    initialTransformOrigin: TransformOrigin? = null,
+    onMenuBoundsChanged: ((androidx.compose.ui.geometry.Rect) -> Unit)? = null,
+    morphMotion: LiquidMenuMorphMotion? = null,
+    morphSourceAcquired: Boolean = true,
+    morphSourcePortal: ToolbarMenuPortal? = null,
+    morphSourceHasGlassBackground: Boolean = true,
+    morphShaderPrograms: LiquidMenuShaderPrograms? = null,
+    onMorphReady: ((Rect) -> Unit)? = null,
+    morphSourceMaterial: NavigationGlassMaterial? = null,
+    morphSourceFrostRadius: androidx.compose.ui.unit.Dp? = null,
+    morphSourceMaterialPaint: (androidx.compose.ui.graphics.drawscope.DrawScope.(Float) -> Unit)? = null,
+    morphSourceMaterialEffect: ((Float) -> android.graphics.RenderEffect)? = null,
+    morphSourceUsesShadowLift: Boolean = true,
+    morphSourceUsesInnerShadows: Boolean = true,
+    morphSourceNativeMaterial: GlassMaterialSource? = null,
+    content: @Composable ColumnScope.(LayerBackdrop) -> Unit,
+) {
+    if (!visible) return
+    val currentContent by rememberUpdatedState(content)
+    val panelMotion = LocalMenuPanelMotion.current
+    val isInteractive = LocalIosPopupMenuInteractive.current
+    val layoutReady = { morphMotion?.isExpandedSettled ?: (animationProgress == 1f && menuAlpha == 1f) }
+    val panel = if (panelMotion != null) {
+        rememberMenuPanelFlex(panelMotion, opensAbove) {
+            isInteractive && if (morphMotion != null) {
+                morphSourceAcquired && morphMotion.initialized &&
+                    morphMotion.frame.contentProgress >= MenuDragReadyProgress
+            } else {
+                menuAlpha >= MenuDragReadyProgress
+            }
+        }
+    } else null
+    val reveal = LocalMenuSurfaceReveal.current
+    val contentInset = reveal?.contentInset ?: 10.dp
+    val menuContentInset = with(LocalDensity.current) { contentInset.roundToPx().toFloat() }
+    val selection = rememberMenuDragSelectionLayer {
+        if (panel == null || !layoutReady() || menuScale() != 1f) null
+        else panel.bounds.topLeft + Offset(menuContentInset, menuContentInset)
+    }
+    val currentSelection by rememberUpdatedState(selection)
+    // Move the existing content from its measurement host into the morph renderer without
+    // restarting state or effects when the target geometry becomes available.
+    val retainedContent = remember {
+        movableContentOf<ColumnScope, LayerBackdrop> { scope, childBackdrop ->
+            // A menu scrolls only to reach rows that do not fit. It must not inherit
+            // the page's edge translation or stretch when the scroll range is exhausted.
+            CompositionLocalProvider(LocalOverscrollFactory provides null) {
+                MenuDragSelectionContent(currentSelection) { currentContent(scope, childBackdrop) }
+            }
+        }
+    }
+    val animationScope = rememberCoroutineScope()
+    val interactiveHighlight = remember(animationScope) {
+        InteractiveHighlight(animationScope = animationScope)
+    }
+    val panelGesture = if (panelMotion != null && isInteractive) Modifier.menuPanelDrag(panelMotion) else Modifier
+    val progress = animationProgress.coerceIn(0f, 1f)
+    val menuHeight = heightOverride ?: with(LocalDensity.current) { paddedMenuHeight(44.dp.roundToPx() * itemCount) }
+    val radius = reveal?.cornerRadius ?: 34.dp
+    var menuScreenOrigin by remember { mutableStateOf<Offset?>(null) }
+    val menuShape = remember(radius) { ContinuousRoundedRectangle(radius) }
+    val transitionScale = 0.2f + 0.8f * animationProgress
+    val startOrigin = initialTransformOrigin ?: TransformOrigin(1f, if (opensAbove) 1f else 0f)
+    val originProgress = transformOriginProgress.coerceIn(0f, 1f)
+    val transitionOrigin = TransformOrigin(
+        pivotFractionX = startOrigin.pivotFractionX +
+            (0.5f - startOrigin.pivotFractionX) * originProgress,
+        pivotFractionY = startOrigin.pivotFractionY +
+            (0.5f - startOrigin.pivotFractionY) * originProgress,
+    )
+    val menuScaleOrigin = if (menuScale is MenuScaleMotion) TransformOrigin(0.5f, 0f) else startOrigin
+    val appearance = LocalGlassAppearance.current
+    val innerShadows = rememberNavigationInnerShadows(true)
+    val pressProgress = remember(interactiveHighlight) {
+        derivedStateOf { interactiveHighlight.pressProgress }
+    }
+    val childBackdrop = rememberLayerBackdrop()
+    var samplingCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    val samplingCoordinatesProvider = remember { { samplingCoordinates } }
+    // Sample from the stable host, then compensate the live menu transform explicitly.
+    // The animated graphics layer's coordinates can lag behind its current draw transform.
+    val popupBackdrop = if (appearance.usesBackdrop) {
+        val host = rememberMenuBackdropHost {
+            val motionSettled = if (morphMotion == null) animationProgress == 1f && menuAlpha == 1f
+                else morphMotion.isExpandedSettled && morphSourceAcquired
+            motionSettled && !interactiveHighlight.isPressed &&
+                interactiveHighlight.pressProgress == 0f && interactiveHighlight.offset == Offset.Zero &&
+                panel?.isSettled != false
+        }
+        rememberSettledBackdrop(backdrop, host.view, host.isSettled)
+    } else backdrop
+    val samplingBackdrop = if (appearance.usesBackdrop) {
+        rememberStationaryBackdrop(popupBackdrop, samplingCoordinatesProvider)
+    } else {
+        emptyBackdrop()
+    }
+    val materialContext = rememberGlassMaterialContext(inheritLuminance = false)
+    val colors = materialContext.colors
+    val menuLayerBlock: GraphicsLayerScope.() -> Unit = {
+        val resolvedMenuScale = menuScale()
+        if (panel != null) panel.applyTo(this) else {
+            transformOrigin = startOrigin
+            applyGlassDragScale(
+                pressProgress = interactiveHighlight.pressProgress,
+                offset = interactiveHighlight.offset,
+            )
+        }
+        val dragScaleX = scaleX
+        val dragScaleY = scaleY
+        val dragTranslationX = translationX
+        val dragTranslationY = translationY
+        val dragPivotX = transformOrigin.pivotFractionX * size.width
+        val dragPivotY = transformOrigin.pivotFractionY * size.height
+        val transitionPivotX = transitionOrigin.pivotFractionX * size.width
+        val transitionPivotY = transitionOrigin.pivotFractionY * size.height
+
+        // Share the complete transition and drag transform with the stationary sampler.
+        transformOrigin = transitionOrigin
+        scaleX = transitionScale * dragScaleX * resolvedMenuScale
+        scaleY = transitionScale * dragScaleY * resolvedMenuScale
+        // Apply the rear-menu scale around the opening corner while preserving the
+        // existing entrance animation's moving pivot when menuScale is 1.
+        translationX = resolvedMenuScale * transitionScale * (
+            dragTranslationX + (1f - dragScaleX) * (dragPivotX - transitionPivotX)
+        ) + (1f - resolvedMenuScale) * (menuScaleOrigin.pivotFractionX * size.width - transitionPivotX)
+        translationY = resolvedMenuScale * transitionScale * (
+            dragTranslationY + (1f - dragScaleY) * (dragPivotY - transitionPivotY)
+        ) + (1f - resolvedMenuScale) * (menuScaleOrigin.pivotFractionY * size.height - transitionPivotY)
+    }
+    // Stable full-size host: keep overshoot margins on both the growth and anchor sides in the
+    // measured Popup bounds. The original visual host is nested inside it, so this only enlarges
+    // the RenderEffect backing area and does not move the visible menu.
+    val popupHostWidth = if (compact) menuWidth else PopupMenuOvershootMarginStart * 2 + menuWidth * PopupMenuOvershootScale
+    val popupHostHeight = if (compact) menuHeight else PopupMenuOvershootMarginVertical * 2 + menuHeight * PopupMenuOvershootScale
+    Box(
+        modifier
+            // Preserve the entire shadow shell even when it exceeds the popup window.
+            // Absolute alignment keeps its visible menu at the provider's resolved offset.
+            .wrapContentSize(androidx.compose.ui.AbsoluteAlignment.TopLeft, unbounded = true)
+            .requiredSize(width = popupHostWidth, height = popupHostHeight)
+            // Keep the transition RenderEffect on the stable Popup host. A blur modifier
+            // creates a bounded layer even with Unbounded edge treatment, so it must stay
+            // outside the spring-sized menu to avoid exposing a menu-sized rectangle.
+            .graphicsLayer {
+                alpha = if (morphMotion != null && (!morphMotion.initialized || !morphSourceAcquired || menuScreenOrigin == null)) 0f else menuAlpha.coerceIn(0f, 1f)
+                val blurPx = if (morphMotion == null) (8.dp * (1f - progress)).coerceAtLeast(0.dp).toPx() else 0f
+                clip = blurPx > 0.01f
+                renderEffect = if (blurPx > 0.01f) {
+                    createAnimatedBlurComposeRenderEffect(blurPx, android.graphics.Shader.TileMode.DECAL)
+                } else null
+            },
+    ) {
+        Box(
+            Modifier
+                .align(if (opensAbove) Alignment.TopStart else Alignment.BottomStart)
+                .size(
+                    width = if (compact) menuWidth else PopupMenuOvershootMarginStart + menuWidth * PopupMenuOvershootScale,
+                    height = if (compact) menuHeight else PopupMenuOvershootMarginVertical + menuHeight * PopupMenuOvershootScale,
+                ),
+        ) {
+            Box(
+                Modifier
+                    .align(if (opensAbove) Alignment.BottomEnd else Alignment.TopEnd)
+                    .size(width = menuWidth, height = menuHeight)
+                    .onGloballyPositioned { coordinates ->
+                        if (reveal == null) samplingCoordinates = coordinates
+                        val origin = coordinates.localToScreen(Offset.Zero)
+                        val bounds = Rect(origin, Size(coordinates.size.width.toFloat(), coordinates.size.height.toFloat()))
+                        menuScreenOrigin = origin
+                        panel?.bounds = bounds
+                        onMorphReady?.invoke(bounds)
+                        // Measure outside the animated glass layer. Capturing a pressed row
+                        // includes transient drag scale and gives the child a stale endpoint.
+                        onMenuBoundsChanged?.invoke(bounds)
+                    }
+                    .then(panelGesture),
+            ) {
+                if (morphMotion != null && morphMotion.initialized && menuScreenOrigin != null) {
+                    LiquidMenuMorphSurface(
+                        motion = morphMotion,
+                        screenOrigin = menuScreenOrigin!!,
+                        backdrop = popupBackdrop,
+                        exportChildBackdrop = exportChildBackdrop,
+                        sourcePortal = morphSourcePortal,
+                        sourceHasGlassBackground = morphSourceHasGlassBackground,
+                        sourceMaterial = morphSourceMaterial,
+                        sourceFrostRadius = morphSourceFrostRadius,
+                        sourceMaterialPaint = morphSourceMaterialPaint,
+                        sourceMaterialEffect = morphSourceMaterialEffect,
+                        sourceUsesShadowLift = morphSourceUsesShadowLift,
+                        sourceUsesInnerShadows = morphSourceUsesInnerShadows,
+                        sourceNativeMaterial = morphSourceNativeMaterial,
+                        materialContext = materialContext,
+                        shaderPrograms = morphShaderPrograms,
+                        menuScale = menuScale,
+                        transformOrigin = startOrigin,
+                        menuScaleOrigin = menuScaleOrigin,
+                        highlight = interactiveHighlight,
+                        contentModifier = selection?.modifier ?: Modifier,
+                        panelTransform = panel?.let { flex ->
+                            { flex.applyTo(this, morphMotion.frame.contentProgress) }
+                        },
+                        content = { childBackdrop -> retainedContent(this, childBackdrop) },
+                    )
+                } else if (morphMotion != null) {
+                    // Invisible 1-frame measurement host before LiquidMenuMorphSurface initializes.
+                    // Skip backdrop capture and glass shader compilation on this discarded frame.
+                    val contents = Modifier.clip(menuShape).padding(contentInset)
+                        .graphicsLayer { alpha = contentAlpha.coerceIn(0f, 1f) }
+                        .then(selection?.modifier ?: Modifier)
+                    Column(Modifier.fillMaxSize().then(contents)) {
+                        ProvideGlassMaterialContext(materialContext) {
+                            retainedContent(this, childBackdrop)
+                        }
+                    }
+                } else {
+                    val surface = Modifier.navigationGlassBackground(
+                        backdrop = samplingBackdrop,
+                        exportedBackdrop = childBackdrop.takeIf { exportChildBackdrop && appearance.usesBackdrop },
+                        shape = { menuShape },
+                        containerColor = colors.container,
+                        navigationMaterial = true,
+                        innerShadows = innerShadows,
+                        isDark = colors.isDark,
+                        materialContext = materialContext,
+                        blurRadius = NavigationGlassMaterial.RegularMedium.frostRadius,
+                        appearance = appearance,
+                        material = NavigationGlassMaterial.RegularMedium,
+                        pressProgressState = pressProgress,
+                        highlightAlphaMultiplier = highlightAlpha ?: progress,
+                        shadowAlpha = shadowAlpha,
+                        layerBlock = menuLayerBlock,
+                    )
+                    val contents = Modifier.clip(menuShape).padding(contentInset)
+                        .then(
+                            if (reveal != null) Modifier.wrapContentWidth(androidx.compose.ui.AbsoluteAlignment.Left, unbounded = true)
+                                .width(reveal.contentWidth)
+                            else Modifier,
+                        )
+                        .graphicsLayer { alpha = contentAlpha.coerceIn(0f, 1f) }
+                        .then(selection?.modifier ?: Modifier)
+                    val rowContent: @Composable ColumnScope.() -> Unit = {
+                        ProvideGlassMaterialContext(materialContext) {
+                            retainedContent(this, childBackdrop)
+                        }
+                    }
+                    if (reveal == null) {
+                        val press = if (panel == null) interactiveHighlight.modifier.then(interactiveHighlight.gestureModifier)
+                            else Modifier
+                        Column(Modifier.fillMaxSize().then(surface).then(press).then(contents), content = rowContent)
+                    } else {
+                        Box(Modifier.fillMaxSize()) {
+                            Spacer(
+                                Modifier.matchParentSize()
+                                    .drawWithContent {
+                                        // The recessed glass rim starts outside the source-row clip.
+                                        // Give the shadow room as the contour meets the list edge.
+                                        val room = PopupMenuShadowMargin.toPx() *
+                                            (1f - reveal.surfaceOutset / 10.dp).let { it * it }
+                                        clipRect(-room, -room, size.width + room, size.height + room) {
+                                            this@drawWithContent.drawContent()
+                                        }
+                                    }
+                                    .layout { measurable, constraints ->
+                                        val padding = reveal.surfaceOutset.roundToPx()
+                                        val width = constraints.maxWidth
+                                        val height = constraints.maxHeight
+                                        val glass = measurable.measure(Constraints.fixed(width + 2 * padding, height + 2 * padding))
+                                        layout(width, height) { glass.place(-padding, -padding) }
+                                    }
+                                    .onGloballyPositioned { samplingCoordinates = it }
+                                    .graphicsLayer {
+                                        alpha = reveal.progress
+                                        outsets = PopupMenuShadowOutsets
+                                    }
+                                    .then(surface),
+                            )
+                            Column(
+                                Modifier.matchParentSize().graphicsLayer(menuLayerBlock).then(contents),
+                                content = rowContent,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Keeps one Popup and one connected source through opening, retargeting and collapse.
+ * Toolbar menus use independent liquid geometry and optical channels; other anchors retain
+ * the compact popup transition. The source returns only after the physical surface settles.
+ * [morphFromAnchor] controls the source transfer independently of anchor measurement.
+ * [anchorEnabled] controls opening from the local anchor, including its hold gesture.
+ */
+@Composable
+fun GlasmioMenu(
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    itemCount: Int,
+    modifier: Modifier = Modifier,
+    backdrop: Backdrop = LocalBlurBackdrop.current,
+    keepAnchorVisible: Boolean = false,
+    forceBelowAnchor: Boolean = false,
+    fullScreen: Boolean = false,
+    centerHorizontally: Boolean = false,
+    alignToAnchorStart: Boolean = false,
+    expandFromAnchor: Alignment.Horizontal? = null,
+    externalAnchorBounds: androidx.compose.ui.geometry.Rect? = null,
+    menuWidth: androidx.compose.ui.unit.Dp = PopupMenuWidth,
+    menuScale: () -> Float = { 1f },
+    exportChildBackdrop: Boolean = true,
+    heightOverride: androidx.compose.ui.unit.Dp? = null,
+    onMenuBoundsChanged: ((androidx.compose.ui.geometry.Rect) -> Unit)? = null,
+    onMenuAlphaChanged: ((Float) -> Unit)? = null,
+    menuAnchorState: GlasmioMenuAnchorState? = null,
+    onClosed: (() -> Unit)? = null,
+    overlayContent: @Composable BoxScope.(() -> Float) -> Unit = {},
+    anchor: @Composable (onClick: () -> Unit) -> Unit,
+    morphFromAnchor: Boolean = true,
+    viewportBounds: Rect? = null,
+    anchorEnabled: Boolean = true,
+    content: @Composable ColumnScope.(LayerBackdrop, close: () -> Unit) -> Unit,
+) {
+    var anchorSize by remember { mutableStateOf(IntSize.Zero) }
+    var popupAlive by remember { mutableStateOf(false) }
+    var transitionStarted by remember { mutableStateOf(false) }
+    var opensAbove by remember { mutableStateOf(false) }
+    var anchorFractionX by remember { mutableFloatStateOf(1f) }
+    val progress = remember { Animatable(0f) }
+    val menuAlpha = remember { Animatable(0f) }
+    val shadowAlpha = remember { Animatable(0f) }
+    val localMenuAnchor = rememberGlasmioMenuAnchorState()
+    val sourceAnchor = menuAnchorState ?: localMenuAnchor
+    val ownsLocalAnchor = menuAnchorState == null && externalAnchorBounds == null
+    val toolbarGroup = LocalIosToolbarActionGroup.current
+    LaunchedEffect(localMenuAnchor, menuAnchorState, externalAnchorBounds, toolbarGroup) {
+        if (menuAnchorState == null && externalAnchorBounds != null) {
+            localMenuAnchor.bind(toolbarGroup, externalAnchorBounds)
+        }
+    }
+    LaunchedEffect(sourceAnchor, toolbarGroup) {
+        if (toolbarGroup != null) kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            sourceAnchor.prewarmShaders()
+        }
+    }
+    val hostView = LocalView.current
+    val density = LocalDensity.current
+    val liquidMotion = remember { LiquidMenuMorphMotion() }
+    val usesAnchorMorph = morphFromAnchor
+    var windowScreenOffset by remember { mutableStateOf(Offset.Zero) }
+    DisposableEffect(sourceAnchor) { onDispose { sourceAnchor.release() } }
+    val morphSourceBounds = remember { arrayOfNulls<Rect>(1) }
+    var usesMorph by remember { mutableStateOf(false) }
+    var surfaceReady by remember { mutableStateOf(false) }
+    var measuredMorphTarget by remember { mutableStateOf<Rect?>(null) }
+    var positionAnchorBounds by remember { mutableStateOf<Rect?>(null) }
+    val resolvedFullScreen = fullScreen || usesMorph
+
+    LaunchedEffect(expanded) {
+        if (expanded) {
+            transitionStarted = true
+            if (!popupAlive) {
+                surfaceReady = false
+                measuredMorphTarget = null
+                positionAnchorBounds = externalAnchorBounds
+                if (usesAnchorMorph) {
+                    val source = snapshotFlow { sourceAnchor.bounds?.takeUnless { it.isEmpty } }.first { it != null }!!
+                    val screen = IntArray(2)
+                    val window = IntArray(2)
+                    hostView.getLocationOnScreen(screen)
+                    hostView.getLocationInWindow(window)
+                    windowScreenOffset = Offset((screen[0] - window[0]).toFloat(), (screen[1] - window[1]).toFloat())
+                    morphSourceBounds[0] = source.translate(windowScreenOffset)
+                    usesMorph = true
+                }
+            }
+            popupAlive = true
+            if (morphSourceBounds[0] != null) {
+                snapshotFlow { surfaceReady }.first { it }
+                if (!sourceAnchor.isAcquired || !liquidMotion.initialized) {
+                    morphSourceBounds[0] = sourceAnchor.acquire()?.translate(windowScreenOffset) ?: morphSourceBounds[0]
+                    liquidMotion.initialize(
+                        morphSourceBounds[0]!!,
+                        requireNotNull(measuredMorphTarget),
+                        with(density) { 34.dp.toPx() },
+                        density.density,
+                        through = sourceAnchor.previewBounds?.translate(windowScreenOffset) ?: morphSourceBounds[0]!!,
+                    )
+                }
+                // Reopening during collapse retains the live contour and every velocity.
+                // Its content may have changed while the source lease remained acquired.
+                liquidMotion.updateTarget(requireNotNull(measuredMorphTarget), with(density) { 34.dp.toPx() })
+            }
+            coroutineScope {
+                if (morphSourceBounds[0] != null) launch {
+                    progress.snapTo(1f)
+                    shadowAlpha.snapTo(1f)
+                    liquidMotion.animateTo(true)
+                } else launch {
+                    progress.animateTo(1f, DropdownMorphSpring)
+                }
+                if (morphSourceBounds[0] == null) {
+                    // Native contentMorph sets the platform view alpha in the same spring
+                    // transaction. Fade the whole surface once, including its shadow.
+                    launch { menuAlpha.animateTo(1f, DropdownMorphSpring) }
+                } else {
+                    launch { menuAlpha.animateTo(1f, tween(120)) }
+                }
+            }
+        } else {
+            if (popupAlive) coroutineScope {
+                if (morphSourceBounds[0] != null && liquidMotion.initialized) launch {
+                    sourceAnchor.liveBounds?.let {
+                        liquidMotion.updateSource(
+                            it.translate(windowScreenOffset),
+                            through = sourceAnchor.previewBounds?.translate(windowScreenOffset) ?: it.translate(windowScreenOffset),
+                        )
+                    }
+                    liquidMotion.animateTo(false)
+                }
+                if (morphSourceBounds[0] == null) {
+                    launch { progress.animateTo(0f, DropdownMorphSpring) }
+                    launch { menuAlpha.animateTo(0f, DropdownMorphSpring) }
+                } else {
+                    launch { menuAlpha.animateTo(0f, tween(300)) }
+                }
+            }
+            sourceAnchor.release()
+            popupAlive = false
+            morphSourceBounds[0] = null
+            usesMorph = false
+            surfaceReady = false
+            if (transitionStarted) {
+                transitionStarted = false
+                onClosed?.invoke()
+            }
+        }
+    }
+
+    // Selection may resize the source after the close coroutine has started. Retarget
+    // only the current closing session, preserving every spring's value and velocity.
+    LaunchedEffect(sourceAnchor, popupAlive, usesMorph, expanded) {
+        if (popupAlive && usesMorph && !expanded) {
+            snapshotFlow { sourceAnchor.liveBounds to sourceAnchor.previewBounds }
+                .collect { (source, through) ->
+                    if (source != null) {
+                        liquidMotion.updateSource(
+                            source.translate(windowScreenOffset),
+                            through = (through ?: source).translate(windowScreenOffset),
+                        )
+                    }
+                }
+        }
+    }
+
+    // The live content can change its measured destination while the opening is still running.
+    // Geometry follows that size without restarting the native optical timeline or source lease.
+    LaunchedEffect(popupAlive, usesMorph, expanded) {
+        if (popupAlive && usesMorph && expanded) {
+            snapshotFlow { measuredMorphTarget }.collect { target ->
+                if (target != null && liquidMotion.initialized) {
+                    liquidMotion.animateToTarget(target, with(density) { 34.dp.toPx() })
+                }
+            }
+        }
+    }
+
+    val currentAlphaCallback by androidx.compose.runtime.rememberUpdatedState(onMenuAlphaChanged)
+    LaunchedEffect(menuAlpha) {
+        snapshotFlow { menuAlpha.value.coerceIn(0f, 1f) }
+            .collect { currentAlphaCallback?.invoke(it) }
+    }
+
+    val anchorFadePaint = remember { Paint() }
+
+    Box(modifier.onSizeChanged { anchorSize = it }
+        .then(if (ownsLocalAnchor) {
+            Modifier.glasmioMenuAnchor(localMenuAnchor, onOpenMenu = if (anchorEnabled) ({
+                if (!expanded) onExpandedChange(true)
+            }) else null)
+        } else Modifier)) {
+        Box(
+            Modifier
+                .drawWithContent {
+                    // A local anchor's outer layer already hides its live pixels. Let
+                    // the inner content update its portal when the selection changes.
+                    val alpha = if (!ownsLocalAnchor && sourceAnchor.isAcquired && !sourceAnchor.isGroupedSource && sourceAnchor.portal != null) {
+                        0f
+                    } else if (keepAnchorVisible || usesMorph) {
+                        1f
+                    } else {
+                        1f - menuAlpha.value.coerceIn(0f, 1f)
+                    }
+                    when {
+                        alpha <= 0f -> Unit
+                        alpha >= 1f -> drawContent()
+                        else -> {
+                            anchorFadePaint.alpha = alpha
+                            drawContext.canvas.saveLayer(
+                                androidx.compose.ui.geometry.Rect(
+                                    left = 0f,
+                                    top = 0f,
+                                    right = size.width,
+                                    bottom = size.height,
+                                ),
+                                anchorFadePaint,
+                            )
+                            drawContent()
+                            drawContext.canvas.restore()
+                        }
+                    }
+                },
+        ) {
+            CompositionLocalProvider(
+                LocalToolbarActionSeparation provides { 0f },
+            ) {
+                anchor { if (anchorEnabled) onExpandedChange(!expanded) }
+            }
+        }
+        if (popupAlive && (anchorSize != IntSize.Zero || externalAnchorBounds != null)) {
+            val viewport = menuSafeViewport(viewportBounds)
+            val requestedHeight = heightOverride ?: with(density) { paddedMenuHeight(44.dp.roundToPx() * itemCount) }
+            val menuHeight = minOf(requestedHeight, with(density) { viewport.height.toDp() })
+            val resolvedMenuWidth = minOf(menuWidth, with(density) { viewport.width.toDp() })
+            val targetMenuHeightPx = with(density) { menuHeight.roundToPx() }
+            val targetMenuWidthPx = with(density) { resolvedMenuWidth.roundToPx() }
+            val horizontalInsetPx = with(density) { 12.dp.roundToPx() }
+            val visualHostWidthPx = with(density) {
+                (PopupMenuOvershootMarginStart + resolvedMenuWidth * PopupMenuOvershootScale).roundToPx()
+            }
+            val visualHostHeightPx = with(density) {
+                (
+                    PopupMenuOvershootMarginVertical +
+                        menuHeight * PopupMenuOvershootScale
+                ).roundToPx()
+            }
+            // Popup tracks live anchor bounds; caption resizing must not reset its
+            // resolved offset and briefly dispose the content during collapse.
+            val viewportCenterXPx = viewportBounds?.center?.x?.roundToInt()
+            val positionProvider = remember(
+                targetMenuHeightPx,
+                targetMenuWidthPx,
+                horizontalInsetPx,
+                viewport,
+                forceBelowAnchor,
+                centerHorizontally,
+                viewportCenterXPx,
+                alignToAnchorStart,
+                expandFromAnchor,
+                visualHostWidthPx,
+                visualHostHeightPx,
+            ) {
+                IosPopupPositionProvider(
+                    targetMenuHeightPx = targetMenuHeightPx,
+                    targetMenuWidthPx = targetMenuWidthPx,
+                    horizontalInsetPx = horizontalInsetPx,
+                    viewport = viewport,
+                    forceBelowAnchor = forceBelowAnchor,
+                    centerHorizontally = centerHorizontally,
+                    viewportCenterXPx = viewportCenterXPx,
+                    alignToAnchorStart = alignToAnchorStart,
+                    anchorAlignment = expandFromAnchor ?: Alignment.Start,
+                    horizontalOvershootMarginPx = with(density) { PopupMenuOvershootMarginStart.roundToPx() },
+                    visualHostWidthPx = visualHostWidthPx,
+                    visualHostHeightPx = visualHostHeightPx,
+                    anchorOvershootVerticalPx = with(density) {
+                        PopupMenuOvershootMarginVertical.roundToPx()
+                    },
+                    // Resizing an open menu changes its target without changing its opening edge.
+                    initialOpensAbove = opensAbove.takeIf { surfaceReady },
+                    onAnchorOriginResolved = { anchorFractionX = it },
+                ) { resolved ->
+                    opensAbove = resolved
+                }
+            }
+            var resolvedFullScreenMenuOffset by remember(resolvedFullScreen) {
+                mutableStateOf<IntOffset?>(null)
+            }
+            val popupPositionProvider = remember(positionProvider, positionAnchorBounds, resolvedFullScreen) {
+                object : PopupPositionProvider {
+                    override fun calculatePosition(
+                        anchorBounds: IntRect,
+                        windowSize: IntSize,
+                        layoutDirection: LayoutDirection,
+                        popupContentSize: IntSize,
+                    ): IntOffset {
+                        val requestedAnchor = positionAnchorBounds?.let {
+                            IntRect(it.left.toInt(), it.top.toInt(), it.right.toInt(), it.bottom.toInt())
+                        } ?: anchorBounds
+                        val menuOffset = positionProvider.calculatePosition(
+                            requestedAnchor,
+                            windowSize,
+                            layoutDirection,
+                            popupContentSize,
+                        )
+                        return if (resolvedFullScreen) {
+                            resolvedFullScreenMenuOffset = menuOffset
+                            IntOffset.Zero
+                        } else {
+                            menuOffset
+                        }
+                    }
+                }
+            }
+            val menuBackdropHost = rememberMenuBackdropHost {
+                val scaleSettled = (menuScale as? MenuScaleMotion)?.isSettled?.invoke() != false
+                val transitionSettled = if (usesMorph) liquidMotion.isExpandedSettled
+                    else !progress.isRunning && progress.value == 1f
+                expanded && !menuAlpha.isRunning && menuAlpha.value == 1f &&
+                    transitionSettled && scaleSettled
+            }
+            val currentOnExpandedChange by rememberUpdatedState(onExpandedChange)
+            val dismissPopup = remember { { currentOnExpandedChange(false) } }
+            val popupProperties = remember(expanded) {
+                PopupProperties(
+                    focusable = expanded,
+                    dismissOnBackPress = expanded,
+                    dismissOnClickOutside = expanded,
+                    clippingEnabled = false,
+                )
+            }
+            StableMenuPopup(
+                popupPositionProvider = popupPositionProvider,
+                onDismissRequest = dismissPopup,
+                properties = popupProperties,
+            ) {
+                // The overshoot margin is invisible window area; treat taps there like
+                // outside taps (dismiss) instead of letting them vanish into the window.
+                Box(
+                    Modifier
+                        .then(if (resolvedFullScreen) Modifier.fillMaxSize() else Modifier),
+                    contentAlignment = androidx.compose.ui.AbsoluteAlignment.TopLeft,
+                ) {
+                    // The dismiss target is a sibling so it never merges submenu pane semantics.
+                    Box(
+                        Modifier.matchParentSize().clickable(
+                            interactionSource = null,
+                            indication = null,
+                        ) { dismissPopup() },
+                    )
+                    ProvideMenuDragTargets(
+                        drag = sourceAnchor.dragSelection,
+                        isReady = {
+                            expanded && if (usesMorph) {
+                                sourceAnchor.isAcquired && liquidMotion.initialized &&
+                                    liquidMotion.frame.contentProgress >= MenuDragReadyProgress
+                            } else {
+                                menuAlpha.value >= MenuDragReadyProgress
+                            }
+                        },
+                    ) {
+                        CompositionLocalProvider(
+                            LocalIosPopupMenuInteractive provides expanded,
+                            LocalMenuBackdropHost provides menuBackdropHost,
+                        ) {
+                            // Separate the popup window size from its animation shell, which
+                            // can exceed the window when a wide menu needs room for shadows.
+                            if (!resolvedFullScreen || resolvedFullScreenMenuOffset != null) {
+                                val contentAlpha = if (usesMorph) {
+                                    ((progress.value - 0.12f) / 0.64f).coerceIn(0f, 1f)
+                                } else 1f
+                                GlasmioContextMenu(
+                                    visible = true,
+                                    modifier = if (resolvedFullScreen) {
+                                        Modifier.absoluteOffset { resolvedFullScreenMenuOffset ?: IntOffset.Zero }
+                                    } else Modifier,
+                                    backdrop = backdrop,
+                                    animationProgress = progress.value,
+                                    transformOriginProgress = if (usesMorph) 1f else 0f,
+                                    menuAlpha = if (usesMorph) 1f else menuAlpha.value,
+                                    contentAlpha = contentAlpha,
+                                    shadowAlpha = if (usesMorph) shadowAlpha.value else 1f,
+                                    opensAbove = opensAbove,
+                                    itemCount = itemCount,
+                                    heightOverride = menuHeight,
+                                    menuScale = menuScale,
+                                    exportChildBackdrop = exportChildBackdrop,
+                                    initialTransformOrigin = if (expandFromAnchor != null) {
+                                        TransformOrigin(anchorFractionX, if (opensAbove) 1f else 0f)
+                                    } else null,
+                                    menuWidth = resolvedMenuWidth,
+                                    onMenuBoundsChanged = onMenuBoundsChanged,
+                                    morphMotion = liquidMotion.takeIf { usesMorph },
+                                    morphSourceAcquired = sourceAnchor.isAcquired,
+                                    morphSourcePortal = sourceAnchor.portal,
+                                    morphSourceHasGlassBackground = sourceAnchor.sourceHasGlassBackground,
+                                    morphSourceMaterial = sourceAnchor.sourceMaterial,
+                                    morphSourceFrostRadius = sourceAnchor.sourceFrostRadius,
+                                    morphSourceMaterialPaint = sourceAnchor.sourceMaterialPaint,
+                                    morphSourceMaterialEffect = sourceAnchor.sourceMaterialEffect,
+                                    morphSourceUsesShadowLift = sourceAnchor.sourceUsesShadowLift,
+                                    morphSourceUsesInnerShadows = sourceAnchor.sourceUsesInnerShadows,
+                                    morphSourceNativeMaterial = sourceAnchor.sourceNativeMaterial,
+                                    morphShaderPrograms = sourceAnchor.shaderPrograms,
+                                    onMorphReady = { target ->
+                                        if (usesMorph) measuredMorphTarget = target
+                                        surfaceReady = true
+                                    },
+                                ) { childBackdrop ->
+                                    content(childBackdrop) { dismissPopup() }
+                                }
+                            }
+                            overlayContent { menuAlpha.value.coerceIn(0f, 1f) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Isolates Popup's SideEffect(updateParameters) from live menu animation recompositions. */
+@Composable
+private fun StableMenuPopup(
+    popupPositionProvider: PopupPositionProvider,
+    onDismissRequest: () -> Unit,
+    properties: PopupProperties,
+    content: @Composable () -> Unit,
+) {
+    Popup(
+        popupPositionProvider = popupPositionProvider,
+        onDismissRequest = onDismissRequest,
+        properties = properties,
+        content = content,
+    )
+}
+
+@Composable
+fun <T> GlasmioPopUpButton(
+    selected: T,
+    items: List<T>,
+    onSelected: (T) -> Unit,
+    label: @Composable (T) -> String,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    backdrop: Backdrop = LocalBlurBackdrop.current,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    GlasmioMenu(
+        expanded = expanded,
+        onExpandedChange = { if (enabled || !it) expanded = it },
+        itemCount = items.size,
+        modifier = modifier,
+        backdrop = backdrop,
+        anchorEnabled = enabled,
+        // These text/checkmark rows never sample the menu itself.
+        exportChildBackdrop = false,
+        anchor = { openMenu ->
+            Row(
+                Modifier
+                    .height(44.dp)
+                    .clickable(
+                        enabled = enabled,
+                        interactionSource = null,
+                        indication = null,
+                        role = Role.Button,
+                        onClick = openMenu,
+                    ),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                Text(
+                    text = label(selected),
+                    style = IosTypography.body,
+                    color = if (enabled) LocalGlassColors.current.accent
+                    else LocalGlassColors.current.secondaryContent,
+                )
+                CompositionLocalProvider(LocalSfToolbarSymbols provides true) {
+                    SfIcon(
+                        "chevron.up.chevron.down",
+                        contentDescription = null,
+                        size = 18.dp,
+                        fontSize = 18.sp,
+                        tint = if (enabled) LocalGlassColors.current.accent
+                        else LocalGlassColors.current.secondaryContent,
+                        modifier = Modifier.size(width = 14.dp, height = 18.dp),
+                        weight = FontWeight.Normal,
+                        fontFeatureSettings = "'ss15' 1",
+                    )
+                }
+            }
+        },
+    ) { childBackdrop, close ->
+        val scroll = rememberScrollState()
+        Column(Modifier.verticalScroll(scroll, enabled = scroll.maxValue > 0)) {
+            items.forEach { item ->
+                GlasmioMenuItem(
+                    title = label(item),
+                    onClick = {
+                        onSelected(item)
+                        close()
+                    },
+                    systemName = if (item == selected) "checkmark" else null,
+                    backdrop = childBackdrop,
+                )
+            }
+        }
+    }
+}
+
+/** [rowHeight] overrides the complete row height, including subtitle or explicit title lines. */
+@Composable
+fun GlasmioMenuItem(
+    title: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    systemName: String? = null,
+    destructive: Boolean = false,
+    backdrop: Backdrop = LocalGlassBackdrop.current,
+    enabled: Boolean = true,
+    iconTint: Color? = null,
+    fontWeight: FontWeight? = null,
+    subtitle: String? = null,
+    rowHeight: androidx.compose.ui.unit.Dp? = null,
+    trailing: (@Composable () -> Unit)? = null,
+) {
+    GlasmioMenuItem(
+        title = title,
+        onClick = onClick,
+        modifier = modifier,
+        systemName = systemName,
+        destructive = destructive,
+        backdrop = backdrop,
+        enabled = enabled,
+        iconTint = iconTint,
+        fontWeight = fontWeight,
+        subtitle = subtitle,
+        rowHeight = rowHeight,
+        icon = null,
+        trailing = trailing,
+    )
+}
+
+/** Custom [icon] content occupies the standard icon gutter and takes precedence over [systemName]. */
+@Composable
+fun GlasmioMenuItem(
+    title: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    systemName: String? = null,
+    destructive: Boolean = false,
+    backdrop: Backdrop = LocalGlassBackdrop.current,
+    enabled: Boolean = true,
+    iconTint: Color? = null,
+    fontWeight: FontWeight? = null,
+    subtitle: String? = null,
+    rowHeight: androidx.compose.ui.unit.Dp? = null,
+    icon: (@Composable () -> Unit)?,
+    trailing: (@Composable () -> Unit)? = null,
+) {
+    val scope = rememberCoroutineScope()
+    val interactive = LocalIosPopupMenuInteractive.current
+    val highlight = remember(scope) { InteractiveHighlight(scope) }
+    Row(
+        modifier
+            .fillMaxWidth()
+            .height(rowHeight ?: menuItemHeight(44.dp, title, subtitle))
+            .graphicsLayer { alpha = if (enabled) 1f else 0.45f }
+            .semantics(mergeDescendants = true) {
+                if (!enabled) disabled()
+            }
+            .menuDragTarget(interactive && enabled, onClick, Capsule()) { highlight.pressProgress }
+            .then(
+                if (interactive && enabled) {
+                    Modifier
+                        .clickable(interactionSource = null, indication = null, role = Role.Button, onClick = onClick)
+                        .then(highlight.gestureModifier)
+                } else {
+                    Modifier
+                },
+            )
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // Fixed-width gutter keeps every title's left edge aligned, whether or not the
+        // row shows a checkmark (iOS context-menu alignment).
+        Box(Modifier.width(20.dp).clearAndSetSemantics {}, contentAlignment = Alignment.Center) {
+            if (icon != null) {
+                icon()
+            } else if (systemName != null) {
+                SfIcon(systemName, null, size = 20.dp, tint = iconTint ?: if (destructive) LocalGlassColors.current.destructive else LocalGlassColors.current.content)
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                title, style = IosTypography.body,
+                fontWeight = fontWeight, maxLines = if ('\n' in title) 2 else 1, overflow = TextOverflow.Ellipsis,
+                color = if (destructive) LocalGlassColors.current.destructive else LocalGlassColors.current.content,
+            )
+            subtitle?.let {
+                Text(
+                    it, style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    color = LocalGlassColors.current.secondaryContent,
+                )
+            }
+        }
+        trailing?.invoke()
+    }
+}
+
+/** A subtitle and an explicit second title line each keep their own vertical allowance. */
+internal fun menuItemHeight(base: androidx.compose.ui.unit.Dp, title: String, subtitle: String?): androidx.compose.ui.unit.Dp =
+    base + (if (subtitle != null) 12.dp else 0.dp) + (if ('\n' in title) 20.dp else 0.dp)
+
+/** Match the independently rounded padding on each edge of the menu. */
+internal fun Density.paddedMenuHeight(contentHeightPx: Int): Dp =
+    (contentHeightPx + 2 * 10.dp.roundToPx()).toDp()
+
+internal fun menuContentHeight(
+    rowHeights: List<androidx.compose.ui.unit.Dp>,
+    separatorCount: Int,
+    separatorHeight: androidx.compose.ui.unit.Dp = 12.dp,
+): androidx.compose.ui.unit.Dp =
+    20.dp + rowHeights.fold(0.dp) { total, height -> total + height } + separatorHeight * separatorCount
+

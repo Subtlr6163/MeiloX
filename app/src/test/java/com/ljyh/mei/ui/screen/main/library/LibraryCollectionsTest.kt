@@ -1,17 +1,20 @@
 package com.ljyh.mei.ui.screen.main.library
 
 import com.ljyh.mei.constants.LibraryStyle
-import com.ljyh.mei.data.repository.LibraryAccount
-import com.ljyh.mei.data.repository.LibraryCollectionPage
-import com.ljyh.mei.data.repository.collectLibraryPages
+import com.ljyh.mei.ui.screen.playlist.collectPlaylistTracksIncrementally
 import com.ljyh.mei.data.model.room.Playlist
 import com.ljyh.mei.di.repository.observeOwnedPlaylists
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.runCurrent
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.withContext
+import java.io.IOException
 import com.ljyh.mei.ui.navigation.ContentFeature
 import com.ljyh.mei.ui.navigation.LibraryPage
 import org.junit.Assert.assertEquals
@@ -22,20 +25,159 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LibraryCollectionsTest {
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun likedSongsPublishTheFirstPageBeforeWaitingForOrderedContinuation() = runTest {
+        val ordered = (1L..405L).toList()
+        val first = ordered.take(5)
+        val continuation = CompletableDeferred<Unit>()
+        val requested = mutableListOf<List<Long>>()
+        val snapshots = mutableListOf<List<Long>>()
+        val result = async {
+            collectPlaylistTracksIncrementally(
+                orderedIds = ordered + listOf(1L, 201L), initialTracks = first, key = { it },
+                loadBatch = { ids ->
+                    requested += ids
+                    continuation.await()
+                    ids.reversed() + ids.first()
+                },
+                onSnapshot = { snapshots += it },
+            )
+        }
+        runCurrent()
+        assertEquals(listOf(first), snapshots)
+        assertFalse(result.isCompleted)
+        assertEquals((6L..205L).toList(), requested.single())
+
+        continuation.complete(Unit)
+        runCurrent()
+        assertEquals(ordered, result.await())
+        assertEquals(listOf(5, 205, 405), snapshots.map { it.size })
+        assertEquals(ordered.take(205), snapshots[1])
+        assertEquals(first, snapshots.first())
+        assertEquals(listOf(200, 200), requested.map { it.size })
+    }
+
+    @Test
+    fun failedLikedSongContinuationRetainsEveryPublishedPage() = runTest {
+        val snapshots = mutableListOf<List<Long>>()
+        var requests = 0
+        val result = runCatching {
+            collectPlaylistTracksIncrementally(
+                orderedIds = (1L..450L).toList(), initialTracks = (1L..20L).toList(), key = { it },
+                loadBatch = { ids ->
+                    if (++requests == 2) throw IOException("Second continuation unavailable")
+                    ids
+                },
+                onSnapshot = { snapshots += it },
+            )
+        }
+        assertTrue(result.exceptionOrNull() is IOException)
+        assertEquals(listOf(20, 220), snapshots.map { it.size })
+        assertEquals((1L..220L).toList(), snapshots.last())
+
+        val empty = mutableListOf<List<Long>>()
+        collectPlaylistTracksIncrementally<Long>(
+            orderedIds = emptyList(), initialTracks = emptyList(), key = { it },
+            loadBatch = { error("An empty playlist has no continuation") },
+            onSnapshot = { empty += it },
+        )
+        assertEquals(listOf(emptyList<Long>()), empty)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun retryAndRefreshKeepLoadedLikedSongsWithinTheAuthoritativeOrder() = runTest {
+        val loaded = (1L..220L).map { it to "retained" }
+        val retryContinuation = CompletableDeferred<Unit>()
+        val retrySnapshots = mutableListOf<List<Pair<Long, String>>>()
+        val requested = mutableListOf<List<Long>>()
+        val retry = async {
+            collectPlaylistTracksIncrementally(
+                orderedIds = (1L..450L).toList(),
+                initialTracks = (1L..20L).map { it to "fresh" },
+                retainedTracks = loaded,
+                key = { it.first },
+                loadBatch = { ids ->
+                    requested += ids
+                    retryContinuation.await()
+                    ids.map { it to "fetched" }
+                },
+                onSnapshot = { retrySnapshots += it },
+            )
+        }
+        runCurrent()
+        assertEquals((1L..220L).toList(), retrySnapshots.single().map { it.first })
+        assertEquals("fresh", retrySnapshots.single().first().second)
+        assertEquals("retained", retrySnapshots.single().last().second)
+        assertEquals((221L..420L).toList(), requested.single())
+        retryContinuation.complete(Unit)
+        runCurrent()
+        val completed = retry.await()
+
+        val refreshedIds = listOf(450L, 1L, 451L, 220L)
+        val refreshSnapshots = mutableListOf<List<Pair<Long, String>>>()
+        val refreshed = collectPlaylistTracksIncrementally(
+            orderedIds = refreshedIds,
+            initialTracks = listOf(1L to "refreshed"),
+            retainedTracks = completed,
+            key = { it.first },
+            loadBatch = { ids ->
+                assertEquals(listOf(451L), ids)
+                ids.map { it to "new" }
+            },
+            onSnapshot = { refreshSnapshots += it },
+        )
+        assertEquals(listOf(450L, 1L, 220L), refreshSnapshots.first().map { it.first })
+        assertEquals("refreshed", refreshSnapshots.first()[1].second)
+        assertEquals(refreshedIds, refreshed.map { it.first })
+        assertEquals(4, refreshed.size)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun cancelledLikedSongLoadCannotPublishAnOldContinuation() = runTest {
+        val response = CompletableDeferred<Unit>()
+        val snapshots = mutableListOf<List<Long>>()
+        val initial = (1L..20L).toList()
+        val request = launch {
+            collectPlaylistTracksIncrementally(
+                orderedIds = (1L..250L).toList(), initialTracks = initial, key = { it },
+                loadBatch = { ids ->
+                    withContext(NonCancellable) { response.await() }
+                    ids
+                },
+                onSnapshot = { snapshots += it },
+            )
+        }
+        runCurrent()
+        assertEquals(listOf(initial), snapshots)
+        request.cancel()
+        response.complete(Unit)
+        runCurrent()
+        assertTrue(request.isCancelled)
+        assertEquals(listOf(initial), snapshots)
+    }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
     fun playerPlaylistChoicesFollowLoginSwitchAndLogoutWithoutDatabaseChanges() = runTest {
         fun playlist(id: String, owner: String) = Playlist(id, id, "", owner, "", "", 1)
-        val rows = MutableStateFlow(listOf(playlist("a", "1"), playlist("b", "2")))
-        val accounts = MutableStateFlow<LibraryAccount?>(null)
+        val rows = MutableStateFlow(listOf(playlist("a", "1"), playlist("b", "2"),
+            playlist("other-source", "1").copy(providerId = "qq")))
+        fun account(id: String, revision: String) = com.ljyh.mei.source.api.SourceAccount(
+            com.ljyh.mei.source.api.SourceAccountRef(com.ljyh.mei.source.api.ProviderInstanceId("netease"),
+                com.ljyh.mei.source.api.ProviderAccountId(id)), id, sessionRevision = revision)
+        val accounts = MutableStateFlow<com.ljyh.mei.source.api.SourceAccount?>(null)
         var visible = emptyList<Playlist>()
-        backgroundScope.launch { observeOwnedPlaylists(rows, accounts).collect { visible = it } }
+        backgroundScope.launch { observeOwnedPlaylists(rows, accounts, providerId = "netease").collect { visible = it } }
         runCurrent()
         assertTrue(visible.isEmpty())
-        accounts.value = LibraryAccount("1", "session-1")
+        accounts.value = account("1", "session-1")
         runCurrent()
         assertEquals(listOf("a"), visible.map { it.id })
-        accounts.value = LibraryAccount("2", "session-2")
+        accounts.value = account("2", "session-2")
         runCurrent()
         assertEquals(listOf("b"), visible.map { it.id })
         rows.value += playlist("c", "2")
@@ -185,12 +327,5 @@ class LibraryCollectionsTest {
         assertFalse(result.hasMore)
     }
 
-    @Test
-    fun accountIdentityIncludesSessionWithoutExposingCredential() {
-        val account = LibraryAccount("123", "private-session-a")
-        assertEquals(account, LibraryAccount("123", "private-session-a"))
-        assertNotEquals(account, LibraryAccount("123", "private-session-b"))
-        assertNotEquals(account, LibraryAccount("456", "private-session-a"))
-        assertFalse(account.toString().contains("private-session"))
-    }
+
 }

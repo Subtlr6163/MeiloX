@@ -1,5 +1,41 @@
 package com.ljyh.mei.ui.screen.playlist
 
+import androidx.compose.foundation.layout.requiredWidth
+import androidx.compose.foundation.layout.requiredHeight
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.ui.test.performScrollToIndex
+import com.ljyh.mei.ui.screen.playlist.component.playlistTrackItems
+import com.ljyh.mei.ui.screen.playlist.component.PlaylistHeader
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import com.ljyh.mei.ui.screen.artist.ArtistPopularSongs
+import com.ljyh.mei.ui.screen.playlist.component.DetailTrackRow
+import com.ljyh.mei.data.model.toMediaMetadata
+import com.ljyh.mei.data.model.mediaId
+import com.ljyh.mei.data.model.MediaMetadata
+import io.github.neoruaa.glasmio.scaffold.GlasmioHeaderAction
+import io.github.neoruaa.glasmio.scaffold.GlasmioHeaderGroup
+import io.github.neoruaa.glasmio.scaffold.GlasmioHeaderSpec
+import io.github.neoruaa.glasmio.scaffold.GlasmioNavigationScaffold
+import io.github.neoruaa.glasmio.scaffold.GlasmioNavigationFrame
+import io.github.neoruaa.glasmio.scaffold.GlasmioHeaderMotion
+import io.github.neoruaa.glasmio.scaffold.rememberGlasmioHeaderSearch
+import io.github.neoruaa.glasmio.core.GlassAppearance
+import io.github.neoruaa.glasmio.core.GlasmioTheme
+import io.github.neoruaa.glasmio.glass.GlasmioBackdropHost
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,24 +52,38 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.ljyh.mei.R
 import com.ljyh.mei.data.model.room.DownloadStatus
 import com.ljyh.mei.data.model.room.DownloadTask
+import com.ljyh.mei.source.api.SourceErrorCode
+import com.ljyh.mei.ui.navigation.MeiRoute
+import com.ljyh.mei.ui.navigation.MeiloXPageEntry
+import com.ljyh.mei.ui.navigation.MeiloXPageHeaders
 import com.ljyh.mei.ui.screen.main.library.component.DownloadLibraryEntry
 import com.ljyh.mei.ui.screen.main.library.component.DownloadLibraryRow
+import com.ljyh.mei.ui.screen.main.library.component.LibraryLandscapeSongRow
+import com.ljyh.mei.ui.screen.source.SourceContentState
+import com.ljyh.mei.ui.screen.source.sourceDetailPagingStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -47,12 +97,592 @@ import org.junit.runner.RunWith
 class SongListRenderingTest {
     @get:Rule val compose = createComposeRule()
 
+    @Test
+    fun sourceTrackListLoadsMoreAtTheEndAndWaitsForRetryOnError() {
+        val state = mutableStateOf(SourceContentState(hasMore = true, nextOffset = 24))
+        val requests = mutableListOf<Int>()
+        var retries = 0
+        compose.setContent {
+            GlasmioTheme {
+                LazyColumn(Modifier.height(200.dp).testTag("source-track-list")) {
+                    items(24) { index -> Text("Track $index", Modifier.height(40.dp)) }
+                    sourceDetailPagingStatus(
+                        state = state.value,
+                        onRetry = { retries++ },
+                        onMore = {
+                            val current = state.value
+                            requests += current.nextOffset
+                            state.value = if (current.nextOffset == 24) {
+                                current.copy(nextOffset = 48)
+                            } else current.copy(error = SourceErrorCode.NETWORK)
+                        },
+                        showLoading = false,
+                    )
+                }
+            }
+        }
+        compose.runOnIdle { assertTrue(requests.isEmpty()) }
+        compose.onNodeWithTag("source-track-list").performScrollToIndex(23)
+        compose.runOnIdle {
+            assertEquals(listOf(24, 48), requests)
+            assertEquals(0, retries)
+        }
+        compose.onNodeWithTag("source-track-list").performScrollToIndex(24)
+        val retry = InstrumentationRegistry.getInstrumentation().targetContext.getString(R.string.retry)
+        compose.onNodeWithText(retry).assertIsDisplayed().performClick()
+        compose.runOnIdle {
+            assertEquals(listOf(24, 48), requests)
+            assertEquals(1, retries)
+        }
+    }
+
+    @Test
+    fun sharedOrderSheetKeepsOpaqueTrackKeysThroughMoveSaveAndCancel() {
+        val tracks = listOf(
+            com.ljyh.mei.source.api.Track(com.ljyh.mei.source.api.TrackRef("qqmusic", "00042"), "First source song", emptyList()),
+            com.ljyh.mei.source.api.Track(com.ljyh.mei.source.api.TrackRef("another", "name/海:77"), "Second source song", emptyList()),
+        )
+        val original = tracks.map { it.ref }
+        val state = mutableStateOf(PlaylistOrderState("playlist", tracks.map { PlaylistOrderItem(it.ref, it.toMediaMetadata()) }, original, loading = false))
+        var saved = emptyList<com.ljyh.mei.source.api.TrackRef>()
+        var visible = emptyList<com.ljyh.mei.source.api.TrackRef>()
+        var dismissed = false
+        compose.setContent {
+            GlasmioTheme {
+                GlasmioBackdropHost(sampledContent = {}, overlayContent = {
+                    PlaylistOrderSheet(state.value,
+                        trackKey = com.ljyh.mei.source.api.TrackRefCodec::encode,
+                        onMove = { from, to -> state.value = state.value.copy(items = state.value.items.toMutableList().apply { add(to, removeAt(from)) }) },
+                        onVisibleTracks = { visible = it }, onSave = { saved = state.value.items.map { it.id } },
+                        onReload = {}, onDismiss = { dismissed = true })
+                })
+            }
+        }
+        compose.onNodeWithText("First source song").assertIsDisplayed()
+        compose.waitUntil { visible.toSet() == original.toSet() }
+        val firstRow = compose.onNodeWithTag("playlist-order-${original.first()}").fetchSemanticsNode()
+        compose.runOnIdle { assertTrue(firstRow.config[androidx.compose.ui.semantics.SemanticsActions.CustomActions].single().action()) }
+        compose.onNodeWithTag("playlist-order-save").performClick()
+        compose.runOnIdle { assertEquals(original.reversed(), saved) }
+        val cancel = InstrumentationRegistry.getInstrumentation().targetContext.getString(R.string.playlist_order_cancel)
+        compose.onNodeWithText(cancel).performClick()
+        compose.waitUntil { dismissed }
+    }
+
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+    @Test
+    fun filteredLibrarySongsKeepOnlyVisibleResultsAndTheirOpaquePlaybackIdentities() = runBlocking {
+        val all = listOf(
+            com.ljyh.mei.source.api.Track(com.ljyh.mei.source.api.TrackRef("qq", "hidden"), "Other song", emptyList()),
+            com.ljyh.mei.source.api.Track(com.ljyh.mei.source.api.TrackRef("qq", "00042"), "Match one", emptyList()),
+            com.ljyh.mei.source.api.Track(com.ljyh.mei.source.api.TrackRef("qq", "song/B"), "Match two", emptyList()),
+        )
+        val filtered = all.filter { it.title.contains("match", true) }
+        val queue = com.ljyh.mei.ui.screen.source.sourceLibrarySearchQueue("library-search", "Songs", filtered, 1)!!
+        val status = queue.getInitialStatus()
+        val expected = filtered.map { com.ljyh.mei.source.api.TrackRefCodec.mediaId(it.ref) }
+        assertEquals(expected, status.ids.map { it.first })
+        assertEquals(expected, status.ids.map { it.second!!.mediaId })
+        assertEquals(1, status.mediaItemIndex)
+        org.junit.Assert.assertNull(queue.playlistSource)
+        org.junit.Assert.assertFalse(queue.hasNextPage())
+        org.junit.Assert.assertNull(com.ljyh.mei.ui.screen.source.sourceLibrarySearchQueue("library-search", "Songs", emptyList(), 0))
+    }
+
+
     private val loading = mutableStateOf(false)
     private val hasLoadedContent = mutableStateOf(true)
     private val rowCount = mutableIntStateOf(150)
     private val paginationError = mutableStateOf(false)
     private lateinit var contentState: LazyListState
     private lateinit var layoutState: LazyListState
+
+    @Test
+    fun sharedDetailRowsPreserveRepeatedExternalTrackPositions() {
+        val ref = com.ljyh.mei.source.api.TrackRef("qqmusic", "name/海:77")
+        val repeated = com.ljyh.mei.source.api.Track(ref, "Repeated recording", emptyList()).toMediaMetadata()
+        val other = com.ljyh.mei.source.api.Track(ref.copy(providerId = "other-source"), "Other source", emptyList()).toMediaMetadata()
+        val clicked = mutableListOf<Int>()
+        compose.setContent {
+            GlasmioTheme {
+                LazyColumn {
+                    playlistTrackItems(
+                        pagingItems = null, staticTracks = listOf(repeated, repeated, other),
+                        isTablet = false, showTableHeader = false, flatDetailStyle = true,
+                        onTrackClick = { _, index -> clicked += index }, onMoreClick = { _, _ -> },
+                        currentTrackId = repeated.mediaId, showArtwork = false,
+                    )
+                }
+            }
+        }
+        compose.onAllNodesWithText("Repeated recording").assertCountEquals(2)
+        compose.onAllNodesWithText("Repeated recording")[1].performClick()
+        compose.runOnIdle { assertEquals(listOf(1), clicked) }
+        compose.onNodeWithText("Other source").assertIsDisplayed()
+    }
+
+    @Test
+    fun homeAndCatalogArtworkShareDimensionsAcrossRotation() {
+        val landscape = mutableStateOf(false)
+        var played = 0
+        var opened = 0
+        val song = MediaMetadata(1L, "Detail track", "", emptyList(), 259000L,
+            MediaMetadata.Album(3L, "Album"))
+        compose.setContent {
+            val configuration = android.content.res.Configuration(androidx.compose.ui.platform.LocalConfiguration.current).apply {
+                orientation = if (landscape.value) android.content.res.Configuration.ORIENTATION_LANDSCAPE
+                    else android.content.res.Configuration.ORIENTATION_PORTRAIT
+                screenWidthDp = if (landscape.value) 844 else 390
+                screenHeightDp = if (landscape.value) 390 else 844
+            }
+            CompositionLocalProvider(androidx.compose.ui.platform.LocalConfiguration provides configuration,
+                LocalDensity provides Density(0.5f, 1f)) {
+                GlasmioTheme {
+                    Column(Modifier.requiredWidth(390.dp).padding(horizontal = 24.dp)) {
+                        com.ljyh.mei.ui.component.item.HomeSongListRow("", "Home track", "Artist",
+                            onClick = { played++ }, onMore = { opened++ },
+                            moreModifier = Modifier.testTag("HomeSongMore"))
+                        com.ljyh.mei.ui.component.item.LandscapeMediaRow("", "Catalog track", "Artist", "", {},
+                            landscape = landscape.value)
+                        DetailTrackRow(song, 1, true, false, false, false, {}, null, {})
+                    }
+                }
+            }
+        }
+        fun assertArtworkSize(expectedPx: Float) {
+            val covers = compose.onAllNodesWithContentDescription("Album Art", useUnmergedTree = true)
+                .fetchSemanticsNodes().map { it.boundsInRoot }
+            assertEquals(3, covers.size)
+            covers.forEach {
+                assertEquals(expectedPx, it.width, 0.1f)
+                assertEquals(expectedPx, it.height, 0.1f)
+            }
+        }
+        assertArtworkSize(24f)
+        compose.runOnIdle { landscape.value = true }
+        assertArtworkSize(24f)
+        compose.onNodeWithText("Home track").performClick()
+        compose.onNodeWithTag("HomeSongMore").performClick()
+        compose.runOnIdle {
+            assertEquals(1, played)
+            assertEquals(1, opened)
+        }
+    }
+
+    @Test
+    fun portraitCatalogRowsMatchPlaylistSpacingAndAlbumActionAlignment() {
+        var opened = 0
+        val song = MediaMetadata(1L, "Playlist track", "", emptyList(), 259000L,
+            MediaMetadata.Album(3L, "Album"))
+        compose.setContent {
+            val configuration = android.content.res.Configuration(androidx.compose.ui.platform.LocalConfiguration.current).apply {
+                orientation = android.content.res.Configuration.ORIENTATION_PORTRAIT
+                screenWidthDp = 390
+                screenHeightDp = 844
+            }
+            CompositionLocalProvider(androidx.compose.ui.platform.LocalConfiguration provides configuration,
+                LocalDensity provides Density(0.5f, 1f)) {
+                GlasmioTheme {
+                    Column(Modifier.requiredWidth(390.dp).padding(horizontal = 24.dp)) {
+                        DetailTrackRow(song, 1, true, false, false, false, {}, null, { opened++ })
+                        com.ljyh.mei.ui.screen.playlist.component.DetailTrackDivider()
+                        com.ljyh.mei.ui.component.item.LandscapeMediaRow(
+                            image = "", title = "Catalog track", artist = "Artist", detail = "",
+                            onClick = {}, onMore = { opened++ }, landscape = false,
+                        )
+                        DetailTrackRow(song.copy(title = "Album track"), 1, false, false, false,
+                            false, {}, null, { opened++ })
+                    }
+                }
+            }
+        }
+        val covers = compose.onAllNodesWithContentDescription("Album Art", useUnmergedTree = true)
+            .fetchSemanticsNodes().map { it.boundsInRoot }
+        assertEquals(2, covers.size)
+        assertEquals(24f, covers[0].width, 0.1f)
+        assertEquals(4f, covers[1].top - covers[0].bottom, 0.1f)
+        val moreLabel = InstrumentationRegistry.getInstrumentation().targetContext.getString(R.string.more_actions_title)
+        val buttons = compose.onAllNodesWithContentDescription(moreLabel)
+        val bounds = buttons.fetchSemanticsNodes().map { it.boundsInRoot }
+        assertEquals(3, bounds.size)
+        bounds.forEach {
+            assertEquals(bounds.first().left, it.left, 0.1f)
+            assertEquals(22f, it.width, 0.1f)
+        }
+        for (index in 0..2) buttons[index].performClick()
+        compose.runOnIdle { assertEquals(3, opened) }
+    }
+
+    @Test
+    fun landscapeLibrarySongColumnsAdaptWithoutChangingMenuActions() {
+        val width = mutableStateOf(800.dp)
+        var played = 0
+        var opened = 0
+        val song = MediaMetadata(
+            1L, "Library song", "", listOf(MediaMetadata.Artist(2L, "Library artist")),
+            259000L, MediaMetadata.Album(3L, "Library album"),
+        )
+        compose.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(0.5f, 1f)) {
+                GlasmioTheme {
+                    Box(Modifier.requiredWidth(width.value)) {
+                        LibraryLandscapeSongRow(song, { played++ }, { opened++ })
+                    }
+                }
+            }
+        }
+        compose.onNodeWithText("Library album").assertDoesNotExist()
+        compose.onNodeWithText("4:19", useUnmergedTree = true).assertIsDisplayed()
+        val title = compose.onNodeWithText("Library song", useUnmergedTree = true).getUnclippedBoundsInRoot()
+        val artist = compose.onNodeWithText("Library artist", useUnmergedTree = true).getUnclippedBoundsInRoot()
+        assertEquals(title.top.value, artist.top.value, 0.1f)
+        assertTrue(title.right < artist.left)
+        compose.runOnIdle { width.value = 1100.dp }
+        compose.onNodeWithText("Library album", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithContentDescription(
+            InstrumentationRegistry.getInstrumentation().targetContext.getString(R.string.more_actions_title),
+        ).performClick()
+        compose.runOnIdle {
+            assertEquals(1, opened)
+            assertEquals(0, played)
+        }
+    }
+
+    @Test
+    fun landscapePopularSongMoreTargetsLeaveTheFavoriteGutterClear() {
+        val tracks =
+            (1L..6L).map { id ->
+                MediaMetadata(
+                    id,
+                    "Song $id",
+                    "",
+                    emptyList(),
+                    259000L,
+                    MediaMetadata.Album(1L, "Album"),
+                )
+            }
+        compose.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(0.5f, 1f)) {
+                GlasmioTheme {
+                    Box(Modifier.requiredWidth(900.dp)) {
+                        ArtistPopularSongs(
+                            tracks = tracks,
+                            favoriteIds = setOf("4"),
+                            viewportWidth = 900.dp,
+                            onClick = {},
+                            onMore = { _, _ -> },
+                            onHeightChanged = {},
+                        )
+                    }
+                }
+            }
+        }
+        val more =
+            compose
+                .onNodeWithTag("ArtistSongMore:1", useUnmergedTree = true)
+                .getUnclippedBoundsInRoot()
+        val favorite =
+            compose
+                .onNodeWithTag("ArtistSongFavorite:4", useUnmergedTree = true)
+                .getUnclippedBoundsInRoot()
+        assertTrue(more.right < favorite.left)
+        assertEquals(40f, (more.right - more.left).value, 0.1f)
+    }
+
+    @Test
+    fun albumDurationIsShownOnlyWhenTheCallerRequestsIt() {
+        val durationVisible = mutableStateOf(false)
+        compose.setContent {
+            GlasmioTheme {
+                DetailTrackRow(
+                    track =
+                        MediaMetadata(
+                            1L,
+                            "Song",
+                            "",
+                            emptyList(),
+                            259000L,
+                            MediaMetadata.Album(1L, "Album"),
+                        ),
+                    trackNumber = 1,
+                    showArtwork = false,
+                    isCurrentTrack = false,
+                    isPlaying = false,
+                    isFavorite = false,
+                    onClick = {},
+                    selected = null,
+                    onMoreClick = {},
+                    showDuration = durationVisible.value,
+                )
+            }
+        }
+        compose.onNodeWithText("4:19").assertDoesNotExist()
+        compose.runOnIdle { durationVisible.value = true }
+        compose.onNodeWithText("4:19").assertIsDisplayed()
+    }
+
+    @Test
+    fun albumLandscapeHeaderKeepsArtworkAndActionGeometryWhileLoading() {
+        val loading = mutableStateOf(false)
+        val horizontal = mutableStateOf(true)
+        compose.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(0.5f, 1f)) {
+                GlasmioTheme {
+                    Box(Modifier.requiredWidth(900.dp)) {
+                        PlaylistHeader(
+                            title = "Album title",
+                            creator = "Artist",
+                            metadata = "2026 · 12 tracks",
+                            count = 12,
+                            playCount = 0,
+                            subscribeCount = 0,
+                            cover = "",
+                            coverList = emptyList(),
+                            isSubscribed = false,
+                            onPlayAll = {},
+                            onSubscribed = {},
+                            actionIcon = Icons.Default.FavoriteBorder,
+                            actionLabel = "Subscribe",
+                            detailAction = true,
+                            horizontal = horizontal.value,
+                            isLoading = loading.value,
+                        )
+                    }
+                }
+            }
+        }
+        fun bounds(tag: String) =
+            compose.onNodeWithTag(tag, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val cover = bounds("DetailHeaderCover")
+        val information = bounds("DetailHeaderInformation")
+        val actions = bounds("DetailHeaderActions")
+        assertEquals(cover.width, cover.height, 1f)
+        assertTrue(cover.right < information.left)
+        compose.runOnIdle { loading.value = true }
+        assertEquals(cover, bounds("DetailHeaderCover"))
+        assertEquals(actions, bounds("DetailHeaderActions"))
+        compose.runOnIdle {
+            loading.value = false
+            horizontal.value = false
+        }
+        assertTrue(bounds("DetailHeaderInformation").top >= bounds("DetailHeaderCover").bottom)
+    }
+
+    @Test
+    fun narrowSplitPlaylistKeepsAllHeaderActionsVisible() {
+        val showSubscription = mutableStateOf(false)
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        compose.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(1f, 1f)) {
+                GlasmioTheme {
+                    Box(Modifier.requiredWidth(194.dp)) {
+                        PlaylistHeader(
+                            title = "Playlist",
+                            creator = "Artist",
+                            count = 12,
+                            playCount = 0,
+                            subscribeCount = 0,
+                            cover = "",
+                            coverList = emptyList(),
+                            isSubscribed = false,
+                            onPlayAll = {},
+                            onSubscribed = {},
+                            actionIcon = Icons.Default.FavoriteBorder,
+                            actionLabel = "Subscribe",
+                            showSubscriptionAction = showSubscription.value,
+                            detailAction = true,
+                            allowActionScroll = true,
+                        )
+                    }
+                }
+            }
+        }
+        val play = compose.onNode(hasText(context.getString(R.string.pip_play)) and hasClickAction())
+        val shuffle = compose.onNodeWithContentDescription(context.getString(R.string.notification_mode_shuffle))
+        fun assertFullyVisible(action: SemanticsNodeInteraction) {
+            action.assertIsDisplayed()
+            val unclipped = action.getUnclippedBoundsInRoot()
+            assertEquals(
+                (unclipped.right - unclipped.left).value,
+                action.fetchSemanticsNode().boundsInRoot.width,
+                1f,
+            )
+        }
+        assertFullyVisible(shuffle)
+        assertFullyVisible(play)
+
+        compose.runOnIdle { showSubscription.value = true }
+        assertFullyVisible(shuffle)
+        assertFullyVisible(play)
+        assertFullyVisible(compose.onNodeWithContentDescription("Subscribe"))
+    }
+
+    @Test
+    fun splitPlaylistPanesScrollIndependentlyAndBothDriveHeaderBlur() {
+        val route = MeiRoute("split-playlist")
+        val headers = MeiloXPageHeaders()
+        val motion = object : GlasmioHeaderMotion {
+            override val frame = mutableStateOf(GlasmioNavigationFrame(0, route.route, route.route))
+        }
+        lateinit var state: LazyListState
+        compose.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(0.5f, 1f)) {
+                GlasmioTheme {
+                    state = rememberLazyListState()
+                    Box(Modifier.requiredWidth(900.dp).requiredHeight(500.dp)) {
+                        GlasmioNavigationScaffold(motion, header = { headers.entry(it).spec }) {
+                            MeiloXPageEntry(route, headers) {
+                                SongListDetailPage(
+                                    title = "Playlist",
+                                    subtitle = null,
+                                    listState = state,
+                                    backgroundColor = Color.Black,
+                                    backgroundBrush = null,
+                                    bottomPadding = 48.dp,
+                                    horizontalContentPadding = 24.dp,
+                                    splitHeader = true,
+                                    hero = {
+                                        Column(Modifier.height(600.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                            Text("Playlist artwork", Modifier.testTag("PinnedHero"))
+                                        }
+                                    },
+                                    onNavigateBack = {},
+                                    actions = { emptyList() },
+                                ) {
+                                    items(30) { Text("Song $it", Modifier.fillMaxWidth().height(64.dp).testTag("SplitSong:$it")) }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        val hero = compose.onNodeWithTag("PinnedHero", useUnmergedTree = true)
+        val heroPane = compose.onNodeWithTag("DetailHeroPane")
+        val trackPane = compose.onNodeWithTag("DetailTrackPane")
+        val initialHero = hero.fetchSemanticsNode().boundsInRoot
+        val left = heroPane.fetchSemanticsNode().boundsInRoot
+        val right = trackPane.fetchSemanticsNode().boundsInRoot
+        assertTrue(left.right <= right.left)
+        assertEquals(left.width, right.width, 1f)
+        assertEquals(left.center.x, initialHero.center.x, 1f)
+        val firstSong = compose.onNodeWithTag("SplitSong:0", useUnmergedTree = true)
+            .fetchSemanticsNode().boundsInRoot
+        assertEquals(12f, firstSong.left - right.left, 1f)
+        assertEquals(12f, right.right - firstSong.right, 1f)
+        assertEquals(initialHero.top, firstSong.top, 1f)
+
+        fun assertBlurProgress(expected: Float) = compose.runOnIdle {
+            val scrollState = requireNotNull(headers.entry(route.route).spec.scrollState)
+            assertEquals(expected, scrollState.scrollEdgeProgress(), 0.01f)
+        }
+        assertBlurProgress(0f)
+        heroPane.performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, 14f) }
+        assertBlurProgress(0.5f)
+        compose.runOnIdle { assertEquals(0, state.firstVisibleItemScrollOffset) }
+        val scrolledHero = hero.fetchSemanticsNode().boundsInRoot
+        assertTrue(scrolledHero.top < initialHero.top)
+
+        trackPane.performScrollToIndex(12)
+        assertBlurProgress(1f)
+        assertEquals(scrolledHero, hero.fetchSemanticsNode().boundsInRoot)
+        compose.runOnIdle { assertTrue(state.firstVisibleItemIndex > 0) }
+        trackPane.performScrollToIndex(0)
+        assertBlurProgress(0.5f)
+        heroPane.performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, -14f) }
+        assertBlurProgress(0f)
+    }
+
+    @Test
+    fun playlistSearchMovesTheWholeActionGroupAndRestoresItInBothDirectionsAndLargeType() {
+        val fontScale = mutableStateOf(1f)
+        val direction = mutableStateOf(LayoutDirection.Ltr)
+        val active = mutableStateOf(false)
+        val query = mutableStateOf(TextFieldValue("Preview"))
+        var physicalDensity = 1f
+        val motion = object : GlasmioHeaderMotion {
+            override val frame = mutableStateOf(GlasmioNavigationFrame(0, "selection", "selection"))
+        }
+        compose.setContent {
+            physicalDensity = LocalDensity.current.density
+            CompositionLocalProvider(
+                LocalDensity provides Density(physicalDensity, fontScale.value),
+                LocalLayoutDirection provides direction.value,
+            ) {
+                GlasmioTheme(appearance = GlassAppearance(reduceTransparency = true)) {
+                    GlasmioBackdropHost(sampledContent = {}, overlayContent = {
+                        val doneLabel = stringResource(R.string.done)
+                        val search = rememberGlasmioHeaderSearch(
+                            active = active.value,
+                            initialQuery = query.value,
+                            onQueryChange = { query.value = it },
+                            onSearch = {},
+                            onDismiss = {
+                                active.value = false
+                                query.value = TextFieldValue()
+                            },
+                            placeholder = "Search playlist",
+                            cancelLabel = "Cancel",
+                            autoFocus = false,
+                        )
+                        GlasmioNavigationScaffold(motion, header = {
+                            GlasmioHeaderSpec("", trailing = listOf(GlasmioHeaderGroup("actions", listOf(
+                                GlasmioHeaderAction("search", "search", "Search playlist", { active.value = true }) {
+                                    Text("Search")
+                                },
+                                GlasmioHeaderAction("done", "done", "Selection done", {}) {
+                                    Text(doneLabel)
+                                },
+                            ), search = search)))
+                        }) {
+                            Box(Modifier.fillMaxSize())
+                        }
+                    })
+                }
+            }
+        }
+        for (layout in listOf(LayoutDirection.Ltr, LayoutDirection.Rtl)) {
+            for (scale in listOf(1f, 2f)) {
+                compose.runOnIdle {
+                    direction.value = layout
+                    fontScale.value = scale
+                }
+                fun bounds(tag: String) = compose.onNodeWithTag(tag, useUnmergedTree = true)
+                    .fetchSemanticsNode().boundsInRoot
+                val source = bounds("GlasmioHeaderGroup:actions")
+                val done = compose.onNodeWithContentDescription("Selection done").fetchSemanticsNode().boundsInRoot
+                assertTrue(source.width > done.width)
+                compose.mainClock.autoAdvance = false
+                compose.onNodeWithContentDescription("Search playlist").performClick()
+                compose.mainClock.advanceTimeByFrame()
+                assertEquals("The morph starts from the whole action group at font scale $scale in $layout",
+                    source.width, bounds("GlasmioHeaderSearchMorph").width, physicalDensity)
+
+                compose.mainClock.advanceTimeBy(2_000)
+                val morph = bounds("GlasmioHeaderSearchMorph")
+                val field = bounds("GlasmioSearchFieldSurface")
+                val cancel = bounds("GlasmioSearchCancelSurface")
+                assertTrue("The floating toolbar clears the original header at font scale $scale in $layout",
+                    morph.top >= source.bottom)
+                assertTrue(field.left >= morph.left && field.right <= morph.right)
+                assertTrue(cancel.left >= morph.left && cancel.right <= morph.right)
+                assertTrue(if (layout == LayoutDirection.Ltr) field.right <= cancel.left else cancel.right <= field.left)
+
+                compose.onNodeWithTag("GlasmioSearchCancelSurface", useUnmergedTree = true).performClick()
+                compose.mainClock.advanceTimeBy(2_000)
+                compose.mainClock.autoAdvance = true
+                compose.runOnIdle {
+                    assertTrue(!active.value)
+                    assertEquals("", query.value.text)
+                    query.value = TextFieldValue("Preview")
+                }
+                compose.onNodeWithTag("GlasmioHeaderSearchMorph", useUnmergedTree = true).assertDoesNotExist()
+                compose.onNodeWithContentDescription("Search playlist").assertIsDisplayed()
+                compose.onNodeWithContentDescription("Selection done").assertIsDisplayed()
+                assertEquals(source, bounds("GlasmioHeaderGroup:actions"))
+            }
+        }
+    }
 
     @Test
     fun savedViewportSurvivesLoadingBeforeTheRestoredRowsArrive() {
@@ -149,6 +779,41 @@ class SongListRenderingTest {
     }
 
     @Test
+    fun landscapeDownloadDurationPrecedesFormatWithMatchingTypography() {
+        val song = com.ljyh.mei.data.model.room.Song(
+            id = "42", title = "Offline song", artist = listOf("Offline artist"),
+            album = "Offline album", cover = "", duration = 259000L,
+            path = "/music/song.flac", fileFormat = "flac",
+        )
+        var played = 0
+        var opened = 0
+        compose.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(0.5f, 1f)) {
+                GlasmioTheme {
+                    Box(Modifier.requiredWidth(800.dp)) {
+                        DownloadLibraryRow(
+                            DownloadLibraryEntry("42", song, null),
+                            onPlay = { played++ }, onMore = { opened++ }, landscape = true,
+                        )
+                    }
+                }
+            }
+        }
+        val duration = compose.onNodeWithText("4:19", useUnmergedTree = true).getUnclippedBoundsInRoot()
+        val format = compose.onNodeWithText("FLAC", useUnmergedTree = true).getUnclippedBoundsInRoot()
+        assertTrue(duration.right < format.left)
+        assertEquals(duration.top.value, format.top.value, 0.1f)
+        assertEquals((duration.bottom - duration.top).value, (format.bottom - format.top).value, 0.1f)
+        compose.onNodeWithContentDescription(
+            InstrumentationRegistry.getInstrumentation().targetContext.getString(R.string.more_actions_title),
+        ).performClick()
+        compose.runOnIdle {
+            assertEquals(1, opened)
+            assertEquals(0, played)
+        }
+    }
+
+    @Test
     fun downloadRowsShowDeterminateProgressAndTaskStates() {
         val tasks = listOf(
             DownloadTask("preview-downloading", songTitle = "下载进行中", songArtist = "本地音乐 · 下载任务", status = DownloadStatus.DOWNLOADING, progress = 42),
@@ -173,10 +838,13 @@ class SongListRenderingTest {
             }
         }
 
-        compose.onNodeWithText("42%").assertIsDisplayed()
+        fun assertStatus(text: String) {
+            compose.onNode(hasText("本地音乐 · 下载任务 · $text") or hasText(text)).assertIsDisplayed()
+        }
+        assertStatus("42%")
         val targetContext = InstrumentationRegistry.getInstrumentation().targetContext
-        compose.onNodeWithText(targetContext.getString(R.string.download_paused)).assertIsDisplayed()
-        compose.onNodeWithText(targetContext.getString(R.string.download_failed)).assertIsDisplayed()
+        assertStatus(targetContext.getString(R.string.download_paused))
+        assertStatus(targetContext.getString(R.string.download_failed))
         compose.onNode(SemanticsMatcher.expectValue(
             SemanticsProperties.ProgressBarRangeInfo,
             ProgressBarRangeInfo(0.42f, 0f..1f),

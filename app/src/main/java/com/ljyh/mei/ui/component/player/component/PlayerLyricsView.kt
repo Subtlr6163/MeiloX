@@ -120,7 +120,8 @@ internal fun PlayerLyricsView(
     textColor: Color = Color.White,
     breathingDotsDefaults: KaraokeBreathingDotsDefaults = KaraokeBreathingDotsDefaults(),
     phoneticTextStyle: TextStyle = normalLineTextStyle.copy(
-        fontSize = 13.sp,
+        fontSize = if (normalLineTextStyle.fontSize == androidx.compose.ui.unit.TextUnit.Unspecified) 13.sp
+            else (normalLineTextStyle.fontSize.value * 0.5f).coerceAtLeast(12f).sp,
         fontWeight = FontWeight.Normal,
     ),
     blendMode: BlendMode = BlendMode.Plus,
@@ -138,6 +139,9 @@ internal fun PlayerLyricsView(
     bottomFadeHeight: Dp = 100.dp,
     contentModifier: Modifier = Modifier,
     controlsFadeRange: (Float) -> ClosedFloatingPointRange<Float>? = { null },
+    isInteractive: Boolean = true,
+    precomputeLineLayouts: Boolean = true,
+    isolateFadeLayer: Boolean = true,
 ) {
     val stableNormalTextStyle = remember(normalLineTextStyle) { normalLineTextStyle }
     val stableAccompanimentTextStyle =
@@ -164,9 +168,11 @@ internal fun PlayerLyricsView(
         stableNormalTextStyle,
         stableAccompanimentTextStyle,
         stablePhoneticTextStyle,
-        textMeasurer
+        textMeasurer,
+        precomputeLineLayouts,
     ) {
-        if (!isVerbatim) return@LaunchedEffect
+        // The incoming mix layer only measures the rows it needs to show.
+        if (!isVerbatim || !precomputeLineLayouts) return@LaunchedEffect
         withContext(Dispatchers.Default) {
             val normalStyle = stableNormalTextStyle.copy(textDirection = TextDirection.Content)
             val accompanimentStyle =
@@ -248,12 +254,15 @@ internal fun PlayerLyricsView(
             Box(modifier = modifier.clipToBounds()) {
                 LazyColumn(
                     state = listState,
+                    userScrollEnabled = isInteractive,
                     modifier = listModifier
                         .fillMaxSize()
                         .then(contentModifier)
-                        .graphicsLayer {
-                            compositingStrategy = CompositingStrategy.Offscreen
-                        }
+                        .then(
+                            if (isolateFadeLayer) Modifier.graphicsLayer {
+                                compositingStrategy = CompositingStrategy.Offscreen
+                            } else Modifier,
+                        )
                         .drawWithCache {
                             onDrawWithContent {
                                 drawContent()
@@ -333,9 +342,9 @@ internal fun PlayerLyricsView(
                             }
                         }
 
-                        val dynamicStiffness by remember(distanceWeightState.value) {
+                        val dynamicStiffness by remember(distanceWeightState) {
                             derivedStateOf {
-                                (120f - (distanceWeightState.value * 20f)).coerceAtLeast(20f)
+                                (240f - (distanceWeightState.value * 26f)).coerceAtLeast(65f)
                             }
                         }
 
@@ -391,6 +400,7 @@ internal fun PlayerLyricsView(
                                             onLinePressed = { onLinePressed(line) },
                                             blurRadius = { blurRadiusState.value },
                                             blendMode = stableBlendMode,
+                                            isInteractive = isInteractive,
                                         ) {
                                             if (!isVerbatim) {
                                                 // Pronunciation wraps LRC in KaraokeLine without adding word timing.
@@ -458,6 +468,7 @@ internal fun PlayerLyricsView(
                                         onLinePressed = { onLinePressed(line) },
                                         blurRadius = { blurRadiusState.value },
                                         blendMode = stableBlendMode,
+                                        isInteractive = isInteractive,
                                     ) {
                                         // Translation Text inherits this style; primary and phonetic text use explicit styles.
                                         CompositionLocalProvider(LocalTextStyle provides translationTextStyle) {

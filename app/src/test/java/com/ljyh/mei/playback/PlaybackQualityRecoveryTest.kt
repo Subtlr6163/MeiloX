@@ -3,6 +3,12 @@ package com.ljyh.mei.playback
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.util.StuckPlayerException
 import com.ljyh.mei.constants.MusicQuality
+import com.ljyh.mei.source.api.SourceErrorCode
+import com.ljyh.mei.source.api.SourceException
+import com.ljyh.mei.source.api.SourceRuntimeUnavailableException
+import com.ljyh.mei.source.api.ProviderInstanceId
+import com.ljyh.mei.source.api.ResolutionAttempt
+import com.ljyh.mei.source.core.PlaybackResolutionException
 import java.io.IOException
 import java.net.SocketTimeoutException
 import org.junit.Assert.assertEquals
@@ -11,6 +17,54 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PlaybackQualityRecoveryTest {
+    @Test
+    fun runtimeAndNetworkFailuresRemainTemporaryThroughResolutionWrappers() {
+        listOf(
+            SourceRuntimeUnavailableException(),
+            SourceException(SourceErrorCode.NETWORK),
+            SourceException(SourceErrorCode.TIMEOUT),
+        ).forEach { cause ->
+            val wrapped = SourceNotFoundException("No playable source is available", PlaybackResolutionException(emptyList(), cause))
+            assertTrue(isTemporaryPlaybackFailure(PlaybackException.ERROR_CODE_IO_UNSPECIFIED, wrapped))
+        }
+        assertTrue(isTemporaryPlaybackFailure(PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED, IOException()))
+        assertTrue(isTemporaryPlaybackFailure(PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT, IOException()))
+    }
+
+    @Test
+    fun unavailableSongsAndInvalidResourcesDoNotBecomeTemporaryOutages() {
+        listOf(
+            SourceErrorCode.UNAVAILABLE,
+            SourceErrorCode.NOT_FOUND,
+            SourceErrorCode.AUTH_REQUIRED,
+            SourceErrorCode.AUTH_EXPIRED,
+            SourceErrorCode.INVALID_RESPONSE,
+            SourceErrorCode.PLUGIN,
+        ).forEach { code ->
+            val cause = SourceNotFoundException("No playable source is available",
+                PlaybackResolutionException(emptyList(), SourceException(code)))
+            assertFalse(isTemporaryPlaybackFailure(PlaybackException.ERROR_CODE_IO_UNSPECIFIED, cause))
+        }
+        assertFalse(isTemporaryPlaybackFailure(
+            PlaybackException.ERROR_CODE_TIMEOUT,
+            StuckPlayerException(StuckPlayerException.STUCK_PLAYING_NO_PROGRESS, 10_000),
+        ))
+    }
+
+    @Test
+    fun anUnavailableFallbackDoesNotHideAnEarlierNetworkOutage() {
+        for (code in listOf(SourceErrorCode.NETWORK, SourceErrorCode.TIMEOUT)) {
+            val attempts = listOf(
+                ResolutionAttempt(ProviderInstanceId("netease"), null, code),
+                ResolutionAttempt(ProviderInstanceId("qqmusic"), null, SourceErrorCode.UNAVAILABLE),
+            )
+            val resolution = PlaybackResolutionException(attempts, SourceException(SourceErrorCode.UNAVAILABLE))
+            val wrapped = SourceNotFoundException("No playable source is available", resolution)
+
+            assertTrue(isTemporaryPlaybackFailure(PlaybackException.ERROR_CODE_IO_UNSPECIFIED, wrapped))
+        }
+    }
+
     @Test
     fun confirmedLoadingAndPlayingStallsRecoverForBothMedia3ErrorCodes() {
         val stuckTypes = listOf(

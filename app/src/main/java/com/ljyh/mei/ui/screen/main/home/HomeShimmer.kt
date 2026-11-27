@@ -1,5 +1,6 @@
 package com.ljyh.mei.ui.screen.main.home
 
+import io.github.neoruaa.glasmio.core.swipeBackExcluded
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,7 +15,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -23,43 +23,47 @@ import androidx.compose.ui.unit.dp
 import com.kyant.capsule.ContinuousRoundedRectangle
 import com.ljyh.mei.constants.HomeSectionSpacing
 import com.ljyh.mei.constants.HomeSectionTitlePadding
-import com.ljyh.mei.constants.HomeCardSpacing
+import com.ljyh.mei.constants.homeCardSpacing
 import com.ljyh.mei.constants.HomeRowHorizontalPadding
 import com.ljyh.mei.constants.homePlaylistCardSize
 import com.ljyh.mei.constants.RecommendCardCornerRadius
 import com.ljyh.mei.constants.RecommendCardHeight
-import com.ljyh.mei.constants.RecommendCardHeightTablet
+import com.ljyh.mei.constants.PortraitRecommendCardHeight
 import com.ljyh.mei.constants.RecommendCardWidth
-import com.ljyh.mei.constants.RecommendCardWidthTablet
+import com.ljyh.mei.constants.PortraitRecommendCardWidth
 import com.ljyh.mei.ui.component.shimmer.ShimmerHost
 import com.ljyh.mei.ui.component.home.homeArtworkBorder
 import com.ljyh.mei.ui.component.utils.rememberDeviceInfo
+import io.github.neoruaa.glasmio.scaffold.glasmioHorizontalContentPadding
+import io.github.neoruaa.glasmio.scaffold.glasmioHorizontalEdgeToEdge
 
 private val shimmerColor @Composable get() = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
-private val cardShape = RoundedCornerShape(8.dp)
+private val cardShape = ContinuousRoundedRectangle(8.dp)
 
 @Composable
 fun HomeShimmer(contentPadding: PaddingValues) {
     val device = rememberDeviceInfo()
-    val recommendCardWidth = if (device.isTablet) RecommendCardWidthTablet else RecommendCardWidth
-    val recommendCardHeight = if (device.isTablet) RecommendCardHeightTablet else RecommendCardHeight
+    val recommendCardWidth = if (device.isLandscape) RecommendCardWidth else PortraitRecommendCardWidth
+    val recommendCardHeight = if (device.isLandscape) RecommendCardHeight else PortraitRecommendCardHeight
+    val cardSpacing = homeCardSpacing(device.isLandscape)
 
     ShimmerHost {
         LazyColumn(
             verticalArrangement = Arrangement.spacedBy(HomeSectionSpacing),
-            contentPadding = contentPadding
+            contentPadding = glasmioHorizontalContentPadding(contentPadding)
         ) {
             item {
                 RecommendRowShimmer(
                     cardWidth = recommendCardWidth,
                     cardHeight = recommendCardHeight,
-                    count = 3
+                    cardSpacing = cardSpacing,
+                    count = (device.screenWidthDp / (recommendCardWidth + cardSpacing).value).toInt() + 2
                 )
             }
             repeat(3) {
                 item {
                     PlaylistBlockShimmer(
-                        count = 4
+                        isLandscape = device.isLandscape,
                     )
                 }
             }
@@ -71,13 +75,15 @@ fun HomeShimmer(contentPadding: PaddingValues) {
 private fun RecommendRowShimmer(
     cardWidth: androidx.compose.ui.unit.Dp,
     cardHeight: androidx.compose.ui.unit.Dp,
+    cardSpacing: androidx.compose.ui.unit.Dp,
     count: Int = 3
 ) {
     Column {
         TitleShimmer()
         LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(HomeCardSpacing),
-            contentPadding = PaddingValues(horizontal = HomeRowHorizontalPadding)
+            modifier = Modifier.fillMaxWidth().glasmioHorizontalEdgeToEdge().swipeBackExcluded(),
+            horizontalArrangement = Arrangement.spacedBy(cardSpacing),
+            contentPadding = glasmioHorizontalContentPadding(PaddingValues(horizontal = HomeRowHorizontalPadding))
         ) {
             items(count) {
                 RecommendCardShimmer(cardWidth, cardHeight)
@@ -96,20 +102,24 @@ private fun RecommendCardShimmer(
             .size(cardWidth, cardHeight)
             .clip(ContinuousRoundedRectangle(RecommendCardCornerRadius))
             .background(shimmerColor)
+            .homeArtworkBorder(ContinuousRoundedRectangle(RecommendCardCornerRadius))
     )
 }
 
 @Composable
 private fun PlaylistBlockShimmer(
-    count: Int = 4
+    isLandscape: Boolean,
 ) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
-        val cardSize = homePlaylistCardSize(maxWidth)
+        val cardSize = homePlaylistCardSize(isLandscape)
+        val cardSpacing = homeCardSpacing(isLandscape)
+        val count = (maxWidth / (cardSize + cardSpacing)).toInt() + 2
         Column {
             TitleShimmer()
             LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(HomeCardSpacing),
-                contentPadding = PaddingValues(horizontal = HomeRowHorizontalPadding)
+                modifier = Modifier.fillMaxWidth().glasmioHorizontalEdgeToEdge().swipeBackExcluded(),
+                horizontalArrangement = Arrangement.spacedBy(cardSpacing),
+                contentPadding = glasmioHorizontalContentPadding(PaddingValues(horizontal = HomeRowHorizontalPadding))
             ) {
                 items(count) {
                     PlaylistCardShimmer(cardSize)

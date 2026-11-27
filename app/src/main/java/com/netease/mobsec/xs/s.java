@@ -85,8 +85,14 @@ public class s {
             connection.setFixedLengthStreamingMode(bArr.length);
             try (java.io.OutputStream out = connection.getOutputStream()) { out.write(bArr); }
             if (connection.getResponseCode() != 200) return null;
-            try (java.io.InputStream in = connection.getInputStream()) {
-                return new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            try (java.io.InputStream in = connection.getInputStream();
+                 java.io.ByteArrayOutputStream body = new java.io.ByteArrayOutputStream()) {
+                byte[] buffer = new byte[8192];
+                int count;
+                while ((count = in.read(buffer)) != -1) {
+                    body.write(buffer, 0, count);
+                }
+                return new String(body.toByteArray(), java.nio.charset.StandardCharsets.UTF_8);
             }
         } catch (Exception error) { return null; }
         finally { if (connection != null) connection.disconnect(); }

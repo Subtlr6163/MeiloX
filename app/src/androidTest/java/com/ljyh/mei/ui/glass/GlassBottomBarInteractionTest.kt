@@ -1,18 +1,63 @@
 package com.ljyh.mei.ui.glass
 
+import io.github.neoruaa.glasmio.core.GlassAppearance
+import io.github.neoruaa.glasmio.core.LocalGlassAppearance
+import io.github.neoruaa.glasmio.core.LocalGlassColors
+import io.github.neoruaa.glasmio.core.defaultGlassColors
+import io.github.neoruaa.glasmio.glass.BottomContactLensTransform
+import io.github.neoruaa.glasmio.glass.BottomControlContact
+import io.github.neoruaa.glasmio.glass.BottomNavigationContact
+import io.github.neoruaa.glasmio.glass.GlassPressHighlight
+import io.github.neoruaa.glasmio.glass.GlassSurface
+import io.github.neoruaa.glasmio.glass.GlassSurfaceStyle
+import io.github.neoruaa.glasmio.glass.GraphicsLayerBlockScope
+import io.github.neoruaa.glasmio.glass.LiquidContactCapsule
+import io.github.neoruaa.glasmio.glass.LiquidContactShape
+import io.github.neoruaa.glasmio.glass.LiquidMenuContour
+import io.github.neoruaa.glasmio.glass.LiquidMenuContourWorkspace
+import io.github.neoruaa.glasmio.glass.LiquidMenuMorphMotion
+import io.github.neoruaa.glasmio.glass.LocalBottomControlContact
+import io.github.neoruaa.glasmio.glass.NavigationDropShadowRenderer
+import io.github.neoruaa.glasmio.glass.NavigationInnerShadowRenderer
+import io.github.neoruaa.glasmio.glass.clipGlassShape
+import io.github.neoruaa.glasmio.glass.drawNavigationGlassMaterial
+import io.github.neoruaa.glasmio.glass.expandedLiquidMenuShadowHole
+import io.github.neoruaa.glasmio.glass.liquidContactShape
+import io.github.neoruaa.glasmio.glass.navigationContactLens
+import io.github.neoruaa.glasmio.glass.navigationGlassBackground
+import io.github.neoruaa.glasmio.glass.navigationLensSourceDropShadow
+import io.github.neoruaa.glasmio.glass.navigationShadowLiftEffect
+import io.github.neoruaa.glasmio.glass.rememberBottomControlContactMember
+import io.github.neoruaa.glasmio.glass.rememberGlassMorphRenderer
+import io.github.neoruaa.glasmio.glass.rememberMorphingNavigationGlass
+import io.github.neoruaa.glasmio.glass.rememberNavigationInnerShadows
+import io.github.neoruaa.glasmio.icons.SfSymbol
+import io.github.neoruaa.glasmio.scaffold.GlasmioPinnedListPage
+import io.github.neoruaa.glasmio.ui.GlasmioNavigationBar
+import io.github.neoruaa.glasmio.ui.GlasmioTabItem
+
 import android.graphics.RenderNode
+import android.content.res.Configuration
+import android.graphics.Region
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
@@ -34,8 +79,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.asAndroidPath
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PixelMap
+import androidx.compose.ui.graphics.drawscope.inset
+import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.toPixelMap
@@ -44,37 +95,67 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasScrollToNodeAction
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.swipe
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.util.lerp
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.kyant.backdrop.backdrops.emptyBackdrop
-import com.kyant.backdrop.backdrops.rememberCanvasBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.emptyBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.layerBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.rememberCanvasBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.rememberLayerBackdrop
+import io.github.neoruaa.glasmio.glass.render.drawBackdrop
 import com.kyant.capsule.ContinuousRoundedRectangle
 import com.kyant.shapes.Capsule
 import com.ljyh.mei.ui.component.sheet.BottomSheet
-import com.ljyh.mei.ui.component.sheet.BottomSheetState
+import io.github.neoruaa.glasmio.ui.GlasmioTabBar
+import com.ljyh.mei.ui.navigation.MeiloXPinnedListPage
+import com.ljyh.mei.R
+import com.ljyh.mei.ui.component.player.LocalPlayerRoamingModeLabel
+import com.ljyh.mei.ui.component.player.component.applemusic.Title
+import io.github.neoruaa.glasmio.scaffold.GlasmioFloatingSearchButton
+import io.github.neoruaa.glasmio.scaffold.GlasmioBottomSheetState
 import com.ljyh.mei.ui.component.sheet.LocalPlayerSheet
 import com.ljyh.mei.ui.component.sheet.PlayerArtworkGeometry
 import com.ljyh.mei.ui.component.sheet.PlayerSheetLayers
-import com.ljyh.mei.ui.component.sheet.collapsedAnchor
-import com.ljyh.mei.ui.component.sheet.expandedAnchor
-import com.ljyh.mei.ui.component.sheet.rememberBottomSheetState
+import io.github.neoruaa.glasmio.scaffold.collapsedAnchor
+import io.github.neoruaa.glasmio.scaffold.expandedAnchor
+import io.github.neoruaa.glasmio.scaffold.rememberGlasmioBottomSheetState
+import com.ljyh.mei.ui.component.sheet.rememberMiniPlayerChromeMotion
+import com.ljyh.mei.ui.component.sheet.MiniPlayerChromeMotion
 import com.ljyh.mei.ui.component.sheet.rememberPlayerSheetLayers
-import com.ljyh.mei.ui.liquidglass.InteractiveHighlight
+import com.ljyh.mei.ui.component.sheet.rememberPlayerTransitionGlassRenderer
+import com.ljyh.mei.ui.component.sheet.playerContainerRect
+import io.github.neoruaa.glasmio.glass.InteractiveHighlight
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -84,9 +165,9 @@ import org.junit.runner.RunWith
 class GlassBottomBarInteractionTest {
     @get:Rule val compose = createComposeRule()
 
-    private val home = GlassTabItem("home", "Home", SfSymbol.House)
-    private val radio = GlassTabItem("radio", "Radio", SfSymbol.RadioFilled)
-    private val library = GlassTabItem("library", "Library", SfSymbol.MusicNoteList)
+    private val home = GlasmioTabItem("home", "Home", SfSymbol.House)
+    private val radio = GlasmioTabItem("radio", "Radio", SfSymbol.RadioFilled)
+    private val library = GlasmioTabItem("library", "Library", SfSymbol.MusicNoteList)
     private val items = mutableStateOf(listOf(home, radio, library))
     private val selectedKey = mutableStateOf(home.key)
     private val compactProgress = mutableFloatStateOf(0f)
@@ -96,13 +177,716 @@ class GlassBottomBarInteractionTest {
     private var expansions = 0
 
     @Test
+    fun landscapeStatusBarSpaceStaysStableThroughHideAndShowFrames() {
+        val status = androidx.core.view.WindowInsetsCompat.Type.statusBars()
+        val navigation = androidx.core.view.WindowInsetsCompat.Type.navigationBars()
+        val ime = androidx.core.view.WindowInsetsCompat.Type.ime()
+        val reserved = androidx.core.graphics.Insets.of(0, 24, 0, 0)
+        val bottom = androidx.core.graphics.Insets.of(0, 0, 0, 16)
+        val keyboard = androidx.core.graphics.Insets.of(0, 0, 0, 280)
+        for (height in listOf(24, 12, 0, 8, 24)) {
+            val input = androidx.core.view.WindowInsetsCompat.Builder()
+                .setInsets(status, androidx.core.graphics.Insets.of(0, height, 0, 0))
+                .setInsetsIgnoringVisibility(status, reserved)
+                .setVisible(status, height == 24)
+                .setInsets(navigation, bottom)
+                .setInsets(ime, keyboard)
+                .build()
+            val output = com.ljyh.mei.applyPageTopInsets(input, landscape = true)
+            assertEquals(reserved, output.getInsets(status))
+            assertEquals(input.isVisible(status), output.isVisible(status))
+            assertEquals(bottom, output.getInsets(navigation))
+            assertEquals(keyboard, output.getInsets(ime))
+            assertSame(input, com.ljyh.mei.applyPageTopInsets(input, landscape = false))
+        }
+    }
+
+    @Test
+    fun floatingWindowCaptionSharesThePageTopInsetWithTheStatusBar() {
+        val status = androidx.core.view.WindowInsetsCompat.Type.statusBars()
+        val caption = androidx.core.view.WindowInsetsCompat.Type.captionBar()
+        val statusInsets = androidx.core.graphics.Insets.of(0, 24, 0, 0)
+        val captionInsets = androidx.core.graphics.Insets.of(0, 40, 0, 0)
+        val fullscreen = androidx.core.view.WindowInsetsCompat.Builder()
+            .setInsets(status, statusInsets)
+            .setInsetsIgnoringVisibility(status, statusInsets)
+            .build()
+        for (statusHeight in listOf(0, 24)) {
+            val floating = androidx.core.view.WindowInsetsCompat.Builder(fullscreen)
+                .setInsets(status, androidx.core.graphics.Insets.of(0, statusHeight, 0, 0))
+                .setInsets(caption, captionInsets)
+                .build()
+            for (landscape in listOf(false, true)) {
+                val output = com.ljyh.mei.applyPageTopInsets(floating, landscape)
+                assertEquals(captionInsets, output.getInsets(status))
+                assertEquals(captionInsets, output.getInsets(caption))
+                assertEquals(captionInsets, output.getInsets(status or caption))
+            }
+        }
+        assertSame(fullscreen, com.ljyh.mei.applyPageTopInsets(fullscreen, landscape = false))
+    }
+
+    @Test
+    fun landscapeTabsKeepSearchVisibleDuringTapAndDragSelection() {
+        glassAppearance.value = GlassAppearance(liquidGlassEnabled = true)
+        val tabs = (0..2).map { GlasmioTabItem("tab$it", if (it == 2) "Longer Tab 2" else "Tab $it", SfSymbol.House) }
+        val selection = mutableStateOf(tabs.first().key)
+        var searches = 0
+        var searchLabel = ""
+        compose.setContent {
+            searchLabel = androidx.compose.ui.res.stringResource(R.string.app_tab_search)
+            CompositionLocalProvider(
+                LocalGlassAppearance provides glassAppearance.value,
+                LocalGlassColors provides defaultGlassColors(false),
+            ) {
+                GlasmioTabBar(tabs, selection.value, { selection.value = it }, { searches++; selection.value = "search" }, "search",
+                    Modifier.widthIn(max = 400.dp).testTag("landscapeTabs"), searchLabel = searchLabel)
+            }
+        }
+        val restingBar = compose.onNodeWithTag("landscapeTabs").fetchSemanticsNode().boundsInRoot
+        val firstCell = compose.onNodeWithContentDescription("Tab 0").fetchSemanticsNode().boundsInRoot
+        val lastCell = compose.onNodeWithContentDescription("Longer Tab 2").fetchSemanticsNode().boundsInRoot
+        assertTrue("Labels determine cell widths", lastCell.width > firstCell.width)
+        val indicator = compose.onNodeWithTag("LandscapeNavigationIndicator", useUnmergedTree = true)
+            .fetchSemanticsNode().boundsInRoot
+        val inset = firstCell.top - restingBar.top
+        assertEquals(inset, indicator.left - restingBar.left, 1f)
+        assertEquals(firstCell.width, indicator.width, 1f)
+        assertEquals(inset, restingBar.bottom - indicator.bottom, 1f)
+        val pressPoint = firstCell.center - restingBar.topLeft
+        compose.mainClock.autoAdvance = false
+        try {
+            compose.onNodeWithTag("landscapeTabs").performTouchInput { down(pressPoint) }
+            compose.mainClock.advanceTimeBy(500L)
+            val pressedBar = compose.onNodeWithTag("landscapeTabs").fetchSemanticsNode().boundsInRoot
+            assertEquals("The layout stays fixed while the native platter expands", restingBar, pressedBar)
+            val lens = compose.onNodeWithTag("LandscapeNavigationLiftedLens", useUnmergedTree = true)
+                .fetchSemanticsNode().boundsInRoot
+            assertTrue("The lifted lens can rise above the platter", lens.top < restingBar.top)
+            assertTrue("The lifted lens can extend below the platter", lens.bottom > restingBar.bottom)
+            compose.onNodeWithTag("landscapeTabs").performTouchInput { up() }
+            compose.mainClock.advanceTimeBy(1000L)
+            val releasedLens = compose.onNodeWithTag("LandscapeNavigationLiftedLens", useUnmergedTree = true)
+                .fetchSemanticsNode().boundsInRoot
+            assertEquals(indicator.height, releasedLens.height, 1f)
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
+        compose.onNodeWithContentDescription(searchLabel).assertIsDisplayed().performClick()
+        compose.runOnIdle { selection.value = tabs.last().key }
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Longer Tab 2").assertIsDisplayed().performClick()
+        val bar = compose.onNodeWithTag("landscapeTabs").fetchSemanticsNode().boundsInRoot
+        val first = compose.onNodeWithContentDescription("Tab 0").fetchSemanticsNode().boundsInRoot.center - bar.topLeft
+        val last = compose.onNodeWithContentDescription("Longer Tab 2").fetchSemanticsNode().boundsInRoot.center - bar.topLeft
+        compose.onNodeWithTag("landscapeTabs").performTouchInput { swipe(last, first, 500) }
+        compose.waitForIdle()
+        compose.runOnIdle { assertEquals(tabs.first().key, selection.value) }
+        val search = compose.onNodeWithContentDescription(searchLabel).fetchSemanticsNode().boundsInRoot.center - bar.topLeft
+        compose.onNodeWithTag("landscapeTabs").performTouchInput { swipe(first, search, 500) }
+        compose.waitForIdle()
+        compose.runOnIdle {
+            assertEquals("search", selection.value)
+            assertEquals(2, searches)
+        }
+    }
+
+    @Test
+    fun landscapeHidesPageHeadingsAndPortraitRestoresThem() {
+        val landscape = mutableStateOf(true)
+        compose.setContent {
+            val configuration = Configuration(LocalConfiguration.current).apply {
+                screenWidthDp = if (landscape.value) 1000 else 600
+                screenHeightDp = if (landscape.value) 600 else 1000
+            }
+            CompositionLocalProvider(
+                LocalConfiguration provides configuration,
+                LocalGlassAppearance provides glassAppearance.value,
+                LocalGlassColors provides defaultGlassColors(false),
+            ) {
+                MeiloXPinnedListPage("Page heading", onNavigateBack = {}) {
+                    item { androidx.compose.material3.Text("Page content") }
+                }
+            }
+        }
+        compose.onNodeWithText("Page heading").assertDoesNotExist()
+        compose.onNodeWithText("Page content").assertIsDisplayed()
+        compose.runOnIdle { landscape.value = false }
+        compose.onNode(hasText("Page heading") and hasAnyAncestor(hasScrollToNodeAction())).assertIsDisplayed()
+    }
+
+    @Test
+    fun roamingTitleLabelKeepsArtistStyleAndFollowsTheTitle() {
+        val title = mutableStateOf("Track")
+        val mode = mutableStateOf<String?>(null)
+        val containerWidth = mutableStateOf(320.dp)
+        val fontScale = mutableFloatStateOf(1f)
+        var density = 1f
+        compose.setContent {
+            density = LocalDensity.current.density
+            MaterialTheme {
+                CompositionLocalProvider(
+                    LocalPlayerRoamingModeLabel provides mode.value,
+                    LocalDensity provides Density(density, fontScale.floatValue),
+                ) {
+                    Title(
+                        title = title.value, subTitle = "Artist", isLiked = false,
+                        onLikeClick = {}, onMoreClick = {}, onTitleClick = {},
+                        modifier = Modifier.width(containerWidth.value),
+                        textModifier = Modifier.testTag("roamingMetadata"),
+                        showLikeButton = false, marqueeEnabled = false,
+                    )
+                }
+            }
+        }
+        fun bounds(text: String) = compose.onNodeWithText(text, useUnmergedTree = true)
+            .fetchSemanticsNode().boundsInRoot
+        fun textLayout(text: String) = ArrayList<TextLayoutResult>().also { results ->
+            compose.onNodeWithText(text, useUnmergedTree = true)
+                .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(results) }
+        }.single()
+        fun textStyle(text: String) = textLayout(text).layoutInput.style
+        val normalHeight = compose.onNodeWithTag("roamingMetadata", useUnmergedTree = true)
+            .fetchSemanticsNode().boundsInRoot.height
+        compose.runOnIdle { mode.value = "Explore Mode" }
+        val label = bounds("Explore Mode")
+        assertEquals("Short titles keep an 8dp gap before the mode label", 8f * density,
+            label.left - bounds("Track").right, density)
+        val artistStyle = textStyle("Artist")
+        val labelStyle = textStyle("Explore Mode")
+        assertEquals(artistStyle.fontSize, labelStyle.fontSize)
+        assertEquals(artistStyle.fontWeight, labelStyle.fontWeight)
+        assertEquals(artistStyle.color, labelStyle.color)
+        assertEquals(artistStyle.shadow, labelStyle.shadow)
+        assertEquals("The mode label does not add a metadata line", normalHeight,
+            compose.onNodeWithTag("roamingMetadata", useUnmergedTree = true)
+                .fetchSemanticsNode().boundsInRoot.height, density)
+        compose.runOnIdle { title.value = "A long track title that must keep its scrolling viewport" }
+        val metadata = compose.onNodeWithTag("roamingMetadata", useUnmergedTree = true)
+            .fetchSemanticsNode().boundsInRoot
+        val longLabel = bounds("Explore Mode")
+        assertTrue("The mode remains visible beside a long title", longLabel.width > 0f && longLabel.right <= metadata.right + density)
+        assertTrue("The title viewport stays separate from the mode", bounds(title.value).right <= longLabel.left - 7f * density)
+        compose.runOnIdle { mode.value = null }
+        assertTrue("Ordinary playback hides the mode label", compose.onAllNodesWithText("Explore Mode", useUnmergedTree = true)
+            .fetchSemanticsNodes().isEmpty())
+        compose.runOnIdle {
+            containerWidth.value = 180.dp
+            fontScale.floatValue = 2f
+        }
+        val narrowNormalHeight = compose.onNodeWithTag("roamingMetadata", useUnmergedTree = true)
+            .fetchSemanticsNode().boundsInRoot.height
+        val longMode = "A very long scene name that must not replace the track title Mode"
+        compose.runOnIdle { mode.value = longMode }
+        val narrowMetadata = compose.onNodeWithTag("roamingMetadata", useUnmergedTree = true)
+            .fetchSemanticsNode().boundsInRoot
+        val narrowTitle = bounds(title.value)
+        val narrowMode = bounds(longMode)
+        assertTrue("Large scene names leave a nonzero title viewport", narrowTitle.width > 0f)
+        assertTrue("A narrow title remains separate from the mode", narrowTitle.right <= narrowMode.left - 7f * density)
+        assertTrue("The mode uses at most 45 percent of the remaining metadata width",
+            narrowMode.width <= (narrowMetadata.width - 8f * density) * 0.45f + density)
+        assertTrue("A long mode label is ellipsized rather than hiding the title", textLayout(longMode).isLineEllipsized(0))
+        assertTrue("The capped mode stays within the metadata", narrowMode.right <= narrowMetadata.right + density)
+        assertEquals("Large mode text does not add a metadata line", narrowNormalHeight,
+            narrowMetadata.height, density)
+    }
+
+    @Test
+    fun searchInsetsUpdateScrollPaddingWithoutRebuildingListContent() {
+        val bottomInset = mutableFloatStateOf(20f)
+        val insets = object : PaddingValues {
+            override fun calculateLeftPadding(layoutDirection: LayoutDirection) = 0.dp
+            override fun calculateTopPadding() = 0.dp
+            override fun calculateRightPadding(layoutDirection: LayoutDirection) = 0.dp
+            override fun calculateBottomPadding() = bottomInset.floatValue.dp
+        }
+        lateinit var listState: LazyListState
+        var contentBuilds = 0
+        var density = 1f
+        compose.setContent {
+            listState = rememberLazyListState()
+            density = LocalDensity.current.density
+            MaterialTheme {
+                CompositionLocalProvider(
+                    LocalGlassAppearance provides GlassAppearance(reduceTransparency = true),
+                    LocalGlassColors provides defaultGlassColors(isDark = false),
+                ) {
+                    GlasmioPinnedListPage(
+                        title = "Search",
+                        bottomPadding = 0.dp,
+                        bottomPaddingValues = insets,
+                        modifier = Modifier.size(300.dp, 400.dp),
+                        listState = listState,
+                        showsLargeTitle = false,
+                    ) {
+                        contentBuilds++
+                        items(20) { Box(Modifier.size(100.dp, 40.dp)) }
+                    }
+                }
+            }
+        }
+        compose.waitForIdle()
+        var initialBuilds = 0
+        var initialPadding = 0
+        compose.runOnIdle {
+            initialBuilds = contentBuilds
+            initialPadding = listState.layoutInfo.afterContentPadding
+            bottomInset.floatValue = 160f
+        }
+        compose.waitForIdle()
+        compose.runOnIdle {
+            assertEquals("IME padding must remain a measurement read", initialBuilds, contentBuilds)
+            assertEquals("The original scrollable bottom reservation is preserved",
+                initialPadding + (140f * density).roundToInt(), listState.layoutInfo.afterContentPadding)
+        }
+    }
+
+    @Test
+    fun homeSearchMorphUsesNativeGlasmioHitAndSymbolSizes() {
+        val progress = mutableFloatStateOf(0f)
+        val description = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
+            .targetContext.getString(com.ljyh.mei.R.string.app_tab_search)
+        var density = 1f
+        var clicks = 0
+        compose.setContent {
+            density = LocalDensity.current.density
+            val backdrop = rememberCanvasBackdrop { drawRect(Color.White) }
+            MaterialTheme {
+                CompositionLocalProvider(
+                    LocalGlassAppearance provides GlassAppearance(reduceTransparency = true),
+                    LocalGlassColors provides defaultGlassColors(isDark = false),
+                ) {
+                    Box(Modifier.size(80.dp), contentAlignment = Alignment.Center) {
+                        GlasmioFloatingSearchButton(
+                            compactProgress = progress,
+                            backdrop = backdrop,
+                            contentDescription = description,
+                            onClick = { clicks++ },
+                        )
+                    }
+                }
+            }
+        }
+        listOf(0f to (62f to 28f), 0.5f to (55f to 28f), 1f to (48f to 28f),
+            0.5f to (55f to 28f), 0f to (62f to 28f)).forEach { (value, sizes) ->
+            compose.runOnIdle { progress.floatValue = value }
+            compose.waitForIdle()
+            val hitBounds = compose.onNodeWithContentDescription(description).fetchSemanticsNode().boundsInRoot
+            val iconBounds = compose.onNodeWithContentDescription(description, useUnmergedTree = true)
+                .fetchSemanticsNode().boundsInRoot
+            assertEquals("The live search surface keeps its specified width at $value", sizes.first * density, hitBounds.width, 1f)
+            assertEquals("The live search surface keeps its specified height at $value", sizes.first * density, hitBounds.height, 1f)
+            assertEquals("SF Symbols keeps its live layout width at $value", sizes.second * density, iconBounds.width, 1f)
+            assertEquals("SF Symbols keeps its live layout height at $value", sizes.second * density, iconBounds.height, 1f)
+            assertEquals("The search glyph stays centered during the morph", hitBounds.center.x, iconBounds.center.x, 1f)
+            assertEquals("The search glyph stays centered during the morph", hitBounds.center.y, iconBounds.center.y, 1f)
+        }
+        compose.onNodeWithContentDescription(description).performTouchInput { click() }
+        compose.runOnIdle { assertEquals("The live search action remains clickable", 1, clicks) }
+    }
+
+    @Test
+    fun materialOwnerRebindingRetainsContactGeometryAndUsesLiveCallbacks() {
+        val owner = mutableStateOf(0)
+        val inset = mutableFloatStateOf(0f)
+        val sourceScale = mutableStateOf(Offset(0.94f, 0.86f))
+        val surfaceWidth = mutableFloatStateOf(90f)
+        val boundsCalls = IntArray(2)
+        val highlightCalls = IntArray(2)
+        val visualCalls = IntArray(2)
+        val visualBounds = arrayOfNulls<Rect>(2)
+        var contact: BottomControlContact? = null
+        var density = 1f
+        compose.setContent {
+            val currentOwner = owner.value
+            density = LocalDensity.current.density
+            val surfaceShape = remember { Capsule() }
+            val backdrop = rememberCanvasBackdrop { drawRect(Color.Gray) }
+            CompositionLocalProvider(
+                LocalGlassAppearance provides GlassAppearance(reduceTransparency = true),
+                LocalGlassColors provides defaultGlassColors(isDark = false),
+            ) {
+                Column {
+                    BottomNavigationContact(backdrop, Modifier.size(240.dp, 56.dp)) {
+                        contact = LocalBottomControlContact.current
+                        val first = rememberBottomControlContactMember(
+                            visualBounds = { size ->
+                                boundsCalls[currentOwner]++
+                                Rect(inset.floatValue, 0f, size.width, size.height)
+                            },
+                            materialPressProgress = { 0f },
+                            highlight = { GlassPressHighlight() },
+                            lensSourceActive = { true },
+                            lensSourceScale = { sourceScale.value },
+                        )
+                        Box(Modifier.size(160.dp, 56.dp).onGloballyPositioned { first?.updateCoordinates(it) })
+                        Spacer(Modifier.width(8.dp))
+                        val second = rememberBottomControlContactMember(
+                            visualBounds = { Rect(Offset.Zero, it) },
+                            materialPressProgress = { 0f },
+                            highlight = { GlassPressHighlight() },
+                        )
+                        Box(Modifier.size(56.dp).onGloballyPositioned { second?.updateCoordinates(it) })
+                    }
+                    GlassSurface(
+                        modifier = Modifier.size(surfaceWidth.floatValue.dp, 44.dp),
+                        backdrop = backdrop,
+                        shape = surfaceShape,
+                        pressHighlight = {
+                            highlightCalls[currentOwner]++
+                            GlassPressHighlight()
+                        },
+                        onVisualBoundsChanged = { bounds, _ ->
+                            visualCalls[currentOwner]++
+                            visualBounds[currentOwner] = bounds
+                        },
+                    ) {}
+                }
+            }
+        }
+        compose.waitForIdle()
+        lateinit var initialSurface: io.github.neoruaa.glasmio.glass.BottomContactSurface
+        compose.runOnIdle {
+            initialSurface = checkNotNull(contact?.surface?.value)
+            assertTrue("The material must have rendered its original owner", visualCalls[0] > 0)
+            assertTrue("The external highlight must have read its original owner", highlightCalls[0] > 0)
+            owner.value = 1
+        }
+        compose.waitForIdle()
+        var retiredBoundsCalls = 0
+        var retiredHighlightCalls = 0
+        var retiredVisualCalls = 0
+        compose.runOnIdle {
+            val rebound = checkNotNull(contact?.surface?.value)
+            assertSame("Unchanged callback geometry keeps its complete material snapshot", initialSurface, rebound)
+            assertTrue("The current geometry owner is evaluated even when its pixels are unchanged", boundsCalls[1] > 0)
+            assertTrue("The current visual owner is called after rebinding", visualCalls[1] > 0)
+            assertTrue("The current external highlight owner is used", highlightCalls[1] > 0)
+            assertEquals(visualBounds[0], visualBounds[1])
+            retiredBoundsCalls = boundsCalls[0]
+            retiredHighlightCalls = highlightCalls[0]
+            retiredVisualCalls = visualCalls[0]
+            inset.floatValue = 6f
+            surfaceWidth.floatValue = 102f
+        }
+        compose.waitForIdle()
+        lateinit var resizedSurface: io.github.neoruaa.glasmio.glass.BottomContactSurface
+        compose.runOnIdle {
+            val current = checkNotNull(contact)
+            resizedSurface = checkNotNull(current.surface.value)
+            assertNotSame("A changed contour must replace the material snapshot", initialSurface.shape, resizedSurface.shape)
+            assertEquals("The live inset reaches the contact geometry", 6f, current.members.first().capsule()!!.bounds.left, 0.01f)
+            assertEquals("The visual callback receives the current layout", 102f * density, visualBounds[1]!!.width, 1f)
+            assertEquals("Retired geometry callbacks cannot be retained", retiredBoundsCalls, boundsCalls[0])
+            assertEquals("Retired highlight callbacks cannot be retained", retiredHighlightCalls, highlightCalls[0])
+            assertEquals("Retired visual callbacks cannot be retained", retiredVisualCalls, visualCalls[0])
+            sourceScale.value = Offset(0.91f, 0.8f)
+        }
+        compose.waitForIdle()
+        compose.runOnIdle {
+            val current = checkNotNull(contact)
+            assertEquals("The sampled material uses the current transform", sourceScale.value, current.lensTransform.value!!.scale)
+            assertNotSame("Changed refraction coverage cannot reuse the old material snapshot", resizedSurface.shape, current.surface.value!!.shape)
+        }
+    }
+
+    @Test
+    fun contactLensSamplesTheNeighborWhilePreservingItsCenter() {
+        val contactDirection = mutableFloatStateOf(0f)
+        val backing = Color(0xFF203040)
+        compose.setContent {
+            val backdrop = rememberLayerBackdrop()
+            Box(Modifier.size(300.dp, 140.dp)) {
+                Canvas(Modifier.matchParentSize().layerBackdrop(backdrop)) {
+                    drawRect(backing)
+                    drawRect(Color.Red, Offset(60.dp.toPx(), 20.dp.toPx()), Size(35.dp.toPx(), 100.dp.toPx()))
+                    drawRect(Color.Red, Offset(205.dp.toPx(), 20.dp.toPx()), Size(35.dp.toPx(), 100.dp.toPx()))
+                    drawRect(Color.White, Offset(149.dp.toPx(), 60.dp.toPx()), Size(2.dp.toPx(), 20.dp.toPx()))
+                    drawRect(Color.White, Offset(145.dp.toPx(), 69.dp.toPx()), Size(10.dp.toPx(), 2.dp.toPx()))
+                }
+                Box(
+                    Modifier.offset(100.dp, 20.dp).size(100.dp)
+                        .drawBackdrop(
+                            backdrop = backdrop,
+                            shape = { Capsule() },
+                            effects = { navigationContactLens(10.dp.toPx(), 14.dp.toPx(), contactDirection.floatValue) },
+                            highlight = null,
+                            shadow = null,
+                        ).testTag("contactSamplingLens"),
+                )
+            }
+        }
+        compose.waitForIdle()
+        val baseline = compose.onNodeWithTag("contactSamplingLens").captureToImage().toPixelMap()
+        fun redSamples(pixels: androidx.compose.ui.graphics.PixelMap, right: Boolean): Int {
+            val edge = (pixels.width * 0.1f).roundToInt()
+            val start = if (right) pixels.width - edge else 0
+            var count = 0
+            for (x in start until start + edge) {
+                for (y in pixels.height * 2 / 5 until pixels.height * 3 / 5) {
+                    val color = pixels[x, y]
+                    if (color.red > 0.65f && color.red > color.green * 1.7f) count++
+                }
+            }
+            return count
+        }
+        assertEquals("The inward lens cannot reach either neighboring marker", 0,
+            redSamples(baseline, false) + redSamples(baseline, true))
+        for (direction in listOf(1f, -1f)) {
+            compose.runOnIdle { contactDirection.floatValue = direction }
+            compose.waitForIdle()
+            val actual = compose.onNodeWithTag("contactSamplingLens").captureToImage().toPixelMap()
+            assertTrue("Contact refraction reaches the neighboring surface",
+                redSamples(actual, direction > 0f) > actual.height / 3)
+            assertEquals("The opposite edge retains its original inward refraction", 0,
+                redSamples(actual, direction < 0f))
+            for (x in actual.width * 2 / 5 until actual.width * 3 / 5) {
+                for (y in actual.height * 2 / 5 until actual.height * 3 / 5) {
+                    assertEquals("The central marker keeps its position and scale", baseline[x, y], actual[x, y])
+                }
+            }
+        }
+    }
+
+    @Test
+    fun bottomControlContactPreservesIndependentBodiesAcrossProximityAndUnequalScales() {
+        val nav = LiquidContactCapsule(Size(280f, 60f), Rect(20f, 20f, 328f, 92f))
+        fun search(gap: Float, verticalOffset: Float = 0f) = LiquidContactCapsule(
+            Size(60f, 60f),
+            Rect(328f + gap, 24f + verticalOffset, 392f + gap, 88f + verticalOffset),
+        )
+        fun outline(first: LiquidContactCapsule, second: LiquidContactCapsule, distance: Float = 8f): Outline.Generic {
+            val shape = liquidContactShape(first, second, distance)
+            assertNotNull(shape)
+            return shape!!.createOutline(Size(500f, 160f), LayoutDirection.Ltr, Density(1f)) as Outline.Generic
+        }
+        fun region(outline: Outline.Generic) = Region().apply {
+            setPath(outline.path.asAndroidPath(), Region(0, 0, 500, 160))
+        }
+        fun bodyInterior(capsule: LiquidContactCapsule): Region {
+            val native = Capsule().createOutline(capsule.size, LayoutDirection.Ltr, Density(1f))
+            val nativePath = Path().apply {
+                when (native) {
+                    is Outline.Generic -> addPath(native.path)
+                    is Outline.Rounded -> addRoundRect(native.roundRect)
+                    is Outline.Rectangle -> addRect(native.rect)
+                }
+            }
+            val path = android.graphics.Path(nativePath.asAndroidPath()).apply {
+                transform(android.graphics.Matrix().apply {
+                    setScale(capsule.bounds.width / capsule.size.width, capsule.bounds.height / capsule.size.height)
+                    postTranslate(capsule.bounds.left, capsule.bounds.top)
+                })
+            }
+            val body = Region().apply { setPath(path, Region(0, 0, 500, 160)) }
+            // Leave a one-pixel raster margin; the original circular body must not be carved away.
+            return Region(body).apply {
+                for (dx in -1..1) for (dy in -1..1) {
+                    op(Region(body).apply { translate(dx, dy) }, Region.Op.INTERSECT)
+                }
+            }
+        }
+
+        assertNull("The resting gap must keep both controls separate", liquidContactShape(nav, search(8f), 8f))
+        assertNull("Layout rounding must not activate contact", liquidContactShape(nav, search(7.999f), 8f))
+        assertNull("Distant controls have no connection", liquidContactShape(nav, search(40f), 8f))
+        assertNull("Vertical separation has no connection", liquidContactShape(nav, search(0f, 90f), 8f))
+
+        for (distance in listOf(4f, 8f)) for (gap in listOf(distance * 0.875f, distance * 0.375f, 0f, -distance * 0.5f)) {
+            for (verticalOffset in listOf(-6f, 0f, 6f)) {
+                val other = search(gap, verticalOffset)
+                val visibleShape = liquidContactShape(nav, other, distance) as LiquidContactShape
+                val connected = visibleShape.createOutline(
+                    Size(500f, 160f), LayoutDirection.Ltr, Density(1f),
+                ) as Outline.Generic
+                val fill = region(connected)
+                val bounds = connected.path.getBounds()
+                assertEquals(nav.bounds.left, bounds.left, 0.01f)
+                assertEquals(other.bounds.right, bounds.right, 0.01f)
+                assertTrue("Navigation body remains filled", fill.contains(174, 56))
+                assertTrue("The native flat top remains intact", fill.contains(174, 21))
+                assertTrue("Search body remains filled", fill.contains(other.bounds.center.x.toInt(), other.bounds.center.y.toInt()))
+                for (body in listOf(nav, other)) {
+                    val missing = bodyInterior(body).apply { op(fill, Region.Op.DIFFERENCE) }
+                    assertTrue("Contact must preserve the native body at gap=$gap, offset=$verticalOffset", missing.isEmpty)
+                }
+                assertTrue("Native outer corners remain rounded", !fill.contains(21, 21))
+                val neckX = ((nav.bounds.right + other.bounds.left) / 2f).toInt()
+                assertTrue("Contact must not flatten into a merged capsule", !fill.contains(neckX, 25))
+                if (gap > distance / 2f) {
+                    val contours = android.graphics.PathMeasure(connected.path.asAndroidPath(), false)
+                    var count = 1
+                    while (contours.nextContour()) count++
+                    assertEquals("Approaching bodies stay closed without a zero-width connector", 2, count)
+                }
+                if (gap < distance / 2f) {
+                    val neckY = ((nav.bounds.center.y + other.bounds.center.y) / 2f).toInt()
+                    assertTrue("Nearby edges form a continuous neck", fill.contains(neckX, neckY))
+                    if (verticalOffset == 0f) {
+                        val column = (0 until 160).filter { fill.contains(neckX, it) }
+                        assertEquals("A centered contact must keep mirrored upper and lower necks",
+                            nav.bounds.center.y * 2f, (column.first() + column.last() + 1).toFloat(), 1f)
+                    }
+                }
+                val reversed = region(outline(other, nav, distance))
+                reversed.op(fill, Region.Op.XOR)
+                assertTrue("Physical input order must not change RTL geometry", reversed.isEmpty)
+
+                val originalPath = android.graphics.Path(connected.path.asAndroidPath())
+                val originalPoints = originalPath.approximate(0.001f)
+                val scale = Offset(0.91f, 0.84f)
+                val translation = Offset(7.5f, 3.25f)
+                val expectedPath = android.graphics.Path(originalPath).apply {
+                    transform(android.graphics.Matrix().apply {
+                        setScale(scale.x, scale.y)
+                        postTranslate(translation.x, translation.y)
+                    })
+                }
+                val expectedFill = Region().apply {
+                    setPath(expectedPath, Region(0, 0, 500, 160))
+                }
+                val hidden = visibleShape.withOutlineTransform(scale, translation).createOutline(
+                    Size(500f, 160f), LayoutDirection.Ltr, Density(1f),
+                ) as Outline.Generic
+                assertArrayEquals(
+                    "The hidden source applies the affine transform to the native contour",
+                    expectedPath.approximate(0.001f), hidden.path.asAndroidPath().approximate(0.001f), 0f,
+                )
+                val hiddenDifference = region(hidden).apply { op(expectedFill, Region.Op.XOR) }
+                assertTrue("The hidden source preserves the transformed filled contour", hiddenDifference.isEmpty)
+                assertArrayEquals(
+                    "Transforming the shared source must not mutate the visible native path",
+                    originalPoints, connected.path.asAndroidPath().approximate(0.001f), 0f,
+                )
+                assertEquals("The visible outline bounds remain unchanged", bounds, connected.path.getBounds())
+                val visibleDifference = region(connected).apply { op(fill, Region.Op.XOR) }
+                assertTrue("The visible filled contour remains unchanged", visibleDifference.isEmpty)
+
+                val rtlShape = liquidContactShape(other, nav, distance) as LiquidContactShape
+                val rtlVisible = rtlShape.createOutline(
+                    Size(500f, 160f), LayoutDirection.Rtl, Density(1f),
+                ) as Outline.Generic
+                val rtlHidden = rtlShape.withOutlineTransform(scale, translation).createOutline(
+                    Size(500f, 160f), LayoutDirection.Rtl, Density(1f),
+                ) as Outline.Generic
+                assertArrayEquals(
+                    "Reversed RTL inputs retain the same transformed native contour",
+                    expectedPath.approximate(0.001f), rtlHidden.path.asAndroidPath().approximate(0.001f), 0f,
+                )
+                assertArrayEquals(
+                    "The RTL visible path also remains independent of its hidden transform",
+                    originalPoints, rtlVisible.path.asAndroidPath().approximate(0.001f), 0f,
+                )
+            }
+        }
+        val contained = LiquidContactCapsule(Size(60f, 60f), Rect(220f, 26f, 280f, 86f))
+        assertTrue("Containment keeps a valid silhouette", region(outline(nav, contained)).contains(250, 56))
+    }
+
+    @Test
+    fun connectedLensSourceCarriesPressLightAcrossTheNeighbor() {
+        val light = mutableFloatStateOf(0f)
+        val direction = mutableStateOf(LayoutDirection.Ltr)
+        var contact: BottomControlContact? = null
+        var density = 1f
+        val backing = Color(0xFF303030)
+        compose.setContent {
+            density = LocalDensity.current.density
+            val backdrop = rememberCanvasBackdrop { drawRect(backing) }
+            CompositionLocalProvider(
+                LocalLayoutDirection provides direction.value,
+                LocalGlassAppearance provides GlassAppearance(),
+                LocalGlassColors provides defaultGlassColors(isDark = true),
+            ) {
+                Column(Modifier.background(backing).testTag("contactPressLightPreview"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    BottomNavigationContact(backdrop, Modifier.size(330.dp, 60.dp).testTag("visibleContactLight")) {
+                        contact = LocalBottomControlContact.current
+                        val nav = rememberBottomControlContactMember(
+                            visualBounds = { Rect(Offset.Zero, it) },
+                            materialPressProgress = { 1f },
+                            highlight = {
+                                GlassPressHighlight(light.floatValue,
+                                    Offset(if (direction.value == LayoutDirection.Ltr) 0.92f else 0.08f, 0.5f))
+                            },
+                            lensSourceActive = { true },
+                            lensSourceScale = { Offset(0.93f, 0.82f) },
+                            lensSourcePressProgress = { 1f },
+                        )
+                        Box(Modifier.size(260.dp, 60.dp).onGloballyPositioned { nav?.updateCoordinates(it) })
+                        Spacer(Modifier.width(1.dp))
+                        val search = rememberBottomControlContactMember(
+                            visualBounds = { Rect(Offset.Zero, it) },
+                            materialPressProgress = { 0f },
+                            highlight = { GlassPressHighlight() },
+                        )
+                        Box(Modifier.size(60.dp).onGloballyPositioned { search?.updateCoordinates(it) })
+                    }
+                    Canvas(Modifier.size(330.dp, 60.dp).testTag("sampledContactLight")) {
+                        drawRect(backing)
+                        contact?.let { drawLayer(it.materialBackdrop.graphicsLayer) }
+                    }
+                }
+            }
+        }
+        for (layoutDirection in listOf(LayoutDirection.Ltr, LayoutDirection.Rtl)) {
+            compose.runOnIdle {
+                direction.value = layoutDirection
+                light.floatValue = 0f
+            }
+            compose.waitForIdle()
+            val visibleBefore = compose.onNodeWithTag("visibleContactLight").captureToImage().toPixelMap()
+            val sampledBefore = compose.onNodeWithTag("sampledContactLight").captureToImage().toPixelMap()
+            lateinit var transform: BottomContactLensTransform
+            lateinit var points: List<Offset>
+            compose.runOnIdle {
+                val current = checkNotNull(contact)
+                assertTrue("The test must exercise an actual shared contact surface", current.connected.value)
+                transform = checkNotNull(current.lensTransform.value)
+                val nav = checkNotNull(current.members[0].capsule()).bounds
+                val search = checkNotNull(current.members[1].capsule()).bounds
+                val toRight = search.center.x > nav.center.x
+                val inset = 6f * density
+                points = listOf(
+                    Offset(if (toRight) nav.right - inset else nav.left + inset, nav.center.y),
+                    Offset(if (toRight) search.left + inset else search.right - inset, search.center.y),
+                    search.center,
+                )
+                light.floatValue = 1f
+            }
+            compose.waitForIdle()
+            val visibleAfter = compose.onNodeWithTag("visibleContactLight").captureToImage().toPixelMap()
+            val sampledAfter = compose.onNodeWithTag("sampledContactLight").captureToImage().toPixelMap()
+            if (layoutDirection == LayoutDirection.Ltr) {
+                val preview = compose.onNodeWithTag("contactPressLightPreview").captureToImage()
+                val context = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
+                java.io.File(context.cacheDir, "nav-contact-highlight-preview.png").outputStream().use {
+                    preview.asAndroidBitmap().compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+                }
+            }
+            fun delta(before: androidx.compose.ui.graphics.PixelMap, after: androidx.compose.ui.graphics.PixelMap, point: Offset): Float {
+                val x = point.x.toInt().coerceIn(0, before.width - 1)
+                val y = point.y.toInt().coerceIn(0, before.height - 1)
+                return (after[x, y].red - before[x, y].red) * 255f
+            }
+            points.forEachIndexed { index, point ->
+                val visible = delta(visibleBefore, visibleAfter, point)
+                val sampled = delta(sampledBefore, sampledAfter, transform.point(point))
+                val label = "$layoutDirection point=$index, visible=$visible, sampled=$sampled"
+                android.util.Log.i("ContactLightTest", "$label at=$point, before=${visibleBefore[point.x.toInt(), point.y.toInt()]}, after=${visibleAfter[point.x.toInt(), point.y.toInt()]}")
+                assertTrue("The visible press wash reaches the neighboring body: $label", visible >= 9f)
+                assertTrue("The sampled press wash must continue beyond Nav: $label", sampled >= 9f)
+                assertEquals("The sampled press light follows the shared affine transform: $label", visible, sampled, 2f)
+            }
+        }
+    }
+
+    @Test
     fun outerTabPressAnchorsOnlyTheRefractedSelectionAndOtherwiseScalesTheWholePanel() {
         showBar()
 
         fun iconBounds(): Map<String, Rect> = items.value.associate { item ->
-            // The separate selected item is painted after its transparent row placeholder.
-            item.key to compose.onAllNodesWithContentDescription(item.label, useUnmergedTree = true)
-                .fetchSemanticsNodes().last().boundsInRoot
+            item.key to visibleTabIconBounds(item)
         }
 
         fun assertRestingCenters(expected: Map<String, Rect>) {
@@ -144,8 +928,8 @@ class GlassBottomBarInteractionTest {
                             }
                         }
                         val pressed = iconBounds()
-                        // The 64dp panel expands by 16dp, independently of density.
-                        val scale = 1f + barBounds.height / (4f * barBounds.width)
+                        // Press expansion is a fixed 16dp, independent of the surface height.
+                        val scale = 1f + with(compose.density) { 16.dp.toPx() } / barBounds.width
                         before.filterKeys { !appearance.usesRefraction || it != selected.key }.forEach { (key, bounds) ->
                             val expectedCenter = barBounds.center.x +
                                 (bounds.center.x - barBounds.center.x) * scale
@@ -169,10 +953,6 @@ class GlassBottomBarInteractionTest {
         glassAppearance.value = GlassAppearance()
         showBar()
 
-        fun iconBounds(item: GlassTabItem<String>): Rect =
-            compose.onAllNodesWithContentDescription(item.label, useUnmergedTree = true)
-                .fetchSemanticsNodes().last().boundsInRoot
-
         try {
             listOf(LayoutDirection.Ltr, LayoutDirection.Rtl).forEach { direction ->
                 listOf(home, library).forEach { outgoing ->
@@ -185,10 +965,11 @@ class GlassBottomBarInteractionTest {
                     compose.waitForIdle()
                     val bar = compose.onNodeWithTag("bottomBar")
                     val barBounds = bar.fetchSemanticsNode().boundsInRoot
-                    val outgoingBefore = iconBounds(outgoing)
-                    val incomingBefore = iconBounds(incoming)
-                    val middleBefore = iconBounds(radio)
-                    val scale = 1f + barBounds.height / (4f * barBounds.width)
+                    val outgoingBefore = visibleTabIconBounds(outgoing)
+                    val incomingBefore = visibleTabIconBounds(incoming)
+                    val middleBefore = visibleTabIconBounds(radio)
+                    // Press expansion is a fixed 16dp, independent of the surface height.
+                    val scale = 1f + with(compose.density) { 16.dp.toPx() } / barBounds.width
                     val startX = outgoingBefore.center.x - barBounds.left
                     val toRight = incomingBefore.center.x > outgoingBefore.center.x
                     val destinationX = if (toRight) 2f * barBounds.width else -barBounds.width
@@ -199,11 +980,11 @@ class GlassBottomBarInteractionTest {
                     fun dragAwayAndAssert() {
                         bar.performTouchInput { moveTo(Offset(destinationX, center.y)) }
                         compose.mainClock.advanceTimeBy(700L)
-                        val commonShift = iconBounds(radio).center.x - middleBefore.center.x
+                        val commonShift = visibleTabIconBounds(radio).center.x - middleBefore.center.x
                         val expectedOutgoing = barBounds.center.x +
                             (outgoingBefore.center.x - barBounds.center.x) * scale + commonShift
-                        assertEquals("Departed icon follows the panel while held", expectedOutgoing, iconBounds(outgoing).center.x, 0.75f)
-                        assertEquals("Incoming icon is already centered before commit", incomingBefore.center.x + commonShift, iconBounds(incoming).center.x, 0.75f)
+                        assertEquals("Departed icon follows the panel while held", expectedOutgoing, visibleTabIconBounds(outgoing).center.x, 0.75f)
+                        assertEquals("Incoming icon is already centered before commit", incomingBefore.center.x + commonShift, visibleTabIconBounds(incoming).center.x, 0.75f)
                         compose.runOnIdle {
                             assertEquals(outgoing.key, selectedKey.value)
                             assertTrue("Dragging must not navigate", selections.isEmpty())
@@ -213,8 +994,8 @@ class GlassBottomBarInteractionTest {
                     dragAwayAndAssert()
                     bar.performTouchInput { moveTo(Offset(startX, center.y)) }
                     compose.mainClock.advanceTimeBy(700L)
-                    val commonShift = iconBounds(radio).center.x - middleBefore.center.x
-                    assertEquals("Reversing reanchors the original icon", outgoingBefore.center.x + commonShift, iconBounds(outgoing).center.x, 0.75f)
+                    val commonShift = visibleTabIconBounds(radio).center.x - middleBefore.center.x
+                    assertEquals("Reversing reanchors the original icon", outgoingBefore.center.x + commonShift, visibleTabIconBounds(outgoing).center.x, 0.75f)
                     dragAwayAndAssert()
                     bar.performTouchInput { up() }
                     compose.mainClock.autoAdvance = true
@@ -258,9 +1039,8 @@ class GlassBottomBarInteractionTest {
                         compose.waitForIdle()
                         val bar = compose.onNodeWithTag("bottomBar")
                         val barBounds = bar.fetchSemanticsNode().boundsInRoot
-                        fun center(item: GlassTabItem<String>): Offset {
-                            val icon = compose.onAllNodesWithContentDescription(item.label, useUnmergedTree = true)
-                                .fetchSemanticsNodes().last().boundsInRoot
+                        fun center(item: GlasmioTabItem<String>): Offset {
+                            val icon = visibleTabIconBounds(item)
                             return Offset(icon.center.x - barBounds.left, barBounds.height / 2f)
                         }
                         val start = center(outgoing)
@@ -425,134 +1205,198 @@ class GlassBottomBarInteractionTest {
     }
 
     @Test
-    fun opaqueLensSourceTintPreservesSelectedTabPixelsWithoutInnerFilters() {
-        val progress = mutableFloatStateOf(0f)
-        val press = mutableFloatStateOf(0f)
-        val paletteIndex = mutableStateOf(0)
-        val palettes = listOf(
-            defaultGlassColors(false).copy(accent = Color(0xFFFF3B30), content = Color(0xFF263648)),
-            defaultGlassColors(true).copy(accent = Color(0xFF51B6FF), content = Color.White),
-            defaultGlassColors(false).copy(accent = Color(0xFFFF3B30).copy(alpha = 0.6f)),
-            defaultGlassColors(false).copy(content = Color(0xFF263648).copy(alpha = 0.55f)),
-        )
-        val backing = Color(0xFF2E233B)
+    fun playerPressLightSoftensTheOldBarBoundaryAndFollowsThePointerOutsideIt() {
+        val position = mutableStateOf(Offset(0.25f, 0.5f))
+        val backing = Color(0xFF303030)
         compose.setContent {
-            val colors = palettes[paletteIndex.value]
-            val selectedFilter = remember(colors) {
-                derivedStateOf {
-                    val compactTint = androidx.compose.ui.graphics.lerp(colors.accent, colors.content, progress.floatValue)
-                    ColorFilter.tint(androidx.compose.ui.graphics.lerp(compactTint, colors.content, press.floatValue))
+            val renderer = rememberPlayerTransitionGlassRenderer(emptyBackdrop(), active = false, isDark = false)
+            Canvas(Modifier.size(300.dp, 240.dp).testTag("playerPressLight")) {
+                drawRect(backing)
+                renderer.drawWithPressLight(
+                    scope = this,
+                    highlight = GlassPressHighlight(1f, position.value),
+                    source = Rect(12.dp.toPx(), 60.dp.toPx(), 252.dp.toPx(), 108.dp.toPx()),
+                    bounds = Rect(Offset.Zero, size),
+                    radius = 32.dp.toPx(),
+                    shape = ContinuousRoundedRectangle(32.dp),
+                    isDark = false,
+                ) { drawRect(backing) }
+            }
+        }
+        val surface = compose.onNodeWithTag("playerPressLight")
+        val first = surface.captureToImage().toPixelMap()
+        val scale = first.width / 300f
+        fun sample(image: androidx.compose.ui.graphics.PixelMap, x: Float, y: Float) =
+            image[(x * scale).toInt(), (y * scale).toInt()].red
+        assertEquals("The old bar's lower edge must have no rectangular brightness step",
+            sample(first, 120f, 107f), sample(first, 120f, 109f), 0.02f)
+        assertEquals("Only the current capsule clips the light", backing.red,
+            sample(first, 1f, 1f), 1f / 255f)
+
+        compose.runOnIdle { position.value = Offset(0.75f, 2.75f) }
+        val moved = surface.captureToImage().toPixelMap()
+        assertTrue("A held pointer below the old bar still lights its current position",
+            sample(moved, 192f, 192f) > sample(first, 192f, 192f) + 0.005f)
+        assertTrue("The previous light center dims when the pointer moves",
+            sample(first, 72f, 84f) > sample(moved, 72f, 84f) + 0.005f)
+    }
+
+    @Test
+    fun playerTransitionRetainsTheNativeBarMaterialThroughoutExpansion() {
+        val scenario = mutableStateOf(false to 48.dp)
+        val transitioning = mutableStateOf(false)
+        val panelHeight = mutableStateOf(48.dp)
+        compose.setContent {
+            val (isDark, sourceHeight) = scenario.value
+            CompositionLocalProvider(
+                LocalGlassAppearance provides GlassAppearance(liquidGlassEnabled = true),
+                LocalGlassColors provides defaultGlassColors(isDark),
+            ) {
+                val backdrop = rememberCanvasBackdrop {
+                    drawRect(Color.Black)
+                    val stripeWidth = 16.dp.toPx()
+                    var x = 0f
+                    while (x < size.width) {
+                        drawRect(Color.White, Offset(x, 0f), Size(stripeWidth, size.height))
+                        x += stripeWidth * 2f
+                    }
                 }
-            }
-            val optimizedFilter = navigationLensSourceColorFilter(colors, selectedFilter)
-            val opaque = colors.accent.alpha == 1f && colors.content.alpha == 1f
-            assertTrue("Only fully opaque source colors can skip the inner filter",
-                if (opaque) optimizedFilter == null else optimizedFilter === selectedFilter)
-            val sourceScale = remember {
-                { lerp(1f, 1.2f, press.floatValue) * (1f - progress.floatValue).coerceAtLeast(0.82f) }
-            }
-            val labelAlpha = remember { { (1f - progress.floatValue * 1.35f).coerceIn(0f, 1f) } }
-            val lateScale = remember {
-                { lerp(1f, (22f / 28f) / 0.82f, compactIconLateProgress(progress.floatValue)) }
-            }
-            val density = LocalDensity.current
-            CompositionLocalProvider(LocalGlassColors provides colors, LocalLiquidTabScale provides sourceScale) {
-                MaterialTheme {
-                    Row {
-                        listOf(false, true).forEachIndexed { index, optimized ->
-                            if (index > 0) Spacer(Modifier.width(16.dp))
-                            Box(
-                                Modifier.size(160.dp, 80.dp).background(backing)
-                                    .testTag(if (optimized) "optimizedLensSourceTab" else "referenceLensSourceTab"),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                val width = lerp(160f, 48f, progress.floatValue).dp - 8.dp
-                                Box(
-                                    Modifier.width(width).height(56.dp).graphicsLayer {
-                                        colorFilter = ColorFilter.tint(colors.accent)
-                                    },
-                                ) {
-                                    MorphingSelectedNavigationItem(
-                                        item = library,
-                                        compactProgress = progress,
-                                        fullWidthPx = with(density) { 160.dp.toPx() },
-                                        compactWidthPx = with(density) { 48.dp.toPx() },
-                                        itemCount = 3,
-                                        selectedIndex = 1,
-                                        isLtr = true,
-                                        horizontalInsetPx = with(density) { 4.dp.toPx() },
-                                        selectedContentLateScale = lateScale,
-                                        labelAlpha = labelAlpha,
-                                        selectedIconColorFilter = if (optimized) optimizedFilter else selectedFilter,
-                                        contentColor = colors.content,
-                                    )
-                                }
-                            }
+                val renderer = rememberPlayerTransitionGlassRenderer(backdrop,
+                    active = transitioning.value, isDark = isDark)
+                val coordinates = remember { mutableStateOf<LayoutCoordinates?>(null) }
+                Box(Modifier.size(280.dp, 400.dp).testTag("retainedPlayerMaterial")) {
+                    if (!transitioning.value) {
+                        GlassSurface(
+                            modifier = Modifier.align(Alignment.Center).size(280.dp, sourceHeight),
+                            backdrop = backdrop,
+                            shape = Capsule(),
+                            style = GlassSurfaceStyle.Navigation,
+                        ) {}
+                    } else {
+                        Canvas(Modifier.size(280.dp, 400.dp)
+                            .onGloballyPositioned { coordinates.value = it }) {
+                            val canvasCoordinates = coordinates.value?.takeIf { it.isAttached } ?: return@Canvas
+                            val height = panelHeight.value.toPx()
+                            val bounds = Rect(0f, (size.height - height) / 2f,
+                                size.width, (size.height + height) / 2f)
+                            renderer.material.draw(
+                                scope = this,
+                                coordinates = canvasCoordinates,
+                                viewport = Rect(canvasCoordinates.positionInRoot(), size),
+                                origin = canvasCoordinates.positionInRoot(),
+                                bounds = bounds,
+                                radius = 24.dp.toPx(),
+                                shape = ContinuousRoundedRectangle(24.dp),
+                                tint = defaultGlassColors(isDark).container,
+                                navigationMaterial = true,
+                                isDark = isDark,
+                                highlightAlpha = 1f,
+                                dropShadowAlpha = 1f,
+                                materialReferenceSize = Size(size.width, sourceHeight.toPx()),
+                            )
                         }
                     }
                 }
             }
         }
-        palettes.indices.forEach { palette ->
-            listOf(0f, 0.5f, 0.99f).forEach { compact ->
-                listOf(0f, 0.5f, 0.99f).forEach { pressed ->
-                    compose.runOnIdle {
-                        paletteIndex.value = palette
-                        progress.floatValue = compact
-                        press.floatValue = pressed
-                    }
-                    compose.waitForIdle()
-                    val reference = compose.onNodeWithTag("referenceLensSourceTab").captureToImage().toPixelMap()
-                    val actual = compose.onNodeWithTag("optimizedLensSourceTab").captureToImage().toPixelMap()
-                    assertEquals(reference.width, actual.width)
-                    assertEquals(reference.height, actual.height)
-                    var maximum = 0
-                    var total = 0L
-                    var count = 0
-                    var contentPixels = 0
-                    var labelPixels = 0
-                    var maximumPoint = Offset.Zero
-                    var maximumExpected = Color.Transparent
-                    var maximumObserved = Color.Transparent
-                    fun compare(expected: Float, observed: Float, x: Int, y: Int) {
-                        val error = abs((expected * 255f).roundToInt() - (observed * 255f).roundToInt())
-                        if (error > maximum) {
-                            maximum = error
-                            maximumPoint = Offset(x.toFloat(), y.toFloat())
-                            maximumExpected = reference[x, y]
-                            maximumObserved = actual[x, y]
-                        }
-                        total += error
-                        count++
-                    }
-                    repeat(reference.height) { y ->
-                        repeat(reference.width) { x ->
-                            val expected = reference[x, y]
-                            val observed = actual[x, y]
-                            compare(expected.red, observed.red, x, y)
-                            compare(expected.green, observed.green, x, y)
-                            compare(expected.blue, observed.blue, x, y)
-                            compare(expected.alpha, observed.alpha, x, y)
-                            val contentDifference = maxOf(
-                                abs(expected.red - backing.red), abs(expected.green - backing.green),
-                                abs(expected.blue - backing.blue),
-                            )
-                            if (contentDifference > 8f / 255f) {
-                                contentPixels++
-                                if (y > reference.height * 0.6f) labelPixels++
-                            }
-                        }
-                    }
-                    val label = "Lens source tab: palette=$palette, compact=$compact, press=$pressed"
-                    assertTrue("$label must contain the real selected icon", contentPixels > 20)
-                    if (compact == 0f) assertTrue("$label must contain the visible label", labelPixels > 10)
-                    assertTrue(
-                        "$label maximum RGBA error: $maximum at $maximumPoint, " +
-                            "expected=$maximumExpected, actual=$maximumObserved",
-                        maximum <= 2,
-                    )
-                    assertTrue("$label mean RGBA error: ${total.toDouble() / count}", total.toDouble() / count <= 1.0)
+        fun tones(image: androidx.compose.ui.graphics.PixelMap) =
+            (image.width / 4 until image.width * 3 / 4).map { x ->
+                val color = image[x, image.height / 2]
+                (color.red + color.green + color.blue) / 3f
+            }
+        fun edgeTones(image: androidx.compose.ui.graphics.PixelMap, height: androidx.compose.ui.unit.Dp): List<Float> {
+            val scale = image.width / 280f
+            val top = (image.height - height.value * scale) / 2f
+            val bottom = top + height.value * scale
+            return listOf(top + 4f * scale, bottom - 4f * scale).flatMap { y ->
+                (image.width / 4 until image.width * 3 / 4).map { x ->
+                    val color = image[x, y.toInt()]
+                    (color.red + color.green + color.blue) / 3f
                 }
+            }
+        }
+        listOf(false to 48.dp, true to 48.dp, false to 64.dp, true to 64.dp).forEach { case ->
+            compose.runOnIdle { scenario.value = case; transitioning.value = false }
+            val referenceImage = compose.onNodeWithTag("retainedPlayerMaterial").captureToImage().toPixelMap()
+            val reference = tones(referenceImage)
+            val referenceEdges = edgeTones(referenceImage, case.second)
+            listOf(case.second, case.second + 1.dp, 160.dp, 360.dp).forEach { height ->
+                compose.runOnIdle { panelHeight.value = height; transitioning.value = true }
+                val actualImage = compose.onNodeWithTag("retainedPlayerMaterial").captureToImage().toPixelMap()
+                val actual = tones(actualImage)
+                val label = "$case at $height must retain the native bar's complete material"
+                assertEquals(label, reference.average(), actual.average(), 0.04)
+                assertEquals(label, reference.max() - reference.min(), actual.max() - actual.min(), 0.06f)
+                if (height <= case.second + 1.dp) {
+                    val actualEdges = edgeTones(actualImage, height)
+                    val error = referenceEdges.zip(actualEdges) { expected, value ->
+                        kotlin.math.abs(expected - value)
+                    }.average()
+                    assertTrue("Straight stripes must not shift sideways at takeover: $label, error=$error", error < 0.06)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun playerPressLightMatchesTheNativePressedBarBeforeAndAfterPressScaling() {
+        org.junit.Assume.assumeTrue(android.os.Build.VERSION.SDK_INT >= 36)
+        val scenario = mutableStateOf(false to false)
+        val press = GlassPressHighlight(0.35f, Offset(0.4f, 0.6f),
+            glowProgress = 0.9f, dissipationProgress = 0.15f)
+        compose.setContent {
+            val (isDark, scaled) = scenario.value
+            val backing = if (isDark) Color(0xFF304860) else Color(0xFF808080)
+            val native = remember { io.github.neoruaa.glasmio.glass.PressHighlightRenderer() }
+            val transition = rememberPlayerTransitionGlassRenderer(emptyBackdrop(), active = false, isDark = isDark)
+            Column {
+                Canvas(Modifier.size(336.dp, 112.dp).testTag("nativePlayerPress")) {
+                    drawRect(backing)
+                    val nominal = Size(280.dp.toPx(), 48.dp.toPx())
+                    val inset = 24.dp.toPx()
+                    withTransform({
+                        translate(inset, inset)
+                        scale(if (scaled) 1.05f else 1f, if (scaled) 1.33f else 1f, Offset.Zero)
+                    }) {
+                        native.draw(this, press.glowProgress,
+                            Offset(nominal.width * press.position.x, nominal.height * press.position.y),
+                            sourceBounds = Rect(Offset.Zero, nominal), isDark = isDark,
+                            dissipationProgress = press.dissipationProgress)
+                    }
+                }
+                Canvas(Modifier.size(336.dp, 112.dp).testTag("transitionPlayerPress")) {
+                    drawRect(backing)
+                    val nominal = Size(280.dp.toPx(), 48.dp.toPx())
+                    val visual = Size(nominal.width * if (scaled) 1.05f else 1f,
+                        nominal.height * if (scaled) 1.33f else 1f)
+                    val source = Rect(Offset(24.dp.toPx(), 24.dp.toPx()), visual)
+                    transition.drawWithPressLight(
+                        scope = this,
+                        highlight = press,
+                        source = source,
+                        sourceLayoutSize = nominal,
+                        bounds = source,
+                        radius = visual.height / 2f,
+                        shape = ContinuousRoundedRectangle((visual.height / 2f).toDp()),
+                        isDark = isDark,
+                    ) { drawRect(backing) }
+                }
+            }
+        }
+        listOf(false to false, false to true, true to false, true to true).forEach { case ->
+            compose.runOnIdle { scenario.value = case }
+            val native = compose.onNodeWithTag("nativePlayerPress").captureToImage().toPixelMap()
+            val transition = compose.onNodeWithTag("transitionPlayerPress").captureToImage().toPixelMap()
+            val scale = native.width / 336f
+            listOf(0.2f, 0.4f, 0.6f, 0.8f).forEach { fraction ->
+                val x = ((24f + 280f * fraction * if (case.second) 1.05f else 1f) * scale).toInt()
+                val y = ((24f + 24f * if (case.second) 1.33f else 1f) * scale).toInt()
+                val expected = native[x, y]
+                val actual = transition[x, y]
+                val label = "$case at $fraction must keep the native press brightness"
+                assertEquals(label, expected.red, actual.red, 2f / 255f)
+                assertEquals(label, expected.green, actual.green, 2f / 255f)
+                assertEquals(label, expected.blue, actual.blue, 2f / 255f)
             }
         }
     }
@@ -762,6 +1606,59 @@ class GlassBottomBarInteractionTest {
     }
 
     @Test
+    fun liquidMenuInnerShadowHolePreservesCoverageDuringMotion() {
+        val source = Rect(870f, 155f, 1072f, 287f)
+        val target = Rect(358f, 155f, 1072f, 611f)
+        val motion = LiquidMenuMorphMotion().apply { initialize(source, target, 102f, 3f) }
+        val workspace = LiquidMenuContourWorkspace()
+        val clip = Region(-1024, -1024, 2048, 2048)
+        listOf(true, false).forEach { opening ->
+            motion.retarget(opening)
+            repeat(240) { frame ->
+                motion.advanceBy(1f / 240f)
+                val value = motion.frame
+                val world = LiquidMenuContour(value.bounds, Offset(value.radiusX, value.radiusY),
+                    value.sourceLobe, Offset(value.sourceRadiusX, value.sourceRadiusY), value.smoothing)
+                val bounds = world.exteriorBounds()
+                val local = LiquidMenuContour(value.bounds.translate(-bounds.topLeft),
+                    Offset(value.radiusX, value.radiusY), value.sourceLobe?.translate(-bounds.topLeft),
+                    Offset(value.sourceRadiusX, value.sourceRadiusY), value.smoothing, workspace)
+                val outline = android.graphics.Path(local.path(bounds.size).asAndroidPath())
+                val actual = Region().apply {
+                    setPath(expandedLiquidMenuShadowHole(outline, 120f), clip)
+                }
+                // Rasterize each dilation component independently before their integer
+                // region union, so the reference never intersects floating-point curves.
+                val expected = Region()
+                fun include(component: android.graphics.Path) {
+                    expected.op(Region().apply { setPath(component, clip) }, Region.Op.UNION)
+                }
+                for (x in floatArrayOf(-120f, 120f)) for (y in floatArrayOf(-120f, 120f)) {
+                    include(android.graphics.Path(outline).apply { offset(x, y) })
+                }
+                val extent = android.graphics.RectF().also { outline.computeBounds(it, true) }
+                include(android.graphics.Path().apply {
+                    addRect(extent.centerX() - 120f, extent.top - 120f,
+                        extent.centerX() + 120f, extent.bottom + 120f, android.graphics.Path.Direction.CW)
+                })
+                include(android.graphics.Path().apply {
+                    addRect(extent.left - 120f, extent.centerY() - 120f,
+                        extent.right + 120f, extent.centerY() + 120f, android.graphics.Path.Direction.CW)
+                })
+                val difference = Region(actual).apply { op(expected, Region.Op.XOR) }
+                // Ignore at most two pixels of boundary raster rounding, while keeping
+                // the broad interior holes that caused visible one-frame triangles.
+                val core = Region(difference)
+                for (x in intArrayOf(-2, 0, 2)) for (y in intArrayOf(-2, 0, 2)) {
+                    if (x != 0 || y != 0) core.op(Region(difference).apply { translate(x, y) }, Region.Op.INTERSECT)
+                }
+                assertTrue("The shadow hole stays complete: opening=$opening frame=$frame bounds=${core.bounds}",
+                    core.isEmpty)
+            }
+        }
+    }
+
+    @Test
     fun navigationInnerShadowsPreserveContrastInsideSmallShapes() {
         val backingColors = listOf(Color.White, Color(0xFFF0F0F0), Color(0xFF202020), Color(0xFF404040))
         val bounds = listOf(Rect(8f, 8f, 52f, 52f), Rect(88f, 8f, 168f, 56f))
@@ -845,6 +1742,363 @@ class GlassBottomBarInteractionTest {
                 )
             }
         }
+    }
+
+    @Test
+    fun halfResolutionNavigationInnerShadowsMatchNativeMasks() {
+        val backings = listOf(Color.White, Color(0xFFF0F0F0), Color(0xFF202020), Color(0xFF404040))
+        val scenarios = listOf("circle", "capsule", "contact").flatMap { shape ->
+            backings.indices.map { backing -> shape to backing }
+        }
+        val scenarioIndex = mutableStateOf(0)
+        fun boundsFor(shape: String) = when (shape) {
+            "circle" -> Rect(12f, 24f, 72f, 84f)
+            "capsule" -> Rect(12f, 26f, 326f, 86f)
+            else -> Rect(12f, 24f, 326f, 88f)
+        }
+        compose.setContent {
+            val (shapeName, backingIndex) = scenarios[scenarioIndex.value]
+            val renderers = remember {
+                listOf(NavigationInnerShadowRenderer(1f), NavigationInnerShadowRenderer(0.5f))
+            }
+            DisposableEffect(renderers) { onDispose { renderers.forEach { it.release() } } }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                renderers.forEachIndexed { index, renderer ->
+                    Canvas(
+                        Modifier.size(338.dp, 112.dp)
+                            .testTag(if (index == 0) "nativeShadowMask" else "candidateShadowMask"),
+                    ) {
+                        assertTrue("Shadow mask comparisons require GPU rendering",
+                            drawContext.canvas.nativeCanvas.isHardwareAccelerated)
+                        drawRect(backings[backingIndex])
+                        val boundsDp = boundsFor(shapeName)
+                        val bounds = Rect(
+                            boundsDp.left.dp.toPx(), boundsDp.top.dp.toPx(),
+                            boundsDp.right.dp.toPx(), boundsDp.bottom.dp.toPx(),
+                        )
+                        val shape = when (shapeName) {
+                            "circle" -> CircleShape
+                            "capsule" -> Capsule()
+                            else -> checkNotNull(liquidContactShape(
+                                LiquidContactCapsule(
+                                    Size(236.dp.toPx(), 60.dp.toPx()),
+                                    Rect(0f, 2.dp.toPx(), 248.dp.toPx(), 64.dp.toPx()),
+                                ),
+                                LiquidContactCapsule(
+                                    Size(60.dp.toPx(), 60.dp.toPx()),
+                                    Rect(250.dp.toPx(), 0f, 314.dp.toPx(), 64.dp.toPx()),
+                                ),
+                                8.dp.toPx(),
+                            ))
+                        }
+                        renderer.draw(this, shape, bounds, isDark = backingIndex >= 2)
+                    }
+                }
+            }
+        }
+        val failures = mutableListOf<String>()
+        scenarios.forEachIndexed { index, (shapeName, backingIndex) ->
+            compose.runOnIdle { scenarioIndex.value = index }
+            compose.waitForIdle()
+            val reference = compose.onNodeWithTag("nativeShadowMask").captureToImage().toPixelMap()
+            val actual = compose.onNodeWithTag("candidateShadowMask").captureToImage().toPixelMap()
+            assertEquals(reference.width, actual.width)
+            assertEquals(reference.height, actual.height)
+            val bounds = boundsFor(shapeName)
+            val scale = reference.width / 338f
+            var maximum = 0
+            var total = 0L
+            var count = 0
+            var shadowPixels = 0
+            fun error(a: Color, b: Color): Int = maxOf(
+                abs((a.red * 255f).roundToInt() - (b.red * 255f).roundToInt()),
+                abs((a.green * 255f).roundToInt() - (b.green * 255f).roundToInt()),
+                abs((a.blue * 255f).roundToInt() - (b.blue * 255f).roundToInt()),
+                abs((a.alpha * 255f).roundToInt() - (b.alpha * 255f).roundToInt()),
+            )
+            repeat(reference.height) { y ->
+                repeat(reference.width) { x ->
+                    val difference = error(reference[x, y], actual[x, y])
+                    maximum = maxOf(maximum, difference)
+                    // Average only the shape's bounds; empty canvas must not dilute a mismatch.
+                    if (x >= bounds.left * scale && x < bounds.right * scale &&
+                        y >= bounds.top * scale && y < bounds.bottom * scale
+                    ) {
+                        total += difference
+                        count++
+                        if (error(reference[x, y], backings[backingIndex]) > 2) shadowPixels++
+                    }
+                }
+            }
+            val mean = total.toDouble() / count
+            val label = "halfResolution, $shapeName, dark=${backingIndex >= 2}, backing=$backingIndex: " +
+                "meanMaxRGBA=$mean/255, maximum=$maximum/255, shadowPixels=$shadowPixels"
+            android.util.Log.i("GlassShadowScaleTest", label)
+            if (mean > 1.0 || maximum > 3 || shadowPixels <= count / 20) failures += label
+        }
+        assertTrue("Half-resolution shadow masks must preserve the native result:\n${failures.joinToString("\n")}",
+            failures.isEmpty())
+    }
+
+    @Test
+    fun lensSourceGpuDropShadowMatchesDefaultAcrossGeometryChanges() {
+        val backings = listOf(Color.White, Color(0xFFF0F0F0), Color(0xFF202020), Color(0xFF404040))
+        val scenarios = listOf("circle", "capsule", "contact").flatMap { shape ->
+            backings.indices.map { backing -> shape to backing }
+        }
+        val scenarioIndex = mutableStateOf(0)
+        val motionTarget = mutableFloatStateOf(0f)
+        compose.setContent {
+            val (shapeName, backingIndex) = scenarios[scenarioIndex.value]
+            val motion = animateFloatAsState(motionTarget.floatValue, tween(96), label = "shadowGeometry").value
+            val scale = 1f + 0.12f * motion
+            val childWidth = when (shapeName) {
+                "circle" -> 56f
+                "capsule" -> 184f
+                else -> 198f
+            }
+            val density = LocalDensity.current
+            val shape = remember(shapeName, scale, density) {
+                when (shapeName) {
+                    "circle" -> CircleShape
+                    "capsule" -> Capsule()
+                    else -> with(density) {
+                        fun px(value: Float) = (value * scale).dp.toPx()
+                        checkNotNull(liquidContactShape(
+                            LiquidContactCapsule(
+                                Size(px(136f), px(52f)), Rect(0f, px(2f), px(140f), px(56f)),
+                            ),
+                            LiquidContactCapsule(
+                                Size(px(56f), px(56f)), Rect(px(142f), 0f, px(198f), px(56f)),
+                            ),
+                            px(8f),
+                        ))
+                    }
+                }
+            }
+            val shapeProvider = remember(shape) { { shape } }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(false, true).forEach { candidate ->
+                    // Shadow.Default extends 48dp past the child, plus its 4dp vertical offset.
+                    // Capture the host without clipping that exterior or filling the child.
+                    Box(
+                        Modifier.size(338.dp, 192.dp)
+                            .testTag(if (candidate) "gpuLensShadowHost" else "defaultLensShadowHost"),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Canvas(Modifier.matchParentSize()) {
+                            assertTrue("Drop shadow comparisons require GPU rendering",
+                                drawContext.canvas.nativeCanvas.isHardwareAccelerated)
+                            drawRect(backings[backingIndex])
+                        }
+                        val shadowModifier = if (candidate) {
+                            Modifier.navigationLensSourceDropShadow(shapeProvider).drawBackdrop(
+                                backdrop = emptyBackdrop(), shape = shapeProvider, effects = {},
+                                highlight = null, shadow = null,
+                            )
+                        } else {
+                            Modifier.drawBackdrop(
+                                backdrop = emptyBackdrop(), shape = shapeProvider, effects = {},
+                                highlight = null,
+                            )
+                        }
+                        Box(
+                            Modifier.offset((4.25f * motion).dp, (2.5f * motion).dp)
+                                .size((childWidth * scale).dp, (56f * scale).dp)
+                                .then(shadowModifier),
+                        )
+                    }
+                }
+            }
+        }
+        fun error(a: Int, b: Int) = maxOf(
+            abs((a ushr 24) - (b ushr 24)),
+            abs((a ushr 16 and 255) - (b ushr 16 and 255)),
+            abs((a ushr 8 and 255) - (b ushr 8 and 255)),
+            abs((a and 255) - (b and 255)),
+        )
+        val failures = mutableListOf<String>()
+        scenarios.forEachIndexed { scenario, (shapeName, backingIndex) ->
+            compose.runOnIdle { scenarioIndex.value = scenario }
+            listOf(0f, 1f, -1f, 0f).forEachIndexed { stage, target ->
+                compose.runOnIdle { motionTarget.floatValue = target }
+                compose.waitForIdle()
+                val reference = compose.onNodeWithTag("defaultLensShadowHost").captureToImage()
+                val actual = compose.onNodeWithTag("gpuLensShadowHost").captureToImage()
+                assertEquals(reference.width, actual.width)
+                assertEquals(reference.height, actual.height)
+                val referencePixels = IntArray(reference.width * reference.height)
+                val actualPixels = IntArray(referencePixels.size)
+                reference.readPixels(referencePixels)
+                actual.readPixels(actualPixels)
+                val backing = backings[backingIndex].toArgb()
+                var maximum = 0
+                var maximumIndex = 0
+                var total = 0L
+                var count = 0
+                var referenceShadowPixels = 0
+                var aboveTolerance = 0
+                referencePixels.indices.forEach { pixel ->
+                    val expected = referencePixels[pixel]
+                    val observed = actualPixels[pixel]
+                    val difference = error(expected, observed)
+                    if (difference > maximum) {
+                        maximum = difference
+                        maximumIndex = pixel
+                    }
+                    if (difference > 1) aboveTolerance++
+                    val referenceShadow = error(expected, backing) > 0
+                    if (referenceShadow) referenceShadowPixels++
+                    if (referenceShadow || error(observed, backing) > 0) {
+                        // The transparent interior and empty host must not dilute shadow error.
+                        total += difference
+                        count++
+                    }
+                }
+                val mean = if (count > 0) total.toDouble() / count else Double.POSITIVE_INFINITY
+                val label = "$shapeName, backing=$backingIndex, stage=$stage, motion=$target: " +
+                    "meanMaxRGBA=$mean/255, maximum=$maximum/255, above1=$aboveTolerance, " +
+                    "worst=(${maximumIndex % reference.width},${maximumIndex / reference.width}), " +
+                    "shadowPixels=$referenceShadowPixels"
+                android.util.Log.i("GlassLensShadowGpuTest", label)
+                if (mean > 0.25 || maximum > 1 || referenceShadowPixels == 0) failures += label
+            }
+        }
+        assertTrue("The GPU lens-source shadow must preserve Shadow.Default:\n${failures.joinToString("\n")}",
+            failures.isEmpty())
+    }
+
+    @Test
+    fun navigationDropShadowBlurCachePreservesLiveUpdates() {
+        data class Stage(
+            val name: String,
+            val alpha: Float = 0.8f,
+            val scale: Offset = Offset(1.08f, 1.06f),
+            val translation: Offset = Offset(3.5f, -2.25f),
+            val enlarged: Boolean = false,
+            val direct: Boolean = false,
+            val release: Boolean = false,
+        )
+        val stages = listOf(
+            Stage("initial"),
+            Stage("cachedAlpha", alpha = 0.4f),
+            Stage("cachedNearOpaque", alpha = 0.99f),
+            Stage("cachedTransform", alpha = 1f, scale = Offset(0.92f, 1.12f), translation = Offset(-5.25f, 3.5f)),
+            Stage("directResize", alpha = 1f, enlarged = true, direct = true),
+            Stage("cachedAfterDirect", enlarged = true),
+            Stage("originalSize"),
+            Stage("zeroAlpha", alpha = 0f),
+            Stage("cachedAfterZero"),
+            Stage("released", release = true),
+        )
+        val circle = mutableStateOf(false)
+        val stageIndex = mutableStateOf(0)
+        val backing = Color(0xFFF0F0F0)
+        lateinit var renderers: List<NavigationDropShadowRenderer>
+        compose.setContent {
+            renderers = remember { List(2) { NavigationDropShadowRenderer(cacheBlurResult = it == 1) } }
+            val transforms = remember { List(2) { GraphicsLayerBlockScope() } }
+            DisposableEffect(renderers) { onDispose { renderers.forEach { it.release() } } }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                renderers.forEachIndexed { index, renderer ->
+                    Canvas(Modifier.size(338.dp, 176.dp)
+                        .testTag(if (index == 0) "legacyBlurShadow" else "cachedBlurShadow")) {
+                        assertTrue("Blur cache comparisons require GPU rendering",
+                            drawContext.canvas.nativeCanvas.isHardwareAccelerated)
+                        drawRect(backing)
+                        // Read the stage inside drawing, including release/reuse with identical values.
+                        val stage = stages[stageIndex.value]
+                        val height = (if (stage.enlarged) 64.dp else 56.dp).toPx()
+                        val width = if (circle.value) height else {
+                            (if (stage.enlarged) 212.dp else 184.dp).toPx()
+                        }
+                        val shape = if (circle.value) CircleShape else Capsule()
+                        val horizontalInset = (size.width - width) / 2f
+                        val verticalInset = (size.height - height) / 2f
+                        // Inset changes the renderer's logical size without clipping its exterior.
+                        inset(horizontalInset, verticalInset, horizontalInset, verticalInset) {
+                            if (stage.direct) {
+                                // Drawing new geometry directly must refresh the blur reused by transformed draws.
+                                renderer.draw(this, shape)
+                            } else {
+                                val transform = transforms[index]
+                                transform.reset(this, size)
+                                transform.alpha = stage.alpha
+                                transform.scaleX = stage.scale.x
+                                transform.scaleY = stage.scale.y
+                                transform.translationX = stage.translation.x.dp.toPx()
+                                transform.translationY = stage.translation.y.dp.toPx()
+                                renderer.drawTransformed(this, shape, transform)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        fun error(a: Int, b: Int) = maxOf(
+            abs((a ushr 24) - (b ushr 24)),
+            abs((a ushr 16 and 255) - (b ushr 16 and 255)),
+            abs((a ushr 8 and 255) - (b ushr 8 and 255)),
+            abs((a and 255) - (b and 255)),
+        )
+        val failures = mutableListOf<String>()
+        listOf(false, true).forEach { isCircle ->
+            var previousReference: IntArray? = null
+            var previousActual: IntArray? = null
+            stages.forEachIndexed { index, stage ->
+                compose.runOnIdle {
+                    if (stage.release) renderers.forEach { it.release() }
+                    circle.value = isCircle
+                    stageIndex.value = index
+                }
+                compose.waitForIdle()
+                val reference = compose.onNodeWithTag("legacyBlurShadow").captureToImage()
+                val actual = compose.onNodeWithTag("cachedBlurShadow").captureToImage()
+                assertEquals(reference.width, actual.width)
+                assertEquals(reference.height, actual.height)
+                val referencePixels = IntArray(reference.width * reference.height)
+                val actualPixels = IntArray(referencePixels.size)
+                reference.readPixels(referencePixels)
+                actual.readPixels(actualPixels)
+                if (stage.name == "cachedAlpha" || stage.name == "cachedNearOpaque" || stage.name == "cachedTransform") {
+                    assertTrue("Cached alpha/transform updates must change the reference pixels",
+                        !checkNotNull(previousReference).contentEquals(referencePixels))
+                    assertTrue("Cached alpha/transform updates must change the candidate pixels",
+                        !checkNotNull(previousActual).contentEquals(actualPixels))
+                }
+                previousReference = referencePixels
+                previousActual = actualPixels
+                var maximum = 0
+                var total = 0L
+                var count = 0
+                var referenceShadowPixels = 0
+                var actualShadowPixels = 0
+                val backingPixel = backing.toArgb()
+                referencePixels.indices.forEach { pixel ->
+                    val difference = error(referencePixels[pixel], actualPixels[pixel])
+                    maximum = maxOf(maximum, difference)
+                    val referenceShadow = error(referencePixels[pixel], backingPixel) > 0
+                    val actualShadow = error(actualPixels[pixel], backingPixel) > 0
+                    if (referenceShadow) referenceShadowPixels++
+                    if (actualShadow) actualShadowPixels++
+                    if (referenceShadow || actualShadow) {
+                        total += difference
+                        count++
+                    }
+                }
+                val mean = if (count > 0) total.toDouble() / count else 0.0
+                val label = "circle=$isCircle, stage=${stage.name}: meanMaxRGBA=$mean/255, " +
+                    "maximum=$maximum/255, referencePixels=$referenceShadowPixels, cachedPixels=$actualShadowPixels"
+                android.util.Log.i("GlassShadowCacheTest", label)
+                val visible = stage.direct || stage.alpha > 0f
+                if (mean > 0.25 || maximum > 1 ||
+                    (visible && (referenceShadowPixels == 0 || actualShadowPixels == 0)) ||
+                    (!visible && (referenceShadowPixels != 0 || actualShadowPixels != 0))
+                ) failures += label
+            }
+        }
+        assertTrue("Cached shadow blur must preserve live updates and resource recovery:\n${failures.joinToString("\n")}",
+            failures.isEmpty())
     }
 
     @Test
@@ -993,12 +2247,112 @@ class GlassBottomBarInteractionTest {
     }
 
     @Test
+    fun miniPlayerReturnsDirectlyToTheFinalNavigationPosition() {
+        lateinit var sheet: GlasmioBottomSheetState
+        lateinit var layers: PlayerSheetLayers
+        compose.setContent {
+            sheet = rememberGlasmioBottomSheetState(
+                dismissedBound = 0.dp,
+                collapsedBound = 48.dp,
+                expandedBound = 400.dp,
+                initialAnchor = collapsedAnchor,
+            )
+            layers = rememberPlayerSheetLayers(sheet)
+        }
+        compose.runOnIdle {
+            layers.updateHost(Rect(0f, 0f, 280f, 400f))
+            val original = Rect(12f, 304f, 268f, 352f)
+            val compact = Rect(68f, 352f, 212f, 400f)
+            val originalArtwork = Rect(20f, 312f, 52f, 344f)
+            val compactArtwork = Rect(76f, 360f, 108f, 392f)
+            for (openingProgress in listOf(0.4f, 1f)) {
+                sheet.snapTo(sheet.collapsedBound)
+                layers.updateFrozenBounds()
+                layers.miniBounds = original
+                layers.miniContentBounds = original
+                layers.miniArtworkBounds = originalArtwork
+                layers.prepareTransition()
+                sheet.expandSoft()
+                sheet.snapTo(sheet.collapsedBound + (sheet.expandedBound - sheet.collapsedBound) * openingProgress)
+                layers.updateFrozenBounds()
+
+                layers.miniBounds = compact
+                layers.miniContentBounds = compact
+                layers.miniArtworkBounds = compactArtwork
+                val openingFrame = playerContainerRect(layers.sourceContainer, layers.hostBounds, sheet.progress)
+                sheet.collapseSoft()
+                layers.updateFrozenBounds()
+                assertEquals("Reversing the player must stay continuous", openingFrame,
+                    playerContainerRect(layers.sourceContainer, layers.hostBounds, sheet.progress))
+
+                sheet.snapTo(sheet.collapsedBound + (sheet.expandedBound - sheet.collapsedBound) * openingProgress / 2)
+                layers.updateFrozenBounds()
+                val returningFrame = playerContainerRect(layers.sourceContainer, layers.hostBounds, sheet.progress)
+                assertEquals("The return goes straight to the final position",
+                    if (openingProgress == 1f) 176f else 267.2f, returningFrame.top, 0.001f)
+                assertEquals("The content follows its glass", layers.sourceContainer, layers.sourceMiniContent)
+                if (openingProgress == 1f) {
+                    assertEquals("The interrupted position is no longer a return endpoint", compact, layers.sourceContainer)
+                    assertEquals("The cover also uses its final position directly", compactArtwork, layers.sourceArtwork)
+                }
+
+                sheet.snapTo(sheet.collapsedBound + 0.01.dp)
+                layers.updateFrozenBounds()
+                assertTrue("The last moving frame already reaches the bottom", abs(layers.sourceContainer.top - compact.top) < 0.01f)
+                assertTrue("The cover has no delayed relocation", abs(layers.sourceArtwork.top - compactArtwork.top) < 0.01f)
+                sheet.snapTo(sheet.collapsedBound)
+                layers.updateFrozenBounds()
+                assertEquals(compact, layers.sourceContainer)
+            }
+        }
+    }
+
+    @Test
+    fun openingPlayerSettlesInterruptedMiniNavigationWithoutResumingItAfterReturn() {
+        val compact = mutableStateOf(false)
+        lateinit var sheet: GlasmioBottomSheetState
+        lateinit var motion: MiniPlayerChromeMotion
+        compose.mainClock.autoAdvance = false
+        compose.setContent {
+            sheet = rememberGlasmioBottomSheetState(
+                dismissedBound = 0.dp,
+                collapsedBound = 48.dp,
+                expandedBound = 400.dp,
+                initialAnchor = collapsedAnchor,
+            )
+            motion = rememberMiniPlayerChromeMotion(compact.value, sheet, 63.dp)
+        }
+        for (target in listOf(true, false)) {
+            compose.runOnIdle { compact.value = target }
+            compose.mainClock.advanceTimeBy(64)
+            compose.runOnIdle {
+                assertTrue("Normal accessory placement still animates", motion.contentProgress.value > 0f && motion.contentProgress.value < 1f)
+                sheet.expand(tween(400))
+            }
+            compose.mainClock.advanceTimeByFrame()
+            compose.runOnIdle {
+                for (progress in listOf(motion.horizontalProgress, motion.verticalProgress, motion.contentProgress)) {
+                    assertEquals("Opening settles every hidden accessory channel", if (target) 1f else 0f, progress.value, 0f)
+                }
+                sheet.collapse(tween(100))
+            }
+            compose.mainClock.advanceTimeBy(160)
+            compose.runOnIdle {
+                assertTrue(sheet.isCollapsed)
+                for (progress in listOf(motion.horizontalProgress, motion.verticalProgress, motion.contentProgress)) {
+                    assertEquals("Returning must not resume interrupted accessory placement", if (target) 1f else 0f, progress.value, 0f)
+                }
+            }
+        }
+    }
+
+    @Test
     fun artworkLayoutSizeResumesUpdatesAfterFrozenTransition() {
-        lateinit var sheet: BottomSheetState
+        lateinit var sheet: GlasmioBottomSheetState
         lateinit var layers: PlayerSheetLayers
         lateinit var layoutSize: State<IntSize>
         compose.setContent {
-            sheet = rememberBottomSheetState(
+            sheet = rememberGlasmioBottomSheetState(
                 dismissedBound = 0.dp,
                 collapsedBound = 48.dp,
                 expandedBound = 400.dp,
@@ -1036,12 +2390,165 @@ class GlassBottomBarInteractionTest {
     }
 
     @Test
+    fun collapsedMiniPlayerPreservesPressedGlassOverflowAndNavigationMarginHits() {
+        var leftClicks = 0
+        var rightClicks = 0
+        var miniClicks = 0
+        var horizontalSwipes = 0
+        lateinit var activeSheet: GlasmioBottomSheetState
+        compose.setContent {
+            val sheet = rememberGlasmioBottomSheetState(
+                dismissedBound = 0.dp,
+                collapsedBound = 80.dp,
+                expandedBound = 400.dp,
+                initialAnchor = collapsedAnchor,
+            )
+            val layers = rememberPlayerSheetLayers(sheet)
+            activeSheet = sheet
+            CompositionLocalProvider(
+                LocalGlassColors provides defaultGlassColors(true),
+                LocalGlassAppearance provides GlassAppearance(reduceTransparency = true),
+                LocalPlayerSheet provides layers,
+            ) {
+                Box(Modifier.size(320.dp, 400.dp).background(Color.Black).testTag("miniOverflowRoot")) {
+                    Box(Modifier.offset(y = 320.dp).size(56.dp, 48.dp)
+                        .clickable { leftClicks++ }.testTag("miniUnderlayLeft"))
+                    Box(Modifier.offset(x = 264.dp, y = 320.dp).size(56.dp, 48.dp)
+                        .clickable { rightClicks++ }.testTag("miniUnderlayRight"))
+                    GlassSurface(
+                        modifier = Modifier.align(Alignment.TopCenter).offset(y = 160.dp)
+                            .size(160.dp, 48.dp).testTag("miniOverflowReference"),
+                        backdrop = emptyBackdrop(),
+                        navigationSurfaceColor = Color(0xFF888888),
+                        sampleBackdrop = false,
+                        shape = Capsule(),
+                        style = GlassSurfaceStyle.Navigation,
+                        onClick = {},
+                    ) {}
+                    BottomSheet(
+                        state = sheet,
+                        modifier = Modifier.size(320.dp, 400.dp),
+                        collapsedDragHeight = 48.dp,
+                        transitionBackdrop = emptyBackdrop(),
+                        onHorizontalSwipe = { horizontalSwipes++ },
+                        collapsedContent = { gestures ->
+                            Box(Modifier.size(320.dp, 48.dp)) {
+                                GlassSurface(
+                                    modifier = Modifier.align(Alignment.TopCenter).size(160.dp, 48.dp)
+                                        .then(gestures).testTag("miniOverflowActual")
+                                        .onGloballyPositioned {
+                                            layers.miniBounds = Rect(
+                                                it.positionInRoot(),
+                                                Size(it.size.width.toFloat(), it.size.height.toFloat()),
+                                            )
+                                        },
+                                    backdrop = emptyBackdrop(),
+                                    navigationSurfaceColor = Color(0xFF888888),
+                                    sampleBackdrop = false,
+                                    shape = Capsule(),
+                                    style = GlassSurfaceStyle.Navigation,
+                                    onVisualBoundsChanged = layers::updateMiniPressHighlight,
+                                    onClick = { miniClicks++ },
+                                ) {
+                                    Box(Modifier.size(160.dp, 48.dp).onGloballyPositioned {
+                                        layers.miniLayoutCoordinates = it
+                                    })
+                                }
+                            }
+                        },
+                    ) {}
+                }
+            }
+        }
+        compose.waitForIdle()
+        val root = compose.onNodeWithTag("miniOverflowRoot")
+        val actual = compose.onNodeWithTag("miniOverflowActual")
+        val reference = compose.onNodeWithTag("miniOverflowReference")
+        val rootBounds = root.fetchSemanticsNode().boundsInRoot
+        val actualBounds = actual.fetchSemanticsNode().boundsInRoot.translate(-rootBounds.topLeft)
+        val referenceBounds = reference.fetchSemanticsNode().boundsInRoot.translate(-rootBounds.topLeft)
+        val resting = root.captureToImage().toPixelMap()
+        val margin = (resting.width / 320f * 12f).roundToInt()
+
+        fun assertMatchesReference(label: String, actualImage: PixelMap, referenceImage: PixelMap) {
+            val actualLeft = actualBounds.left.roundToInt()
+            val actualTop = actualBounds.top.roundToInt()
+            val referenceLeft = referenceBounds.left.roundToInt()
+            val referenceTop = referenceBounds.top.roundToInt()
+            var mismatchCount = 0
+            for (y in -margin until actualBounds.height.roundToInt() + margin) {
+                for (x in -margin until actualBounds.width.roundToInt() + margin) {
+                    val pixel = actualImage[actualLeft + x, actualTop + y]
+                    val expected = referenceImage[referenceLeft + x, referenceTop + y]
+                    if (maxOf(abs(pixel.red - expected.red), abs(pixel.green - expected.green),
+                            abs(pixel.blue - expected.blue), abs(pixel.alpha - expected.alpha)) > 2f / 255f) {
+                        mismatchCount++
+                    }
+                }
+            }
+            // Different screen positions can rasterize a few edge pixels differently.
+            assertTrue("$label matches standalone glass through its exterior: $mismatchCount pixels",
+                mismatchCount <= 4)
+        }
+
+        assertMatchesReference("Resting mini player", resting, resting)
+        compose.mainClock.autoAdvance = false
+        val actualPressed = try {
+            actual.performTouchInput { down(center) }
+            compose.mainClock.advanceTimeBy(800)
+            root.captureToImage().toPixelMap()
+        } finally {
+            actual.performTouchInput { up() }
+        }
+        compose.mainClock.advanceTimeBy(800)
+        val referencePressed = try {
+            reference.performTouchInput { down(center) }
+            compose.mainClock.advanceTimeBy(800)
+            root.captureToImage().toPixelMap()
+        } finally {
+            reference.performTouchInput { up() }
+        }
+        assertMatchesReference("Held mini player", actualPressed, referencePressed)
+        var expandedPixels = 0
+        val left = referenceBounds.left.roundToInt()
+        val top = referenceBounds.top.roundToInt()
+        val width = referenceBounds.width.roundToInt()
+        val height = referenceBounds.height.roundToInt()
+        for (y in -margin until height + margin) {
+            for (x in -margin until width + margin) {
+                if (x in 0 until width && y in 0 until height) continue
+                if (abs(referencePressed[left + x, top + y].red - resting[left + x, top + y].red) > 4f / 255f) {
+                    expandedPixels++
+                }
+            }
+        }
+        assertTrue("A held touch visibly enlarges the glass beyond its layout", expandedPixels > 10)
+        compose.mainClock.autoAdvance = true
+        compose.onNodeWithTag("miniUnderlayLeft").performTouchInput { click() }
+        compose.onNodeWithTag("miniUnderlayRight").performTouchInput { click() }
+        compose.runOnIdle {
+            assertEquals("The glass remains clickable", 1, miniClicks)
+            assertEquals("The empty left margin reaches navigation", 1, leftClicks)
+            assertEquals("The empty right margin reaches navigation", 1, rightClicks)
+        }
+        actual.performTouchInput {
+            swipe(Offset(width * 0.8f, height / 2f), Offset(width * 0.2f, height / 2f), 150)
+        }
+        compose.runOnIdle { assertEquals("The glass still handles track swipes", 1, horizontalSwipes) }
+        actual.performTouchInput {
+            swipe(center, center - Offset(0f, height * 3f), 150)
+        }
+        compose.waitForIdle()
+        compose.runOnIdle { assertTrue("Dragging the glass still expands the player", activeSheet.isExpanded) }
+    }
+
+    @Test
     fun miniPlayerInnerShadowsSurvivePlayerExpansionAndCollapse() {
         val scenarios = listOf(false, true).flatMap { isDark ->
             listOf(false, true).map { liquidGlassEnabled -> isDark to liquidGlassEnabled }
         }
         val scenarioIndex = mutableStateOf(0)
-        var activeSheet: BottomSheetState? = null
+        var activeSheet: GlasmioBottomSheetState? = null
         val compactMiniProgress = mutableFloatStateOf(0f)
         compose.setContent {
             val scenario = scenarios[scenarioIndex.value]
@@ -1049,7 +2556,7 @@ class GlassBottomBarInteractionTest {
                 val (isDark, liquidGlassEnabled) = scenario
                 val backing = if (isDark) Color(0xFF343434) else Color(0xFFB3B3B3)
                 val backdrop = rememberCanvasBackdrop { drawRect(backing) }
-                val sheet = rememberBottomSheetState(
+                val sheet = rememberGlasmioBottomSheetState(
                     dismissedBound = 0.dp,
                     collapsedBound = 48.dp,
                     expandedBound = 400.dp,
@@ -1296,6 +2803,14 @@ class GlassBottomBarInteractionTest {
         }
     }
 
+    private fun visibleTabIconBounds(item: GlasmioTabItem<String>): Rect =
+        compose.onAllNodesWithContentDescription(item.label, useUnmergedTree = true)
+            .fetchSemanticsNodes().last { node ->
+                // The unmerged tree retains the invisible lens source beneath clearing semantics.
+                // The visible selected overlay follows its transparent row placeholder.
+                generateSequence(node.parent) { it.parent }.none { it.config.isClearingSemantics }
+            }.boundsInRoot
+
     private fun showBar() {
         compose.setContent {
             MaterialTheme {
@@ -1303,7 +2818,7 @@ class GlassBottomBarInteractionTest {
                     LocalGlassAppearance provides glassAppearance.value,
                     LocalLayoutDirection provides barLayoutDirection.value,
                 ) {
-                    GlassBottomBar(
+                    GlasmioNavigationBar(
                         items = items.value,
                         selectedKey = selectedKey.value,
                         onSelected = { key ->

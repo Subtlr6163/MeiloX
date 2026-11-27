@@ -66,10 +66,13 @@ val buildCommitSha = sourceBuildMetadata[1].ifBlank {
     providers.gradleProperty("mei.buildCommitSha").orElse("").get().trim()
 }.takeIf { it.matches(Regex("[0-9a-fA-F]{40}|[0-9a-fA-F]{64}")) }.orEmpty().lowercase()
 val buildSourceDirty = sourceBuildMetadata[2].toBoolean()
-val isCanonicalCi = providers.environmentVariable("GITHUB_REPOSITORY").orElse("").get()
-    .equals("NEORUAA/MeiloX", ignoreCase = true) &&
-    providers.environmentVariable("GITHUB_WORKFLOW_REF").orElse("").get().substringBefore('@')
-        .equals("NEORUAA/MeiloX/.github/workflows/main.yml", ignoreCase = true)
+val canonicalRepositories = setOf("MeiloX/MeiloX", "NEORUAA/MeiloX")
+val githubRepository = providers.environmentVariable("GITHUB_REPOSITORY").orElse("").get()
+val githubWorkflowPath = providers.environmentVariable("GITHUB_WORKFLOW_REF").orElse("").get().substringBefore('@')
+val isCanonicalCi = canonicalRepositories.any { repo ->
+    githubRepository.equals(repo, ignoreCase = true) &&
+        githubWorkflowPath.equals("$repo/.github/workflows/main.yml", ignoreCase = true)
+}
 val ciRunNumber = if (isCanonicalCi) providers.gradleProperty("mei.ciRunNumber")
     .orElse(providers.environmentVariable("GITHUB_RUN_NUMBER"))
     .orElse("0")
@@ -84,14 +87,22 @@ val ciRunAttempt = if (isCanonicalCi) providers.gradleProperty("mei.ciRunAttempt
 android {
     namespace = "com.ljyh.mei"
     compileSdk = 37
-    ndkVersion = "27.1.12297006"
+    ndkVersion = "29.0.14206865"
     useLibrary("android.test.mock")
     testBuildType = providers.gradleProperty("mei.instrumentationBuildType").orElse("debug").get()
+    sourceSets.named("main") {
+        val integration = if (providers.gradleProperty("glasmio.source").orNull == "true") {
+            "glasmioSource"
+        } else {
+            "glasmioMaven"
+        }
+        kotlin.srcDir("src/$integration/kotlin")
+    }
     defaultConfig {
         applicationId = providers.gradleProperty("mei.applicationId")
             .orElse("com.neoruaa.meilox")
             .get()
-        minSdk = 33
+        minSdk = 31
         targetSdk = 37
         versionCode = 16
         versionName = "1.55.1"
@@ -108,6 +119,11 @@ android {
         ndk {
             //noinspection ChromeOsAbiSupport
             abiFilters += "arm64-v8a"
+        }
+        externalNativeBuild {
+            cmake {
+                arguments += "-DANDROID_STL=c++_shared"
+            }
         }
     }
     externalNativeBuild {
@@ -134,19 +150,32 @@ android {
 
     }
     buildFeatures {
+        aidl = true
         buildConfig = true
         compose = true
+        prefab = true
     }
     packaging {
         // Direct-distribution APKs prioritize download size. Android extracts these
         // entries at install time instead of mmap'ing them directly from the APK.
         jniLibs.useLegacyPackaging = true
+        // The bundled Netease SDK and Oboe share the compatible libc++ runtime.
+        jniLibs.pickFirsts += "lib/arm64-v8a/libc++_shared.so"
         dex.useLegacyPackaging = true
     }
 }
 
 configurations.all {
     exclude("com.soywiz.korlibs.krypto","krypto-android")
+}
+
+// Local JVM tests need OkHttp's classpath PSL resource instead of Android assets.
+val okhttpJvmForUnitTests = "com.squareup.okhttp3:okhttp-jvm:${libs.versions.loggingInterceptor.get()}"
+configurations.matching { it.name.contains("UnitTest") }.configureEach {
+    resolutionStrategy.dependencySubstitution {
+        substitute(module("com.squareup.okhttp3:okhttp")).using(module(okhttpJvmForUnitTests))
+        substitute(module("com.squareup.okhttp3:okhttp-android")).using(module(okhttpJvmForUnitTests))
+    }
 }
 
 kotlin {
@@ -162,8 +191,18 @@ kotlin {
     }
 }
 
-dependencies {
+ksp {
+    arg("room.schemaLocation", layout.projectDirectory.dir("schemas").asFile.path)
+}
 
+dependencies {
+    val glasmioVersion = providers.gradleProperty("glasmio.version").orElse("0.1.3")
+    implementation("androidx.webkit:webkit:1.14.0")
+    implementation("io.github.dokar3:quickjs-kt:1.0.18")
+    implementation("io.github.neoruaa.glasmio:glasmio-scaffold:${glasmioVersion.get()}")
+    implementation("io.github.neoruaa.glasmio:glasmio-preference:${glasmioVersion.get()}")
+
+    implementation(libs.oboe)
     implementation(libs.androidx.core.ktx)
     implementation(libs.bcprov.jdk18on)
     implementation(libs.androidx.lifecycle.runtime.ktx)
@@ -181,6 +220,7 @@ dependencies {
     implementation(libs.androidx.camera.view)
     implementation(libs.mlkit.barcode.scanning)
     implementation(libs.miuix.navigation3.ui.android)
+    implementation(libs.miuix.ui.android)
     implementation(libs.androidx.navigation3.runtime)
     implementation(libs.media3)
     implementation(libs.media3.session)
@@ -261,7 +301,6 @@ dependencies {
     implementation(libs.zoomable)
     implementation(libs.timber)
     implementation(libs.compose.cloudy)
-    implementation(libs.backdrop)
     implementation(libs.shapes)
     implementation(libs.capsule)
 }

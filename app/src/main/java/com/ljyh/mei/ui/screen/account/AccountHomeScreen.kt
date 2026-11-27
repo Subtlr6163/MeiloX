@@ -1,6 +1,11 @@
 package com.ljyh.mei.ui.screen.account
 
-import android.content.Context
+import io.github.neoruaa.glasmio.core.*
+import io.github.neoruaa.glasmio.glass.*
+import io.github.neoruaa.glasmio.icons.*
+import io.github.neoruaa.glasmio.ui.*
+import io.github.neoruaa.glasmio.scaffold.*
+
 import androidx.annotation.OptIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -24,12 +29,8 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
-import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
-import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -49,7 +50,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.datastore.preferences.core.edit
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -57,39 +57,38 @@ import androidx.media3.common.util.UnstableApi
 import coil3.compose.AsyncImage
 import com.kyant.capsule.ContinuousRoundedRectangle
 import com.ljyh.mei.R
-import com.ljyh.mei.constants.CookieKey
-import com.ljyh.mei.constants.UserAvatarUrlKey
-import com.ljyh.mei.constants.UserIdKey
-import com.ljyh.mei.constants.UserNicknameKey
-import com.ljyh.mei.data.model.melox.AccountDetail
+import com.ljyh.mei.source.shared.OnlineAccountDetail as AccountDetail
 import com.ljyh.mei.data.model.melox.AccountConnectionType
-import com.ljyh.mei.data.model.melox.AccountPlaylist
-import com.ljyh.mei.data.model.melox.AccountProfile
+import com.ljyh.mei.source.shared.OnlineAccountPlaylist as AccountPlaylist
+import com.ljyh.mei.source.shared.OnlineAccountProfile as AccountProfile
+import com.ljyh.mei.data.model.toMediaMetadata
+import com.ljyh.mei.data.model.toMediaItem
 import com.ljyh.mei.data.model.melox.ListeningStatsSummary
-import com.ljyh.mei.data.model.melox.UserPlayRecord
-import com.ljyh.mei.data.repository.MeloXRepository
+import com.ljyh.mei.source.shared.OnlineUserPlayRecord as UserPlayRecord
+import com.ljyh.mei.source.shared.SharedOnlineRepository
 import com.ljyh.mei.playback.queue.ListQueue
-import com.ljyh.mei.ui.glass.GlassButton
-import com.ljyh.mei.ui.glass.GlassCard
-import com.ljyh.mei.ui.glass.GlassEmphasis
-import com.ljyh.mei.ui.glass.GlassIconButton
-import com.ljyh.mei.ui.glass.GlassSegmentedControl
-import com.ljyh.mei.ui.glass.IosTypography
-import com.ljyh.mei.ui.glass.IosListRow
-import com.ljyh.mei.ui.glass.IosPinnedListPage
-import com.ljyh.mei.ui.glass.IosPinnedPage
-import com.ljyh.mei.ui.glass.LocalGlassColors
-import com.ljyh.mei.ui.glass.SfIcon
-import com.ljyh.mei.ui.glass.SfSymbol
-import com.ljyh.mei.ui.liquidglass.InteractiveHighlight
+import io.github.neoruaa.glasmio.ui.GlasmioButton
+import io.github.neoruaa.glasmio.ui.GlasmioCard
+import io.github.neoruaa.glasmio.glass.GlassEmphasis
+import io.github.neoruaa.glasmio.ui.GlasmioIconButton
+import io.github.neoruaa.glasmio.ui.GlasmioSegmentedControl
+import io.github.neoruaa.glasmio.core.IosTypography
+import io.github.neoruaa.glasmio.ui.GlasmioListRow
+import com.ljyh.mei.ui.component.item.GroupedSongRow
+import com.ljyh.mei.ui.navigation.meiloxHeaderAction
+import com.ljyh.mei.ui.navigation.MeiloXPinnedListPage
+import com.ljyh.mei.ui.navigation.MeiloXPinnedPage
+import io.github.neoruaa.glasmio.core.LocalGlassColors
+import io.github.neoruaa.glasmio.icons.SfIcon
+import io.github.neoruaa.glasmio.icons.SfSymbol
+import io.github.neoruaa.glasmio.glass.InteractiveHighlight
 import com.ljyh.mei.ui.local.LocalNavController
 import com.ljyh.mei.ui.local.LocalPlayerAwareWindowInsets
 import com.ljyh.mei.ui.local.LocalPlayerConnection
 import com.ljyh.mei.ui.screen.Screen
 import com.ljyh.mei.ui.screen.main.library.component.groupedLazyItems
-import com.ljyh.mei.utils.dataStore
+import io.github.neoruaa.glasmio.scaffold.GlasmioPullToRefreshBox
 import dagger.hilt.android.lifecycle.HiltViewModel
-import dagger.hilt.android.qualifiers.ApplicationContext
 import java.text.NumberFormat
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
@@ -117,16 +116,23 @@ data class AccountHomeState(
 
 @HiltViewModel
 class AccountHomeViewModel @Inject constructor(
-    private val repository: MeloXRepository,
-    @ApplicationContext private val context: Context,
+    onlineRepository: SharedOnlineRepository,
+    savedStateHandle: androidx.lifecycle.SavedStateHandle,
 ) : ViewModel() {
+    private val repository = onlineRepository.screen("account-home", savedStateHandle["providerId"])
+    val providerId: String? get() = repository.providerId
     private val _state = MutableStateFlow(AccountHomeState())
     val state: StateFlow<AccountHomeState> = _state
 
     private var refreshJob: Job? = null
 
     init {
-        refresh()
+        viewModelScope.launch { repository.sessionChanges.collect { owner ->
+            if (owner.isNotBlank()) refresh() else {
+                refreshJob?.cancel()
+                _state.value = AccountHomeState(loading = false, summaryLoading = false)
+            }
+        } }
     }
 
     fun refresh() {
@@ -135,11 +141,6 @@ class AccountHomeViewModel @Inject constructor(
             _state.value = _state.value.copy(loading = true, summaryLoading = true, error = null)
             try {
                 val profile = repository.accountProfile()
-                context.dataStore.edit { preferences ->
-                    preferences[UserIdKey] = profile.id.toString()
-                    preferences[UserNicknameKey] = profile.nickname
-                    profile.avatarUrl?.let { preferences[UserAvatarUrlKey] = it }
-                }
                 coroutineScope {
                     val detail = async { runCatching { repository.accountDetail(profile.id) }.getOrNull() }
                     val playlists = async { runCatching { repository.accountPlaylists(profile.id) }.getOrDefault(emptyList()) }
@@ -152,6 +153,7 @@ class AccountHomeViewModel @Inject constructor(
                         listeningSummary = _state.value.listeningSummary.takeIf { _state.value.profile?.id == profile.id },
                     )
                     ensureActive()
+                    repository.features().ensureCurrent()
                     _state.value = account
                     val summary = listeningSummary.await()
                     ensureActive()
@@ -176,15 +178,15 @@ fun AccountHomeScreen(viewModel: AccountHomeViewModel = hiltViewModel()) {
     val state by viewModel.state.collectAsState()
     val navController = LocalNavController.current
     val insets = LocalPlayerAwareWindowInsets.current.asPaddingValues()
-    IosPinnedListPage(
+    MeiloXPinnedListPage(
         title = stringResource(R.string.account_home),
         onNavigateBack = navController::navigateUp,
         bottomPadding = insets.calculateBottomPadding(),
         verticalArrangement = Arrangement.spacedBy(0.dp),
         actions = {
-            GlassIconButton(viewModel::refresh) {
-                SfIcon(SfSymbol.ArrowClockwise, stringResource(R.string.refresh))
-            }
+            listOf(meiloxHeaderAction("refresh", stringResource(R.string.refresh), viewModel::refresh) {
+                SfIcon(SfSymbol.ArrowClockwise, null)
+            })
         },
     ) {
         state.profile?.let { profile ->
@@ -197,18 +199,34 @@ fun AccountHomeScreen(viewModel: AccountHomeViewModel = hiltViewModel()) {
                         playlistCount = state.playlists.size,
                         listeningSummary = state.listeningSummary,
                         summaryLoading = state.summaryLoading,
-                        onListeningStats = { Screen.ListeningStats.navigate(navController) },
+                        onListeningStats = { Screen.ListeningStats.navigate(navController) { addQuery("providerId", displayedProfile.providerId) } },
                         onConnections = { type ->
                             Screen.AccountConnections.navigate(navController) {
-                                addPath(displayedProfile.id.toString())
+                                addPath(android.net.Uri.encode(displayedProfile.id))
+                                addQuery("providerId", displayedProfile.providerId)
                                 addPath(type.name)
                             }
                         },
                         onRankings = {
                             Screen.AccountListeningRank.navigate(navController) {
-                                addPath(displayedProfile.id.toString())
+                                addPath(android.net.Uri.encode(displayedProfile.id))
+                                addQuery("providerId", displayedProfile.providerId)
                             }
                         },
+                    )
+                }
+            }
+            item {
+                GlasmioGroupedList(Modifier.padding(top = 10.dp)) {
+                    GlasmioListRow(
+                        title = stringResource(R.string.netease_musician),
+                        systemName = "mic",
+                        onClick = { Screen.NeteaseMusician.navigate(navController) { addQuery("providerId", displayedProfile.providerId) } },
+                    )
+                    GlasmioListRow(
+                        title = stringResource(R.string.account_security),
+                        systemName = "shield",
+                        onClick = { Screen.AccountSecurity.navigate(navController) { addQuery("providerId", displayedProfile.providerId) } },
                     )
                 }
             }
@@ -233,14 +251,14 @@ fun AccountHomeScreen(viewModel: AccountHomeViewModel = hiltViewModel()) {
         }
         state.error?.let { message ->
             item {
-                GlassCard(
+                GlasmioCard(
                     Modifier
                         .fillMaxWidth()
                         .padding(top = 10.dp),
                 ) {
                     Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text(message, color = MaterialTheme.colorScheme.error)
-                        GlassButton(viewModel::refresh, emphasis = GlassEmphasis.Prominent) {
+                        GlasmioButton(viewModel::refresh, emphasis = GlassEmphasis.Prominent) {
                             Text(stringResource(R.string.retry))
                         }
                     }
@@ -254,7 +272,7 @@ fun AccountHomeScreen(viewModel: AccountHomeViewModel = hiltViewModel()) {
                 contentType = "account-playlist",
                 firstItemTopPadding = 10.dp,
             ) { playlist, index ->
-                IosListRow(
+                GlasmioListRow(
                     title = playlist.name,
                     subtitle = stringResource(R.string.account_track_count, playlist.trackCount),
                     showTopSeparator = index > 0,
@@ -267,7 +285,7 @@ fun AccountHomeScreen(viewModel: AccountHomeViewModel = hiltViewModel()) {
                         )
                     },
                     onClick = {
-                        Screen.PlayList.navigate(navController) { addPath(playlist.id.toString()) }
+                        com.ljyh.mei.ui.screen.source.navigateSourceContent(navController, playlist.ref)
                     },
                 )
             }
@@ -286,7 +304,7 @@ private fun AccountHero(
     onConnections: (AccountConnectionType) -> Unit,
     onRankings: () -> Unit,
 ) {
-    GlassCard(Modifier.fillMaxWidth()) {
+    GlasmioCard(Modifier.fillMaxWidth()) {
         Column(Modifier.fillMaxWidth()) {
             Column(
                 Modifier.fillMaxWidth()
@@ -357,12 +375,12 @@ private fun AccountHero(
                     Modifier.weight(1f),
                 )
             }
-            IosListRow(
+            GlasmioListRow(
                 title = stringResource(R.string.listening_stats_entry),
                 systemName = "clock",
                 onClick = onListeningStats,
             )
-            IosListRow(
+            GlasmioListRow(
                 title = stringResource(R.string.account_listening_rank),
                 systemName = "chart.bar.xaxis",
                 onClick = onRankings,
@@ -415,33 +433,32 @@ data class ListeningRankState(
 
 @HiltViewModel
 class ListeningRankViewModel @Inject constructor(
-    private val repository: MeloXRepository,
-    @ApplicationContext private val context: Context,
+    onlineRepository: SharedOnlineRepository,
+    savedStateHandle: androidx.lifecycle.SavedStateHandle,
 ) : ViewModel() {
-    private val cache = mutableMapOf<Pair<Long, ListeningPeriod>, List<UserPlayRecord>>()
-    private val totalSongsCache = mutableMapOf<Long, Int?>()
+    private val repository = onlineRepository.screen("listening-rank", savedStateHandle["providerId"])
+    val providerId: String? get() = repository.providerId
+    private val cache = mutableMapOf<Pair<String, ListeningPeriod>, List<UserPlayRecord>>()
+    private val totalSongsCache = mutableMapOf<String, Int?>()
     private var loadJob: Job? = null
-    private var currentUserId: Long? = null
+    private var currentUserId: String? = null
     private val _state = MutableStateFlow(ListeningRankState())
     val state: StateFlow<ListeningRankState> = _state
 
     init {
         viewModelScope.launch {
-            context.dataStore.data
-                .map { it[UserIdKey] to it[CookieKey] }
-                .distinctUntilChanged()
-                .collect {
+            repository.sessionChanges.collect { owner ->
                     loadJob?.cancel()
                     cache.clear()
                     totalSongsCache.clear()
                     val period = _state.value.period
                     _state.value = ListeningRankState(period = period)
-                    currentUserId?.let { userId -> load(userId, period, force = true) }
+                    if (owner.isNotBlank()) currentUserId?.let { userId -> load(userId, period, force = true) }
                 }
         }
     }
 
-    fun load(userId: Long, period: ListeningPeriod, force: Boolean = false) {
+    fun load(userId: String, period: ListeningPeriod, force: Boolean = false) {
         currentUserId = userId
         loadJob?.cancel()
         val key = userId to period
@@ -473,6 +490,7 @@ class ListeningRankViewModel @Inject constructor(
             }
             val totalSongs = summary.await()
             ensureActive()
+            repository.features().ensureCurrent()
             totalSongs.onSuccess { totalSongsCache[userId] = it }
             records.onSuccess { cache[key] = it }
             _state.value = ListeningRankState(
@@ -487,15 +505,13 @@ class ListeningRankViewModel @Inject constructor(
 }
 
 @OptIn(UnstableApi::class)
-@kotlin.OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ListeningRankScreen(userId: Long, viewModel: ListeningRankViewModel = hiltViewModel()) {
+fun ListeningRankScreen(userId: String, viewModel: ListeningRankViewModel = hiltViewModel()) {
     val state by viewModel.state.collectAsState()
     val navController = LocalNavController.current
     val playerConnection = LocalPlayerConnection.current
     val insets = LocalPlayerAwareWindowInsets.current.asPaddingValues()
     val listState = rememberLazyListState()
-    val refreshState = rememberPullToRefreshState()
     val collapseDistancePx = with(LocalDensity.current) { 56.dp.toPx() }
     val collapseProgress by remember(listState, collapseDistancePx) {
         derivedStateOf {
@@ -504,25 +520,21 @@ fun ListeningRankScreen(userId: Long, viewModel: ListeningRankViewModel = hiltVi
         }
     }
     LaunchedEffect(userId) { viewModel.load(userId, ListeningPeriod.Week) }
-    IosPinnedPage(
+    MeiloXPinnedPage(
         title = stringResource(R.string.account_listening_rank),
         onNavigateBack = navController::navigateUp,
         bottomPadding = insets.calculateBottomPadding(),
         collapseProgress = collapseProgress,
+        topBarBlurProgress = collapseProgress,
     ) { contentPadding ->
-        PullToRefreshBox(
+        GlasmioPullToRefreshBox(
             isRefreshing = state.refreshing,
-            onRefresh = { if (!state.loading) viewModel.load(userId, state.period, force = true) },
-            state = refreshState,
-            modifier = Modifier.fillMaxSize(),
-            indicator = {
-                PullToRefreshDefaults.Indicator(
-                    state = refreshState,
-                    isRefreshing = state.refreshing,
-                    modifier = Modifier.align(Alignment.TopCenter)
-                        .padding(top = contentPadding.calculateTopPadding()),
-                )
+            onRefresh = {
+                val current = viewModel.state.value
+                if (!current.loading) viewModel.load(userId, current.period, force = true)
             },
+            modifier = Modifier.fillMaxSize(),
+            indicatorPadding = PaddingValues(top = contentPadding.calculateTopPadding()),
         ) {
             LazyColumn(
                 state = listState,
@@ -534,7 +546,7 @@ fun ListeningRankScreen(userId: Long, viewModel: ListeningRankViewModel = hiltVi
                     ListeningSummary(state.totalSongsListened)
                 }
                 item(key = "rank-period") {
-                    GlassSegmentedControl(
+                    GlasmioSegmentedControl(
                         items = listOf(
                             ListeningPeriod.Week to stringResource(R.string.account_week),
                             ListeningPeriod.AllTime to stringResource(R.string.account_all_time),
@@ -589,9 +601,11 @@ fun ListeningRankScreen(userId: Long, viewModel: ListeningRankViewModel = hiltVi
                             contentType = "account-rank-record",
                             firstItemTopPadding = 10.dp,
                         ) { record, index ->
-                            IosListRow(
+                            GroupedSongRow(
                                 title = record.song.name,
-                                subtitle = record.song.artists.joinToString(" / "),
+                                artist = record.song.artists.joinToString(" / "),
+                                trackRef = record.song.track.ref,
+                                hasAlternateVersion = record.song.track.hasAlternateVersion,
                                 detail = record.playCount?.let {
                                     stringResource(R.string.listening_rank_play_count, NumberFormat.getIntegerInstance().format(it))
                                 } ?: stringResource(R.string.listening_count_unavailable),
@@ -617,7 +631,7 @@ fun ListeningRankScreen(userId: Long, viewModel: ListeningRankViewModel = hiltVi
                                         ListQueue(
                                             id = "account-rank-${state.period.name}",
                                             title = navController.context.getString(R.string.account_listening_rank),
-                                            items = state.records.map { it.song.id.toString() to null },
+                                            items = state.records.map { val item = it.song.track.toMediaMetadata().toMediaItem(); item.mediaId to item },
                                             startIndex = index,
                                         ),
                                     )

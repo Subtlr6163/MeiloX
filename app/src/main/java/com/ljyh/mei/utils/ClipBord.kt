@@ -5,7 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
 
-fun setClipboard(context: Context, text: String, label: String) {
+fun setClipboard(context: Context, text: String, label: String, confirmation: String = "$label 已复制") {
     val clipboard =
         context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     clipboard.setPrimaryClip(
@@ -14,5 +14,5 @@ fun setClipboard(context: Context, text: String, label: String) {
             text
         )
     )
-    Toast.makeText(context, "$label 已复制", Toast.LENGTH_SHORT).show()
+    Toast.makeText(context, confirmation, Toast.LENGTH_SHORT).show()
 }

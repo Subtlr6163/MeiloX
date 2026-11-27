@@ -26,10 +26,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -41,9 +44,18 @@ import coil3.compose.AsyncImage
 import coil3.compose.AsyncImagePainter
 import com.kyant.capsule.ContinuousRoundedRectangle
 import com.ljyh.mei.constants.PlaylistCardSize
-import com.ljyh.mei.ui.glass.SfIcon
-import com.ljyh.mei.ui.glass.SfSymbol
+import com.ljyh.mei.ui.component.item.AlternateVersionSubtitle
+import io.github.neoruaa.glasmio.core.LocalGlassColors
+import io.github.neoruaa.glasmio.icons.SfIcon
+import io.github.neoruaa.glasmio.icons.SfSymbol
 import com.ljyh.mei.utils.largeImage
+
+private val PlaylistCardShape = ContinuousRoundedRectangle(8.dp)
+private val PlaylistCardTextShadow = Shadow(
+    color = Color.Black.copy(alpha = 0.7f),
+    offset = Offset(2f, 2f),
+    blurRadius = 4f,
+)
 
 @Composable
 fun PlaylistCard(
@@ -56,19 +68,15 @@ fun PlaylistCard(
     cardSize: Dp = PlaylistCardSize,
     titleMaxLines: Int = 2,
     secondaryTitle: String? = null,
+    showAlternateVersion: Boolean = false,
+    onAlternateVersionClick: (() -> Unit)? = null,
     onClick: () -> Unit
 ) {
-    // 常用阴影样式，提取出来复用
-    val textShadow = Shadow(
-        color = Color.Black.copy(alpha = 0.7f),
-        offset = Offset(2f, 2f),
-        blurRadius = 4f
-    )
+    val textShadow = PlaylistCardTextShadow
 
     Column(
         modifier = Modifier
             .width(cardSize)
-            .clip(ContinuousRoundedRectangle(8.dp)) // 整个组件裁切，防止水波纹溢出
             .clickable(
                 interactionSource = null,
                 indication = null,
@@ -76,14 +84,18 @@ fun PlaylistCard(
             )
     ) {
         Box(
-            modifier = Modifier.size(cardSize)
-                .homeArtworkBorder(ContinuousRoundedRectangle(8.dp))
+            modifier = Modifier
+                .size(cardSize)
+                // Cache the static squircle-clipped artwork + border tile in a GPU layer to avoid
+                // per-frame SW path mask texture uploads during scrolling and nav transitions.
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                .homeArtworkBorder(PlaylistCardShape)
         ) {
             HomeCoverImage(
                 model = coverImg.takeIf(String::isNotBlank)?.let { if (imageSize) it.largeImage() else it },
                 modifier = Modifier
                     .matchParentSize()
-                    .clip(ContinuousRoundedRectangle(8.dp)),
+                    .clip(PlaylistCardShape),
             )
 
             // 底部左侧副标题 (如果有)
@@ -113,24 +125,32 @@ fun PlaylistCard(
             text = title,
             overflow = TextOverflow.Ellipsis,
             color = MaterialTheme.colorScheme.onSurface,
-            maxLines = if (extInfo != null && secondaryTitle == null) 2 else titleMaxLines,
-            minLines = if (extInfo != null && secondaryTitle == null) 2 else 1,
+            maxLines = titleMaxLines,
             fontSize = 13.sp, // 调整字体大小，更精致
             lineHeight = 18.sp,
             fontWeight = FontWeight.Medium,
             modifier = Modifier.fillMaxWidth()
         )
-        if (secondaryTitle != null) {
-            Text(
-                text = secondaryTitle,
-                overflow = TextOverflow.Ellipsis,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                fontSize = 13.sp,
-                lineHeight = 18.sp,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier.fillMaxWidth()
-            )
+        if (showAlternateVersion || !secondaryTitle.isNullOrBlank()) {
+            val subtitleColor = MaterialTheme.colorScheme.onSurfaceVariant
+            AlternateVersionSubtitle(
+                showBadge = showAlternateVersion,
+                color = subtitleColor,
+                onBadgeClick = onAlternateVersionClick,
+            ) {
+                if (!secondaryTitle.isNullOrBlank()) {
+                    Text(
+                        text = secondaryTitle,
+                        overflow = TextOverflow.Ellipsis,
+                        color = subtitleColor,
+                        maxLines = 1,
+                        fontSize = 13.sp,
+                        lineHeight = 18.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
         }
         if (extInfo != null) {
             Row(
@@ -162,7 +182,7 @@ fun PlaylistCard(
 @Composable
 internal fun Modifier.homeArtworkBorder(shape: Shape): Modifier = border(
     width = 0.5.dp,
-    color = Color(0xFF8E8E93).copy(alpha = 0.35f),
+    color = Color(0xFF8E8E93).copy(alpha = if (LocalGlassColors.current.isDark) 0.30f else 0.10f),
     shape = shape,
 )
 
@@ -180,14 +200,15 @@ internal fun HomeCoverImage(
         modifier = modifier.background(MaterialTheme.colorScheme.surfaceVariant),
         contentAlignment = Alignment.Center,
     ) {
-        if (!hasImage) {
-            SfIcon(
-                symbol = SfSymbol.MusicNote,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                size = 32.dp,
-            )
-        }
+        // Toggle placeholder visibility in draw phase so cached artwork loads never recompose
+        // or detach/attach SfIcon mid-scroll.
+        SfIcon(
+            symbol = SfSymbol.MusicNote,
+            contentDescription = null,
+            modifier = Modifier.drawWithContent { if (!hasImage) drawContent() },
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+            size = 32.dp,
+        )
         AsyncImage(
             model = model,
             contentDescription = null,

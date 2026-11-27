@@ -1,16 +1,24 @@
 package com.ljyh.mei.ui.component.player.component.applemusic
 
+import com.ljyh.mei.ui.component.player.PlayerMetadataTrackSwipe
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -18,22 +26,31 @@ import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.graphicsLayer
+import com.ljyh.mei.ui.component.player.component.rememberPlayerFavoriteMotion
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import com.ljyh.mei.R
-import com.ljyh.mei.ui.glass.SfIcon
-import com.ljyh.mei.ui.glass.SfSymbol
+import com.ljyh.mei.ui.component.CopyNameAnchor
+import com.ljyh.mei.ui.component.CopyNamePopover
+import com.ljyh.mei.ui.component.copyNameActions
+import com.ljyh.mei.ui.component.player.LocalPlayerRoamingModeLabel
+import com.ljyh.mei.ui.component.player.autoMixIncomingMetadataDominant
+import io.github.neoruaa.glasmio.icons.SfIcon
+import io.github.neoruaa.glasmio.icons.SfSymbol
 
 @Composable
 fun Title(
@@ -59,12 +76,20 @@ fun Title(
     marqueeEdgeWidth: Dp = AppleMusicDimensions.albumMarqueeEdgeWidth,
     marqueeEnabled: Boolean = true,
     showLikeButton: Boolean = true,
+    modeLabel: String? = LocalPlayerRoamingModeLabel.current,
 ) {
     val shadowStyle = if (needShadow) Shadow(
         color = Color.Black.copy(alpha = 0.3f),
         offset = Offset(2f, 2f),
         blurRadius = 12f
     ) else null
+    val artistStyle = subTitleStyle.copy(shadow = shadowStyle)
+    val artistColor = Color.White.copy(alpha = 0.4f)
+    var metadataWidth by remember { mutableIntStateOf(0) }
+    val favoriteMotion = rememberPlayerFavoriteMotion(isLiked, title to subTitle)
+    val actionsEnabled = enabled && !autoMixIncomingMetadataDominant()
+    val titleAnchor = remember { CopyNameAnchor() }
+    val artistAnchor = remember { CopyNameAnchor() }
 
     Row(
         modifier = modifier.onGloballyPositioned(onRowPositioned),
@@ -74,36 +99,65 @@ fun Title(
         Column(
             modifier = Modifier.weight(1f)
                 .padding(end = if (showLikeButton) 0.dp else 2.dp)
-                .onSizeChanged(onTextSizeChanged)
+                .onSizeChanged { metadataWidth = it.width; onTextSizeChanged(it) }
                 .then(textModifier)
                 .onGloballyPositioned(onTextPositioned)
+                .copyNameActions(
+                    trackName = title,
+                    artistName = subTitle,
+                    enabled = actionsEnabled,
+                )
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
-                    enabled = enabled,
+                    enabled = actionsEnabled,
                     onClick = onTitleClick,
                 ),
-            horizontalAlignment = Alignment.Start
         ) {
-            AppleMusicMarqueeText(
-                text = title,
-                style = titleStyle.copy(
-                    shadow = shadowStyle,
-                    fontWeight = titleStyle.fontWeight ?: FontWeight.Medium,
-                ),
-                color = Color.White,
-                edgeWidth = marqueeEdgeWidth,
-                enabled = marqueeEnabled,
-            )
-            AppleMusicMarqueeText(
-                text = subTitle,
-                style = subTitleStyle.copy(
-                    shadow = shadowStyle,
-                ),
-                color = Color.White.copy(alpha = 0.4f),
-                edgeWidth = marqueeEdgeWidth,
-                enabled = marqueeEnabled,
-            )
+            PlayerTitleWithMode(modeLabel, artistStyle, artistColor) { titleModifier ->
+                CopyNamePopover(
+                    name = title,
+                    actionLabel = R.string.track_action_copy_name,
+                    modifier = titleModifier,
+                    enabled = actionsEnabled,
+                    accessibilityOnParent = true,
+                    textAnchor = titleAnchor,
+                    observeVisibility = true,
+                ) { copyGesture, popoverVisible ->
+                    PlayerMetadataTrackSwipe(modifier = copyGesture, edgeInset = marqueeEdgeWidth, enabled = enabled, pageWidth = metadataWidth) { track, allowMarquee ->
+                        AppleMusicMarqueeText(
+                            text = track?.title ?: title,
+                            style = titleStyle.copy(
+                                shadow = shadowStyle,
+                                fontWeight = titleStyle.fontWeight ?: FontWeight.Medium,
+                            ),
+                            color = Color.White,
+                            edgeWidth = marqueeEdgeWidth,
+                            enabled = marqueeEnabled && allowMarquee && !popoverVisible,
+                            copyAnchor = titleAnchor.takeIf { allowMarquee },
+                        )
+                    }
+                }
+            }
+            CopyNamePopover(
+                name = subTitle,
+                actionLabel = R.string.artist_action_copy_name,
+                enabled = actionsEnabled,
+                accessibilityOnParent = true,
+                textAnchor = artistAnchor,
+                observeVisibility = true,
+            ) { copyGesture, popoverVisible ->
+                PlayerMetadataTrackSwipe(modifier = copyGesture, edgeInset = marqueeEdgeWidth, enabled = enabled, pageWidth = metadataWidth) { track, allowMarquee ->
+                    AppleMusicMarqueeText(
+                        text = track?.artists?.joinToString { it.name } ?: subTitle,
+                        style = artistStyle,
+                        color = artistColor,
+                        edgeWidth = marqueeEdgeWidth,
+                        enabled = marqueeEnabled && allowMarquee && !popoverVisible,
+                        copyAnchor = artistAnchor.takeIf { allowMarquee },
+                    )
+                }
+            }
         }
 
         Row(
@@ -123,29 +177,34 @@ fun Title(
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
-                            enabled = enabled,
+                            enabled = actionsEnabled,
                             role = Role.Button,
-                            onClick = onLikeClick,
+                            onClick = { favoriteMotion.click(isLiked, onLikeClick) },
                         ),
                     contentAlignment = Alignment.Center,
                 ) {
-                    if (isLiked) {
+                    Box(Modifier.graphicsLayer {
+                        scaleX = favoriteMotion.scale.value
+                        scaleY = favoriteMotion.scale.value
+                    }, contentAlignment = Alignment.Center) {
+                        if (isLiked) {
+                            SfIcon(
+                                symbol = SfSymbol.StarFilled,
+                                contentDescription = null,
+                                modifier = Modifier.blur(2.dp, BlurredEdgeTreatment.Unbounded),
+                                tint = iconColor.copy(alpha = 0.28f),
+                                size = 24.dp,
+                                weight = FontWeight.Bold,
+                            )
+                        }
                         SfIcon(
-                            symbol = SfSymbol.StarFilled,
-                            contentDescription = null,
-                            modifier = Modifier.blur(2.dp, BlurredEdgeTreatment.Unbounded),
-                            tint = iconColor.copy(alpha = 0.28f),
+                            symbol = if (isLiked) SfSymbol.StarFilled else SfSymbol.Star,
+                            contentDescription = stringResource(R.string.app_tab_library_songs),
+                            tint = iconColor.copy(alpha = 0.8f),
                             size = 24.dp,
-                            weight = FontWeight.Bold,
+                            weight = FontWeight.Bold
                         )
                     }
-                    SfIcon(
-                        symbol = if (isLiked) SfSymbol.StarFilled else SfSymbol.Star,
-                        contentDescription = stringResource(R.string.app_tab_library_songs),
-                        tint = iconColor.copy(alpha = 0.8f),
-                        size = 24.dp,
-                        weight = FontWeight.Bold
-                    )
                 }
             }
 
@@ -157,7 +216,7 @@ fun Title(
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
-                        enabled = enabled,
+                        enabled = actionsEnabled,
                         role = Role.Button,
                         onClick = onMoreClick,
                     ),
@@ -171,6 +230,46 @@ fun Title(
                 )
             }
         }
+    }
+}
+
+@Composable
+internal fun PlayerTitleWithMode(
+    modeLabel: String?,
+    modeStyle: TextStyle,
+    modeColor: Color,
+    title: @Composable (Modifier) -> Unit,
+) {
+    if (modeLabel.isNullOrBlank()) {
+        title(Modifier)
+        return
+    }
+    Row {
+        title(Modifier.weight(1f, fill = false).width(IntrinsicSize.Max).alignByBaseline())
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = modeLabel,
+            style = modeStyle,
+            color = modeColor,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.alignByBaseline().layout { measurable, constraints ->
+                // Keep a readable title viewport even for long scene names and large text.
+                val maxModeWidth = if (constraints.hasBoundedWidth) {
+                    (constraints.maxWidth * 0.45f).toInt()
+                } else constraints.maxWidth
+                val placeable = measurable.measure(
+                    constraints.copy(
+                        minWidth = constraints.minWidth.coerceAtMost(maxModeWidth),
+                        maxWidth = maxModeWidth,
+                    ),
+                )
+                layout(placeable.width, placeable.height) {
+                    placeable.placeRelative(0, 0)
+                }
+            },
+        )
     }
 }
 

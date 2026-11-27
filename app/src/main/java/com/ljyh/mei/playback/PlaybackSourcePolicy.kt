@@ -3,14 +3,36 @@ package com.ljyh.mei.playback
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.StuckPlayerException
+import androidx.media3.datasource.HttpDataSource
 import com.ljyh.mei.constants.MusicQuality
 import java.util.Locale
+import java.util.Base64
+import com.ljyh.mei.source.api.PlaybackResolution
+import com.ljyh.mei.source.api.TrackRefCodec
+import com.ljyh.mei.source.api.TrackRef
+import com.ljyh.mei.source.api.ProviderInstanceId
+import com.ljyh.mei.source.api.AudioResource
+import com.ljyh.mei.source.api.MusicProvider
+import com.ljyh.mei.source.api.SourceErrorCode
+import com.ljyh.mei.source.api.SourceException
+import com.ljyh.mei.source.api.SourceRuntimeUnavailableException
+import com.ljyh.mei.source.core.audioResourceIdentity
+import com.ljyh.mei.source.core.PlaybackResolutionException
 
 private const val PLAYBACK_CACHE_KEY_VERSION = "meilox-media-v3"
 
+/** Initial bindings and selecting another source do not revoke work for the newly selected track. */
+internal fun shouldInvalidatePlaybackOwner(
+    previous: MusicProvider?, previousRevision: String?, current: MusicProvider?, currentRevision: String?, sameSource: Boolean,
+): Boolean = sameSource && previous != null && (previous !== current || previousRevision != currentRevision)
+
 /** Normalizes quality values from preferences, API responses, and enum names. */
 internal fun normalizePlaybackQuality(quality: String): String =
-    quality.trim().lowercase(Locale.ROOT).ifBlank { MusicQuality.EXHIGH.text }
+    when (val normalized = quality.trim().lowercase(Locale.ROOT)) {
+        "" -> MusicQuality.EXHIGH.text
+        "higher" -> MusicQuality.STANDARD.text
+        else -> normalized
+    }
 
 /** Only advertised player levels are supported; unknown server formats need a fallback. */
 internal fun isSupportedPlaybackQuality(quality: String?): Boolean =
@@ -27,58 +49,62 @@ internal fun effectivePlaybackQuality(sourceQuality: String?, attemptedQuality: 
  * Returns the requested quality followed by the progressively lower qualities
  * supported by the NetEase player endpoint.
  */
-internal fun playbackQualityFallbacks(requestedQuality: String): List<String> = when (
-    normalizePlaybackQuality(requestedQuality)
-) {
-    MusicQuality.STANDARD.text -> listOf(MusicQuality.STANDARD.text)
-    MusicQuality.EXHIGH.text -> listOf(
-        MusicQuality.EXHIGH.text,
-        MusicQuality.STANDARD.text,
-    )
-    MusicQuality.LOSSLESS.text -> listOf(
-        MusicQuality.LOSSLESS.text,
-        MusicQuality.EXHIGH.text,
-        MusicQuality.STANDARD.text,
-    )
-    MusicQuality.HIRES.text -> listOf(
-        MusicQuality.HIRES.text,
-        MusicQuality.LOSSLESS.text,
-        MusicQuality.EXHIGH.text,
-        MusicQuality.STANDARD.text,
-    )
-    MusicQuality.JYEFFECT.text -> listOf(
-        MusicQuality.JYEFFECT.text,
-        MusicQuality.LOSSLESS.text,
-        MusicQuality.EXHIGH.text,
-        MusicQuality.STANDARD.text,
-    )
-    MusicQuality.SKY.text -> listOf(
-        MusicQuality.SKY.text,
-        MusicQuality.JYEFFECT.text,
-        MusicQuality.LOSSLESS.text,
-        MusicQuality.EXHIGH.text,
-        MusicQuality.STANDARD.text,
-    )
-    MusicQuality.JYMASTER.text -> listOf(
-        MusicQuality.JYMASTER.text,
-        MusicQuality.HIRES.text,
-        MusicQuality.LOSSLESS.text,
-        MusicQuality.EXHIGH.text,
-        MusicQuality.STANDARD.text,
-    )
-    MusicQuality.DOLBY.text -> listOf(
-        MusicQuality.DOLBY.text,
-        MusicQuality.SKY.text,
-        MusicQuality.JYEFFECT.text,
-        MusicQuality.HIRES.text,
-        MusicQuality.LOSSLESS.text,
-        MusicQuality.EXHIGH.text,
-        MusicQuality.STANDARD.text,
-    )
-    else -> listOf(
-        MusicQuality.EXHIGH.text,
-        MusicQuality.STANDARD.text,
-    )
+internal fun playbackQualityFallbacks(
+    requestedQuality: String,
+    allowDolby: Boolean = true,
+): List<String> {
+    val fallbacks = when (normalizePlaybackQuality(requestedQuality)) {
+        MusicQuality.STANDARD.text -> listOf(MusicQuality.STANDARD.text)
+        MusicQuality.EXHIGH.text -> listOf(
+            MusicQuality.EXHIGH.text,
+            MusicQuality.STANDARD.text,
+        )
+        MusicQuality.LOSSLESS.text -> listOf(
+            MusicQuality.LOSSLESS.text,
+            MusicQuality.EXHIGH.text,
+            MusicQuality.STANDARD.text,
+        )
+        MusicQuality.HIRES.text -> listOf(
+            MusicQuality.HIRES.text,
+            MusicQuality.LOSSLESS.text,
+            MusicQuality.EXHIGH.text,
+            MusicQuality.STANDARD.text,
+        )
+        MusicQuality.JYEFFECT.text -> listOf(
+            MusicQuality.JYEFFECT.text,
+            MusicQuality.LOSSLESS.text,
+            MusicQuality.EXHIGH.text,
+            MusicQuality.STANDARD.text,
+        )
+        MusicQuality.SKY.text -> listOf(
+            MusicQuality.SKY.text,
+            MusicQuality.JYEFFECT.text,
+            MusicQuality.LOSSLESS.text,
+            MusicQuality.EXHIGH.text,
+            MusicQuality.STANDARD.text,
+        )
+        MusicQuality.JYMASTER.text -> listOf(
+            MusicQuality.JYMASTER.text,
+            MusicQuality.HIRES.text,
+            MusicQuality.LOSSLESS.text,
+            MusicQuality.EXHIGH.text,
+            MusicQuality.STANDARD.text,
+        )
+        MusicQuality.DOLBY.text -> listOf(
+            MusicQuality.DOLBY.text,
+            MusicQuality.SKY.text,
+            MusicQuality.JYEFFECT.text,
+            MusicQuality.HIRES.text,
+            MusicQuality.LOSSLESS.text,
+            MusicQuality.EXHIGH.text,
+            MusicQuality.STANDARD.text,
+        )
+        else -> listOf(
+            MusicQuality.EXHIGH.text,
+            MusicQuality.STANDARD.text,
+        )
+    }
+    return if (allowDolby) fallbacks else fallbacks.filter { it != MusicQuality.DOLBY.text }
 }
 
 /** Identifies the exact media bytes returned for a logical quality. */
@@ -122,9 +148,86 @@ internal fun playbackCacheKey(
 ): String = playbackCacheKeyPrefix(mediaId, quality) +
     playbackSourceIdentity(sourceMd5, sourceSize)
 
+/** Exact resolved bytes use their own platform and instance, independently of origin metadata. */
+internal fun resolvedPlaybackCacheKey(resolution: PlaybackResolution): String {
+    val resource = resolution.resource
+    fun component(value: String) = Base64.getUrlEncoder().withoutPadding()
+        .encodeToString(value.toByteArray(Charsets.UTF_8))
+    return "meilox-media-v4:" + listOf(
+        TrackRefCodec.encode(resolution.originTrackRef),
+        resource.quality,
+        resolution.instanceId.value,
+        TrackRefCodec.encode(resolution.resolvedTrackRef),
+        audioResourceIdentity(resolution),
+    ).joinToString(":", transform = ::component)
+}
+
+internal fun resolvedPlaybackCacheKeyPrefix(mediaId: String, quality: String? = null): String? {
+    val origin = TrackRefCodec.decode(mediaId) ?: return null
+    fun component(value: String) = Base64.getUrlEncoder().withoutPadding()
+        .encodeToString(value.toByteArray(Charsets.UTF_8))
+    return "meilox-media-v4:${component(TrackRefCodec.encode(origin))}:" +
+        (quality?.let { "${component(normalizePlaybackQuality(it))}:" } ?: "")
+}
+
+/** Only called for a complete disk cache hit, which needs no expired remote credentials. */
+internal fun cachedPlaybackResolution(mediaId: String, cacheKey: String, uri: String): PlaybackResolution? {
+    if (!cacheKey.startsWith("meilox-media-v4:")) return null
+    val fields = cacheKey.removePrefix("meilox-media-v4:").split(':')
+    if (fields.size != 5) return null
+    return runCatching {
+        fun decode(value: String) = String(Base64.getUrlDecoder().decode(value), Charsets.UTF_8)
+        val origin = TrackRefCodec.decode(decode(fields[0])) ?: return null
+        if (origin != TrackRefCodec.decode(mediaId)) return null
+        val resolved = TrackRefCodec.decode(decode(fields[3])) ?: return null
+        PlaybackResolution(origin, resolved, resolved.providerId, ProviderInstanceId(decode(fields[2])),
+            AudioResource(uri, decode(fields[1])), emptyList())
+    }.getOrNull()
+}
+
+internal fun resolvedCacheQuality(mediaId: String, cacheKey: String): String? {
+    if (!cacheKey.startsWith("meilox-media-v4:")) return cachedPlaybackQuality(mediaId, cacheKey)
+    val fields = cacheKey.removePrefix("meilox-media-v4:").split(':')
+    if (fields.size != 5) return null
+    return runCatching {
+        fun decode(value: String) = String(Base64.getUrlDecoder().decode(value), Charsets.UTF_8)
+        val origin = TrackRefCodec.decode(decode(fields[0])) ?: return null
+        if (origin != TrackRefCodec.decode(mediaId)) return null
+        decode(fields[1]).takeIf(String::isNotBlank)
+    }.getOrNull()
+}
+
 /** Returns whether the current source should be invalidated and retried in place. */
 internal fun shouldRefreshPlaybackSource(errorCode: Int): Boolean =
     errorCode == PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE
+
+/** Resource transport failures get bounded refresh and source fallback before queue skipping. */
+internal fun shouldRetryOnlinePlaybackSource(errorCode: Int): Boolean = when (errorCode) {
+    PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+    PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+    PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+    PlaybackException.ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE,
+    PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND -> true
+    else -> false
+}
+
+/** Shared runtime and network outages must not reject resources or advance the queue. */
+internal fun isTemporaryPlaybackFailure(errorCode: Int, cause: Throwable?): Boolean {
+    // Script audio wraps HTTP failures as NETWORK while retaining the HTTP cause.
+    if (generateSequence(cause) { it.cause }.take(16).any { it is HttpDataSource.InvalidResponseCodeException }) {
+        return false
+    }
+    if (errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
+        errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT
+    ) return true
+    return generateSequence(cause) { it.cause }.take(16).any {
+        it is SourceRuntimeUnavailableException ||
+            it is SourceException && it.code in setOf(SourceErrorCode.NETWORK, SourceErrorCode.TIMEOUT) ||
+            it is PlaybackResolutionException && it.attempts.any { attempt ->
+                attempt.error == SourceErrorCode.NETWORK || attempt.error == SourceErrorCode.TIMEOUT
+            }
+    }
+}
 
 /** Recovers only Media3's confirmed loading or playback stalls, not generic runtime failures. */
 internal fun shouldRecoverStalledPlayback(errorCode: Int, cause: Throwable?): Boolean {

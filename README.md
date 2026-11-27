@@ -1,82 +1,90 @@
-# MeiloX 字体修复 · 改动说明
+# MeiloX 完整源码（iOS 字体修正版）
 
-## 一、为什么原来「一点都不像」
-
-仓库里只有一个 `res/font/sf_pro.ttf`，它是 SF Pro **可变字体**。代码里这样注册的：
-
-```kotlin
-val AppFontFamily = FontFamily(Font(R.font.sf_pro, FontWeight.Normal))
-```
-
-三个致命问题叠在一起：
-
-1. **只注册了一个字重**。整份排版里所有 `FontWeight.SemiBold / Bold` 请求，最终都由 Android 拿 Regular 字形做**合成加粗**（描边描出来的假粗体），笔画发虚、字腔糊掉 —— 这是「不像」最大的元凶。可变字体自带的 `wght`(1–1000) 和 `opsz`(Text/Display) 轴完全没被用上。
-2. **这份 SF Pro 里一个中文字形都没有**。实测 cmap 里 CJK 区（U+4E00–9FFF）命中数为 **0**，所以界面上全部中文 100% 回落到安卓系统黑体，中英混排风格割裂。
-3. **默认字距是 1sp**。SF Pro 本身已带 Apple 的 tracking，再叠 1sp 让每个标签都被拉散。
-
-## 二、修法
-
-用 fontTools 在构建前把字体处理成**静态字重实例**，再合并中文字形：
-
-| 步骤 | 做法 |
-| --- | --- |
-| 取真实字重 | 从可变字体轴实例化 `wght=400/500/600/700`，`opsz=17(Text)` 与 `opsz=28(Display)` 两套光学尺寸 |
-| 补中文 | Noto Sans SC（思源黑体，SIL OFL 1.1）同样取 400/500/600/700 真实字重 |
-| 合并 | 拉丁/希腊/西里尔取 SF Pro，**中文取 Noto**，合并成一个文件一个字重；统一 upem 到 2048，竖直度量取两者较大值避免行高裁切 |
-| 瘦身 | 拉丁子集 ~133KB；中文子集保留 GB2312 全部汉字 + 标点/假名/注音/全角等约 9100 字 |
-
-最终每个字重文件约 2.5MB，共 6 个（Regular / Medium / Semibold / Bold / Display Regular / Display Bold）。
-
-SF Symbols 图标字单独拆成 `sf_symbols.ttf`（仅 PUA U+100000–103FFF，1.9MB），供 `SfSymbol.kt` 使用。
-
-### 体积账
-
-删掉了原本 25MB 的 `sf_pro.ttf`，换上 6×2.5MB + 1.9MB ≈ 16.9MB。**APK 体积不增反降**。
-
-## 三、改了哪些文件
+这个压缩包里是**可以直接编译的完整工程**，不是补丁：
 
 ```
-app/src/main/res/font/
-  ├─ app_font_regular.ttf          ← 新增
-  ├─ app_font_medium.ttf           ← 新增
-  ├─ app_font_semibold.ttf         ← 新增
-  ├─ app_font_bold.ttf             ← 新增
-  ├─ app_font_display_regular.ttf  ← 新增
-  ├─ app_font_display_bold.ttf     ← 新增
-  ├─ sf_symbols.ttf                ← 新增（图标）
-  └─ sf_pro.ttf                    ← 删除（25MB 可变字体）
-
-app/src/main/java/com/ljyh/mei/ui/theme/Type.kt            ← 重写：四档真实字重 + Display 光学尺寸
-app/src/main/java/com/ljyh/mei/ui/glass/SfSymbol.kt        ← 改：图标字体指向 sf_symbols.ttf
-app/src/main/java/com/ljyh/mei/constants/PreferenceKeys.kt ← 改：默认字距 1f → 0f
-THIRD_PARTY_NOTICES                                        ← 补：字体来源与许可声明
-.github/workflows/build-apk.yml                            ← 新增：免密钥构建签名工作流
+MeiloX-full-source/
+├─ MeiloX/     ← 主工程（已包含全部字体修正）
+├─ Glasmio/    ← Glasmio 源码，必须和 MeiloX 放在同一个父目录
+└─ BUILD.md    ← 本文件
 ```
 
-`IosTypography` 的语义映射（largeTitle / title2 / headline / body / subheadline / caption）保持原样，不需要动 —— 它们读的是 `MaterialTheme.typography`，换掉底层 `AppFontFamily` 后自动生效，**歌词、设置页、播放器全量覆盖**。
+> `MeiloX/settings.gradle.kts` 在 `-Pglasmio.source=true`（默认值）时，会去找
+> `../Glasmio`。两个文件夹保持现在的同级关系就能编译；拆开或改名会导致
+> `-Pglasmio.source=true requires a Glasmio checkout beside MeiloX.`
 
-## 四、怎么拿到 release APK
+## 为什么必须带 Glasmio 源码
 
-项目自带的工作流 `main.yml` 依赖 `secrets.SIGNING_KEY`，fork 后没有这个密钥会直接失败。所以我另加了一个 `build-apk.yml`，**不需要任何密钥**，自己生成一次性签名：
+MeiloX 的 HEAD 用到了 Glasmio 里较新的 API（`LocalGlasmioHorizontalSafeAreaEnabled`），
+Maven Central 上的 `io.github.neoruaa.glasmio:0.1.3` 还没有这个符号。
+用 `-Pglasmio.source=false` 编译会失败：
 
-1. Fork `NEORUAA/MeiloX`
-2. 把本压缩包里的文件按上面的目录结构覆盖进去（记得删掉 `app/src/main/res/font/sf_pro.ttf`）
-3. 推送到任意分支
-4. Actions → `Build APK (self-signed)` → 运行结束后在 **Artifacts** 里下载 `MeiloX-release`
-
-本地构建同理：
-
-```bash
-./gradlew assembleRelease
+```
+Unresolved reference 'LocalGlasmioHorizontalSafeAreaEnabled'.
+Location: app/src/main/java/com/ljyh/mei/MainActivity.kt line 274
 ```
 
-要求 JDK 21 + Android SDK platform 37 + build-tools 37.0.0 + NDK 27.1.12297006（项目含 beatnet native 代码）。
+所以请保持 `glasmio.source=true`（gradle.properties 里已默认），让 Gradle 用源码构建 Glasmio。
 
-## 五、可回退项
+## 环境要求
 
-- **默认字距改回**：`PreferenceKeys.kt` 的 `DefaultInterfaceLetterSpacing` 改回 `1f`。设置里「界面字距」仍可在 0–3sp 间手动调。
-- **中文想换回系统字体**：删掉各 `app_font_*.ttf` 里的中文字形即可，或把 `AppFontFamily` 的第一个 `Font` 换成只含拉丁的 `sf_pro` 子集。
+本机已经装好了，路径如下：
 
-## 六、许可提醒
+| 组件 | 位置 / 版本 |
+|---|---|
+| JDK | `C:\Program Files\Java\jdk-21.0.12`（17 以上都行） |
+| Android SDK | `C:\Android\sdk`（`MeiloX/local.properties` 已指向这里） |
+| Platform | `platforms/android-37.0`（compileSdk 37） |
+| Build-Tools | `37.0.0` |
+| CMake | `3.22.1` |
+| NDK | `29.0.14206865` |
+| Gradle | 9.6.0（wrapper 自动下载，走腾讯镜像） |
 
-`app_font_*.ttf` 中的拉丁字形来自 SF Pro，Apple 保留全部权利；中文字形来自 Noto Sans SC（SIL OFL 1.1）。**公开发布构建版本前请重新核对 Apple 的字体许可条款**，`THIRD_PARTY_NOTICES` 已补充对应声明。
+换机器的话，把 `local.properties` 里的 `sdk.dir` 改成自己的 SDK 路径，并确保上面五个
+SDK 组件都装了（`sdkmanager` 或 Android Studio SDK Manager 均可）。
+
+## 编译
+
+在 `MeiloX/` 目录下：
+
+```powershell
+$env:JAVA_HOME = "C:\Program Files\Java\jdk-21.0.12"
+$env:ANDROID_HOME = "C:\Android\sdk"
+
+# 调试包
+.\gradlew.bat :app:assembleDebug -Pglasmio.source=true
+
+# 正式包（R8 + 资源压缩）
+.\gradlew.bat :app:assembleRelease -Pglasmio.source=true
+```
+
+产物：
+
+- `app/build/outputs/apk/debug/app-debug.apk`
+- `app/build/outputs/apk/release/app-release-unsigned.apk`（**未签名**）
+
+正式包要自己签名才能安装：
+
+```powershell
+$bt = "C:\Android\sdk\build-tools\37.0.0"
+& "$bt\zipalign.exe" -p -f 4 app-release-unsigned.apk aligned.apk
+& "$bt\apksigner.bat" sign --ks 你的.jks --out MeiloX-release.apk aligned.apk
+```
+
+> 我上一轮交付的两个 APK 是用 `C:\Users\MEMZ4\.android\debug.keystore`
+> （别名 `androiddebugkey`，密码 `android`）签的，所以能直接覆盖安装；
+> 公开分发请换成自己的 keystore。
+
+## 本轮改动（相对上游 main）
+
+| 文件 | 改动 |
+|---|---|
+| `app/src/main/java/com/ljyh/mei/ui/theme/Type.kt` | SF Pro 拆成 Text(opsz 17)/Display(opsz 28) 两套光学尺寸；字重轴改用 300/400/510/590/700；每个 Material role 写入 Apple 的逐级字距；新增 Noto Sans SC 作为中文字体回退 |
+| `app/src/main/java/com/ljyh/mei/ui/theme/Theme.kt` | 字距为 0 时不再全局覆盖，交回各样式自己的 Apple 字距 |
+| `app/src/main/java/com/ljyh/mei/constants/PreferenceKeys.kt` | `DefaultInterfaceLetterSpacing` 0.4 → 0（0 = 跟随 iOS） |
+| `app/src/main/java/com/ljyh/mei/ui/screen/setting/AppearanceSettings.kt` | 字距滑杆为 0 时显示“iOS 默认” |
+| `app/src/main/res/values*/strings.xml` | 新增 `appearance_letter_spacing_ios` 文案（en / zh / zh-rTW / ja） |
+| `app/src/main/res/font/noto_sans_sc.ttf` | 新增：Noto Sans SC 可变字体（SIL OFL 1.1） |
+| `THIRD_PARTY_NOTICES`、`licenses/OFL-1.1-Noto-Sans-SC.txt` | 新增字体来源与许可证声明 |
+
+`typography-ios-look.patch` 也留在工程根目录，想对照上游看 diff 可以直接用。
