@@ -1,5 +1,6 @@
 package com.ljyh.mei.ui.screen.artist
 
+import com.ljyh.mei.ui.theme.withIosOpticalSize
 import com.ljyh.mei.ui.component.item.trackPressViewport
 import com.ljyh.mei.ui.component.home.homeArtworkBorder
 import com.ljyh.mei.ui.component.item.FixedCardCaption
@@ -923,7 +924,7 @@ fun SectionTitle(
         ) {
             Text(
                 title,
-                style = if (landscape) MaterialTheme.typography.titleMedium.copy(fontSize = 20.sp, lineHeight = 24.sp)
+                style = if (landscape) MaterialTheme.typography.titleMedium.copy(fontSize = 20.sp, lineHeight = 24.sp).withIosOpticalSize()
                     else MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
             )

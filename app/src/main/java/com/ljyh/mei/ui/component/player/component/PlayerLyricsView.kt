@@ -21,6 +21,7 @@
 
 package com.ljyh.mei.ui.component.player.component
 
+import com.ljyh.mei.ui.theme.withIosOpticalSize
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.ExperimentalSharedTransitionApi
@@ -111,12 +112,12 @@ internal fun PlayerLyricsView(
         fontSize = 34.sp,
         fontWeight = FontWeight.Bold,
         textMotion = TextMotion.Animated,
-    ),
+    ).withIosOpticalSize(),
     accompanimentLineTextStyle: TextStyle = LocalTextStyle.current.copy(
         fontSize = 20.sp,
         fontWeight = FontWeight.Bold,
         textMotion = TextMotion.Animated,
-    ),
+    ).withIosOpticalSize(),
     textColor: Color = Color.White,
     breathingDotsDefaults: KaraokeBreathingDotsDefaults = KaraokeBreathingDotsDefaults(),
     phoneticTextStyle: TextStyle = normalLineTextStyle.copy(

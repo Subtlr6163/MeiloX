@@ -12,6 +12,8 @@ import androidx.compose.ui.text.font.FontLoadingStrategy
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.unit.sp
 import com.ljyh.mei.R
 
@@ -22,7 +24,7 @@ import com.ljyh.mei.R
  * 12 % narrower and the x-height is smaller than on iOS, which only reads correctly once the
  * missing tracking is papered over with extra letter spacing.
  *
- * SF Pro carries no CJK glyphs, so Chinese is drawn with the bundled Noto Sans SC (SIL OFL 1.1)
+ * SF Pro carries no CJK glyphs, so Chinese is drawn with the bundled PingFang SC faces
  * through a custom fallback instead of whatever sans the OEM happens to ship.
  */
 private const val TextOpticalSize = 17
@@ -54,7 +56,6 @@ private class SfProFont(
 
 private object SfProFontLoader : AndroidFont.TypefaceLoader {
     private var regularFont: PlatformFont? = null
-    private var cjkRegularFont: PlatformFont? = null
     private var symbolTypeface: Typeface? = null
     private val cjkFamilies = HashMap<Int, PlatformFontFamily>()
     private val opticalFamilies = HashMap<Pair<Int, Int>, Typeface>()
@@ -63,30 +64,30 @@ private object SfProFontLoader : AndroidFont.TypefaceLoader {
         regularFont ?: PlatformFont.Builder(context.resources, R.font.sf_pro).build()
             .also { regularFont = it }
 
-    private fun cjkBaseFont(context: Context): PlatformFont =
-        cjkRegularFont ?: PlatformFont.Builder(context.resources, R.font.noto_sans_sc).build()
-            .also { cjkRegularFont = it }
-
     private fun face(base: PlatformFont, axisWeight: Int, opticalSize: Int): PlatformFont =
         PlatformFont.Builder(base)
             .setWeight(axisWeight)
             .setFontVariationSettings("'wght' $axisWeight, 'opsz' $opticalSize")
             .build()
 
+    /** PingFang ships Regular/Medium/Semibold; Compose's 510/590/700 fold onto those faces. */
+    private fun cjkFontResource(axisWeight: Int): Int = when {
+        axisWeight >= 590 -> R.font.pingfang_sc_semibold
+        axisWeight >= 460 -> R.font.pingfang_sc_medium
+        else -> R.font.pingfang_sc_regular
+    }
+
     private fun cjkFamily(context: Context, axisWeight: Int): PlatformFontFamily =
         cjkFamilies.getOrPut(axisWeight) {
             PlatformFontFamily.Builder(
-                PlatformFont.Builder(cjkBaseFont(context))
-                    .setWeight(axisWeight)
-                    .setFontVariationSettings("'wght' $axisWeight")
-                    .build(),
+                PlatformFont.Builder(context.resources, cjkFontResource(axisWeight)).build(),
             ).build()
         }
 
     /**
      * SF Pro has no CJK glyphs, so without an explicit fallback Chinese resolves to the OEM
-     * font (MiSans, OPPO Sans, ...). Noto Sans SC is the open Source Han design and keeps the
-     * humanist shapes iOS ships as PingFang SC.
+     * font (MiSans, OPPO Sans, ...). iOS draws Chinese with PingFang SC, so the same family is
+     * bundled and attached as a custom fallback instead.
      */
     @Synchronized
     private fun opticalFamilyTypeface(context: Context, opticalSize: Int, axisWeight: Int): Typeface =
@@ -129,6 +130,15 @@ val SfProText = sfProFamily(TextOpticalSize)
 
 /** SF Pro Display: title sizes, 20 pt and above on iOS. */
 val SfProDisplay = sfProFamily(DisplayOpticalSize)
+
+/**
+ * Compose copies keep the base style's family, so a 17 pt body style enlarged to 28 pt would
+ * still render with the text cut. Re-select the family from the resolved size wherever a style
+ * or a `Text` overrides fontSize.
+ */
+fun TextStyle.withIosOpticalSize(size: TextUnit = fontSize): TextStyle =
+    copy(fontFamily = if (size.isSpecified && size.value >= OpticalSizeBreakpoint) SfProDisplay else SfProText)
+
 
 // Apple's Large-category tracking, in points at the size each role uses. Applying these per
 // style is what separates iOS text from a single flat letter-spacing override: 17 pt body copy

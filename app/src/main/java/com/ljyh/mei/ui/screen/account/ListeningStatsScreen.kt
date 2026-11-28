@@ -1,5 +1,6 @@
 package com.ljyh.mei.ui.screen.account
 
+import com.ljyh.mei.ui.theme.SfProDisplay
 import io.github.neoruaa.glasmio.core.swipeBackExcluded
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
@@ -240,7 +241,7 @@ private fun ListeningReportCard(report: ListeningStatsReport) {
             Column(Modifier.padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(stringResource(R.string.listening_stats_duration), color = colors.secondaryContent,
                     style = MaterialTheme.typography.bodyMedium)
-                Text(listeningDuration(report.totalMinutes), fontSize = 32.sp, lineHeight = 40.sp, fontWeight = FontWeight.Bold)
+                Text(listeningDuration(report.totalMinutes), fontSize = 32.sp, lineHeight = 40.sp, fontWeight = FontWeight.Bold, fontFamily = SfProDisplay)
                 Text(stringResource(R.string.listening_stats_days, report.listenedDays), color = colors.secondaryContent,
                     style = MaterialTheme.typography.bodyMedium)
             }

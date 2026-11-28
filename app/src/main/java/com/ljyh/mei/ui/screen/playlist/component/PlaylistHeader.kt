@@ -1,5 +1,6 @@
 package com.ljyh.mei.ui.screen.playlist.component
 
+import com.ljyh.mei.ui.theme.withIosOpticalSize
 import com.ljyh.mei.ui.component.home.homeArtworkBorder
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -111,7 +112,7 @@ fun PlaylistHeader(
     val canScrollActions = horizontal || allowActionScroll
     val preferredPlayWidth = if (horizontal) 180.dp else 148.dp
     val playLabel = stringResource(R.string.pip_play)
-    val playTextStyle = if (horizontal) IosTypography.headline.copy(fontSize = 20.sp, lineHeight = 24.sp)
+    val playTextStyle = if (horizontal) IosTypography.headline.copy(fontSize = 20.sp, lineHeight = 24.sp).withIosOpticalSize()
         else IosTypography.headline
     val playIconSize = if (horizontal) 18.dp else 16.dp
     val playIconSpacing = 6.dp

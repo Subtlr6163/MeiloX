@@ -77,7 +77,7 @@ Key notices:
 - [amll-ttml-db](https://github.com/Steve-xmh/amll-ttml-db) and [accompanist-lyrics-ui](https://github.com/6xingyv/accompanist-lyrics-ui) follow the licenses and attribution requirements published in their respective repositories;
 - The BeatNet model, audio fingerprint runtime, ONNX Runtime, PV Tool-derived content, and other distributed components are subject to their respective licenses, copyright notices, and redistribution restrictions.
 
-See [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES) for complete source, copyright, license, and redistribution details. The `res/font/sf_pro.ttf` font is used solely as a personal project resource. Do not extract or redistribute it separately from build artifacts, and review Apple's font license terms before publicly releasing a build.
+See [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES) for complete source, copyright, license, and redistribution details. The `res/font/sf_pro.ttf` (SF Pro) and `res/font/pingfang_sc_*.ttf` (PingFang SC) fonts are Apple proprietary and used solely as personal project resources; they are not covered by this project's GPLv3 license. Do not extract or redistribute them separately from build artifacts, and replace them with licensed-able fonts before publicly releasing a build.
 
 ## Screenshots
 
@@ -146,6 +146,12 @@ See the [Glasmio integration guide](docs/glasmio-integration.md) for its rendere
 ## Disclaimer
 
 This project is intended for learning, research, and personal use only. When using it to access NetEase Cloud Music, comply with local laws, the music service's terms, and applicable copyright requirements. The maintainers are not responsible for third-party service availability, account status, or music content.
+
+**About the fonts:** to match iOS typography, this project bundles Apple's **SF Pro** (from Apple's official SF Pro download) and **PingFang SC** (split out of `PingFang.ttc`) under `app/src/main/res/font/`. Both are proprietary Apple fonts; all rights belong to Apple and they are **not** covered by this project's GPLv3 license. They are included for local, personal builds only. Do not publish, redistribute, or commercially use source archives or APKs that contain them; before any public release, delete these font files and substitute fonts you are licensed to redistribute (for example Noto Sans SC / Source Han Sans under the SIL OFL).
+
+This project is not affiliated with, authorized by, or sponsored by Apple. Apple, Apple Music, iOS, SF Pro, and PingFang are trademarks of Apple Inc. No music content is distributed with this project; all rights remain with their respective owners.
+
+Any consequence of using software built from this project (including but not limited to account issues, data loss, device malfunction, or legal risk) is borne solely by the user; the maintainers accept no liability.
 
 If you find infringing content, missing license information, or inaccurate third-party notices, please contact the maintainers through [Issues](https://github.com/NEORUAA/MeiloX/issues).
 

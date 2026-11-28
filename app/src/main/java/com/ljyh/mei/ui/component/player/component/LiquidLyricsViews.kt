@@ -1,5 +1,6 @@
 package com.ljyh.mei.ui.component.player.component
 
+import com.ljyh.mei.ui.theme.SfProDisplay
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -164,7 +165,7 @@ private fun AppleLiquidLyrics(
                         style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold, fontSize = mainLyricSize),
                     )
                 } else {
-                    Text(line.content(), fontWeight = FontWeight.Bold, fontSize = mainLyricSize, lineHeight = 31.sp)
+                    Text(line.content(), fontWeight = FontWeight.Bold, fontSize = mainLyricSize, lineHeight = 31.sp, fontFamily = SfProDisplay)
                 }
                 if (showRomanization) line.phonetic()?.takeIf(String::isNotBlank)?.let {
                     Text(it, color = Color.White.copy(alpha = 0.72f), fontSize = (mainLyricSize.value * 0.5f).coerceAtLeast(12f).sp)
@@ -208,7 +209,7 @@ private fun EvaLiquidLyrics(
                 ),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Text(line.content(), color = Color(0xFF8BFFB0), fontSize = mainLyricSize, lineHeight = 39.sp, fontWeight = FontWeight.Black)
+                Text(line.content(), color = Color(0xFF8BFFB0), fontSize = mainLyricSize, lineHeight = 39.sp, fontWeight = FontWeight.Black, fontFamily = SfProDisplay)
                 if (showRomanization) line.phonetic()?.let { Text(it.uppercase(), color = Color(0xFFFFB1D6), fontSize = (mainLyricSize.value * 0.5f).coerceAtLeast(12f).sp) }
                 if (showTranslation) line.translation()?.let { Text(it, color = Color.White.copy(.7f), fontSize = 15.sp) }
             }
@@ -253,7 +254,7 @@ private fun TextPvLiquidLyrics(
                 shape = ContinuousRoundedRectangle(30.dp),
             ) {
                 Column(Modifier.padding(horizontal = 22.dp, vertical = 28.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(it.content(), fontSize = mainLyricSize, lineHeight = 39.sp, fontWeight = FontWeight.Black)
+                    Text(it.content(), fontSize = mainLyricSize, lineHeight = 39.sp, fontWeight = FontWeight.Black, fontFamily = SfProDisplay)
                     if (showRomanization) it.phonetic()?.let { text -> Text(text, color = Color(0xFFFFD4E2), fontSize = (mainLyricSize.value * 0.5f).coerceAtLeast(12f).sp) }
                     if (showTranslation) it.translation()?.let { text -> Text(text, color = Color.White.copy(.72f), fontSize = 15.sp) }
                 }
@@ -310,7 +311,7 @@ private fun SkylineLiquidLyrics(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text(it.content(), textAlign = TextAlign.Center, fontSize = mainLyricSize, lineHeight = 36.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                Text(it.content(), textAlign = TextAlign.Center, fontSize = mainLyricSize, lineHeight = 36.sp, fontWeight = FontWeight.Bold, color = Color.White, fontFamily = SfProDisplay)
                 if (showRomanization) it.phonetic()?.let { text -> Text(text, color = Color(0xFF87E8FF), fontSize = (mainLyricSize.value * 0.5f).coerceAtLeast(12f).sp, textAlign = TextAlign.Center) }
                 if (showTranslation) it.translation()?.let { text -> Text(text, color = Color.White.copy(.68f), fontSize = 15.sp, textAlign = TextAlign.Center) }
             }

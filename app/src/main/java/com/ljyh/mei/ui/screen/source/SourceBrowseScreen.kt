@@ -1,5 +1,6 @@
 package com.ljyh.mei.ui.screen.source
 
+import com.ljyh.mei.ui.theme.SfProDisplay
 import com.ljyh.mei.ui.component.item.trackPressViewport
 import com.ljyh.mei.ui.component.home.homeArtworkBorder
 import android.graphics.RenderEffect as AndroidRenderEffect
@@ -417,6 +418,7 @@ internal fun SourceFeedSectionContent(
             color = MaterialTheme.colorScheme.onBackground,
             fontWeight = FontWeight.Bold,
             fontSize = 20.sp,
+            fontFamily = SfProDisplay,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )

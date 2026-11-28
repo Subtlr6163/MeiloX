@@ -1,10 +1,10 @@
 --- a/app/src/main/java/com/ljyh/mei/ui/theme/Type.kt
 +++ b/app/src/main/java/com/ljyh/mei/ui/theme/Type.kt
-@@ -12,39 +12,95 @@
- import androidx.compose.ui.text.font.FontStyle
+@@ -13,38 +13,95 @@
  import androidx.compose.ui.text.font.FontVariation
  import androidx.compose.ui.text.font.FontWeight
--import androidx.compose.ui.unit.TextUnit
+ import androidx.compose.ui.unit.TextUnit
++import androidx.compose.ui.unit.isSpecified
  import androidx.compose.ui.unit.sp
  import com.ljyh.mei.R
  
@@ -21,7 +21,7 @@
 + * 12 % narrower and the x-height is smaller than on iOS, which only reads correctly once the
 + * missing tracking is papered over with extra letter spacing.
 + *
-+ * SF Pro carries no CJK glyphs, so Chinese is drawn with the bundled Noto Sans SC (SIL OFL 1.1)
++ * SF Pro carries no CJK glyphs, so Chinese is drawn with the bundled PingFang SC faces
 + * through a custom fallback instead of whatever sans the OEM happens to ship.
 + */
 +private const val TextOpticalSize = 17
@@ -55,7 +55,6 @@
  private object SfProFontLoader : AndroidFont.TypefaceLoader {
      private var regularFont: PlatformFont? = null
 -    private var textTypeface: Typeface? = null
-+    private var cjkRegularFont: PlatformFont? = null
      private var symbolTypeface: Typeface? = null
 +    private val cjkFamilies = HashMap<Int, PlatformFontFamily>()
 +    private val opticalFamilies = HashMap<Pair<Int, Int>, Typeface>()
@@ -65,30 +64,30 @@
          regularFont ?: PlatformFont.Builder(context.resources, R.font.sf_pro).build()
              .also { regularFont = it }
 +
-+    private fun cjkBaseFont(context: Context): PlatformFont =
-+        cjkRegularFont ?: PlatformFont.Builder(context.resources, R.font.noto_sans_sc).build()
-+            .also { cjkRegularFont = it }
-+
 +    private fun face(base: PlatformFont, axisWeight: Int, opticalSize: Int): PlatformFont =
 +        PlatformFont.Builder(base)
 +            .setWeight(axisWeight)
 +            .setFontVariationSettings("'wght' $axisWeight, 'opsz' $opticalSize")
 +            .build()
 +
++    /** PingFang ships Regular/Medium/Semibold; Compose's 510/590/700 fold onto those faces. */
++    private fun cjkFontResource(axisWeight: Int): Int = when {
++        axisWeight >= 590 -> R.font.pingfang_sc_semibold
++        axisWeight >= 460 -> R.font.pingfang_sc_medium
++        else -> R.font.pingfang_sc_regular
++    }
++
 +    private fun cjkFamily(context: Context, axisWeight: Int): PlatformFontFamily =
 +        cjkFamilies.getOrPut(axisWeight) {
 +            PlatformFontFamily.Builder(
-+                PlatformFont.Builder(cjkBaseFont(context))
-+                    .setWeight(axisWeight)
-+                    .setFontVariationSettings("'wght' $axisWeight")
-+                    .build(),
++                PlatformFont.Builder(context.resources, cjkFontResource(axisWeight)).build(),
 +            ).build()
 +        }
 +
 +    /**
 +     * SF Pro has no CJK glyphs, so without an explicit fallback Chinese resolves to the OEM
-+     * font (MiSans, OPPO Sans, ...). Noto Sans SC is the open Source Han design and keeps the
-+     * humanist shapes iOS ships as PingFang SC.
++     * font (MiSans, OPPO Sans, ...). iOS draws Chinese with PingFang SC, so the same family is
++     * bundled and attached as a custom fallback instead.
 +     */
 +    @Synchronized
 +    private fun opticalFamilyTypeface(context: Context, opticalSize: Int, axisWeight: Int): Typeface =
@@ -107,7 +106,7 @@
          // Symbols keep their single-face weight resolution and share the text font's buffer.
          return Typeface.CustomFallbackBuilder(PlatformFontFamily.Builder(regular).build())
              .setStyle(regular.style)
-@@ -53,26 +109,10 @@
+@@ -53,26 +110,10 @@
      }
  
      @Synchronized
@@ -137,7 +136,7 @@
  
      override suspend fun awaitLoad(context: Context, font: AndroidFont): Typeface =
          loadBlocking(context, font)
-@@ -81,26 +121,56 @@
+@@ -81,26 +122,65 @@
  internal fun sfProSymbolTypeface(context: Context): Typeface =
      SfProFontLoader.getSymbolTypeface(context)
  
@@ -150,6 +149,15 @@
 +
 +/** SF Pro Display: title sizes, 20 pt and above on iOS. */
 +val SfProDisplay = sfProFamily(DisplayOpticalSize)
++
++/**
++ * Compose copies keep the base style's family, so a 17 pt body style enlarged to 28 pt would
++ * still render with the text cut. Re-select the family from the resolved size wherever a style
++ * or a `Text` overrides fontSize.
++ */
++fun TextStyle.withIosOpticalSize(size: TextUnit = fontSize): TextStyle =
++    copy(fontFamily = if (size.isSpecified && size.value >= OpticalSizeBreakpoint) SfProDisplay else SfProText)
++
 +
 +// Apple's Large-category tracking, in points at the size each role uses. Applying these per
 +// style is what separates iOS text from a single flat letter-spacing override: 17 pt body copy
@@ -261,7 +269,7 @@
          animateColorAsState(seedColor, tween(600), label = "iOS accent")
 --- a/app/src/main/java/com/ljyh/mei/constants/PreferenceKeys.kt
 +++ b/app/src/main/java/com/ljyh/mei/constants/PreferenceKeys.kt
-@@ -52,7 +52,8 @@
+@@ -52,9 +52,12 @@
  val DynamicThemeKey = booleanPreferencesKey("dynamicTheme")
  const val DefaultAccentColorArgb = 0xFFFF3B30L
  val AccentColorKey = longPreferencesKey("accentColor")
@@ -269,8 +277,13 @@
 +/** 0 keeps each iOS text style's own Apple tracking; any other value overrides all styles. */
 +const val DefaultInterfaceLetterSpacing = 0f
  const val MaxInterfaceLetterSpacing = 1.4f
- val InterfaceLetterSpacingKey = floatPreferencesKey("interfaceLetterSpacing")
+-val InterfaceLetterSpacingKey = floatPreferencesKey("interfaceLetterSpacing")
++// v2: the setting used to be a flat override whose default was 0.4. A stored 0.4 would keep
++// every style looser than iOS, so the key is bumped to drop those stale values once.
++val InterfaceLetterSpacingKey = floatPreferencesKey("interfaceLetterSpacingV2")
  val PlayerActionKey = stringPreferencesKey("playerBottomAction")
+ 
+ val NormalLyricTextSizeKey = stringPreferencesKey("lyricTextSize")
 --- a/app/src/main/java/com/ljyh/mei/ui/screen/setting/AppearanceSettings.kt
 +++ b/app/src/main/java/com/ljyh/mei/ui/screen/setting/AppearanceSettings.kt
 @@ -411,7 +411,9 @@
@@ -326,115 +339,270 @@
    <string name="appearance_bottom_floating_extra_spacing_description">下部ナビゲーション、検索、ミニプレーヤーを画面の端から離します。</string>
 --- a/THIRD_PARTY_NOTICES
 +++ b/THIRD_PARTY_NOTICES
-@@ -181,3 +181,15 @@
+@@ -181,3 +181,9 @@
  glyphs used by MeloX. It must not be extracted or redistributed separately,
  and public distribution of builds requires a fresh review of Apple's font
  license terms. Apple retains all rights in SF Pro.
 +
-+Noto Sans SC
-+------------
++PingFang SC (personal builds only)
++----------------------------------
++`res/font/pingfang_sc_*.ttf` are extracted from Apple's PingFang.ttc so Chinese text renders
++with the same family iOS uses. PingFang is Apple proprietary: these files are for private,
++personal builds only and must be removed or replaced before any public distribution.
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -104,8 +104,8 @@
+             .get()
+         minSdk = 31
+         targetSdk = 37
+-        versionCode = 16
+-        versionName = "1.55.1"
++        versionCode = 17
++        versionName = "1.56"
+         buildConfigField("long", "BUILD_NUMBER", "${buildNumber}L")
+         buildConfigField("String", "BUILD_COMMIT_SHA", "\"$buildCommitSha\"")
+         buildConfigField("boolean", "BUILD_SOURCE_DIRTY", buildSourceDirty.toString())
+--- a/app/src/main/java/com/ljyh/mei/ui/component/player/component/LyricScreen.kt
++++ b/app/src/main/java/com/ljyh/mei/ui/component/player/component/LyricScreen.kt
+@@ -96,6 +96,7 @@
+ import com.ljyh.mei.ui.component.utils.LifecycleStartedEffect
+ import com.ljyh.mei.ui.model.LyricData
+ import com.ljyh.mei.ui.model.LyricSource
++import com.ljyh.mei.ui.theme.withIosOpticalSize
+ import com.ljyh.mei.utils.lyric.lyricStorageKey
+ import com.ljyh.mei.utils.rememberEnumPreference
+ import com.ljyh.mei.utils.rememberPreference
+@@ -170,12 +171,12 @@
+         fontSize = normalLyricTextSize.text.coerceIn(16, 48).sp,
+         fontWeight = if (normalLyricTextBold) FontWeight.Bold else FontWeight.Normal,
+         textMotion = TextMotion.Animated,
+-    )
++    ).withIosOpticalSize()
+     val translationTextStyle = LocalTextStyle.current.copy(
+         fontSize = translationLyricTextSize.text.coerceIn(16, 36).sp,
+         fontWeight = if (translationLyricTextBold) FontWeight.Bold else FontWeight.Normal,
+         textMotion = TextMotion.Animated,
+-    )
++    ).withIosOpticalSize()
+     val textMeasurer = rememberTextMeasurer()
+     val density = LocalDensity.current
+     val mainLyricAnchor = mainLyricAnchorFraction ?: if (centerMainLyric) 0.5f else null
+--- a/app/src/main/java/com/ljyh/mei/ui/component/player/component/PlayerLyricsView.kt
++++ b/app/src/main/java/com/ljyh/mei/ui/component/player/component/PlayerLyricsView.kt
+@@ -21,6 +21,7 @@
+ 
+ package com.ljyh.mei.ui.component.player.component
+ 
++import com.ljyh.mei.ui.theme.withIosOpticalSize
+ import androidx.compose.animation.AnimatedVisibility
+ import androidx.compose.animation.Crossfade
+ import androidx.compose.animation.ExperimentalSharedTransitionApi
+@@ -111,12 +112,12 @@
+         fontSize = 34.sp,
+         fontWeight = FontWeight.Bold,
+         textMotion = TextMotion.Animated,
+-    ),
++    ).withIosOpticalSize(),
+     accompanimentLineTextStyle: TextStyle = LocalTextStyle.current.copy(
+         fontSize = 20.sp,
+         fontWeight = FontWeight.Bold,
+         textMotion = TextMotion.Animated,
+-    ),
++    ).withIosOpticalSize(),
+     textColor: Color = Color.White,
+     breathingDotsDefaults: KaraokeBreathingDotsDefaults = KaraokeBreathingDotsDefaults(),
+     phoneticTextStyle: TextStyle = normalLineTextStyle.copy(
+--- a/app/src/main/java/com/ljyh/mei/ui/component/player/component/LiquidLyricsViews.kt
++++ b/app/src/main/java/com/ljyh/mei/ui/component/player/component/LiquidLyricsViews.kt
+@@ -1,5 +1,6 @@
+ package com.ljyh.mei.ui.component.player.component
+ 
++import com.ljyh.mei.ui.theme.SfProDisplay
+ import androidx.compose.animation.core.animateFloatAsState
+ import androidx.compose.foundation.Canvas
+ import androidx.compose.foundation.background
+@@ -164,7 +165,7 @@
+                         style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold, fontSize = mainLyricSize),
+                     )
+                 } else {
+-                    Text(line.content(), fontWeight = FontWeight.Bold, fontSize = mainLyricSize, lineHeight = 31.sp)
++                    Text(line.content(), fontWeight = FontWeight.Bold, fontSize = mainLyricSize, lineHeight = 31.sp, fontFamily = SfProDisplay)
+                 }
+                 if (showRomanization) line.phonetic()?.takeIf(String::isNotBlank)?.let {
+                     Text(it, color = Color.White.copy(alpha = 0.72f), fontSize = (mainLyricSize.value * 0.5f).coerceAtLeast(12f).sp)
+@@ -208,7 +209,7 @@
+                 ),
+                 verticalArrangement = Arrangement.spacedBy(10.dp),
+             ) {
+-                Text(line.content(), color = Color(0xFF8BFFB0), fontSize = mainLyricSize, lineHeight = 39.sp, fontWeight = FontWeight.Black)
++                Text(line.content(), color = Color(0xFF8BFFB0), fontSize = mainLyricSize, lineHeight = 39.sp, fontWeight = FontWeight.Black, fontFamily = SfProDisplay)
+                 if (showRomanization) line.phonetic()?.let { Text(it.uppercase(), color = Color(0xFFFFB1D6), fontSize = (mainLyricSize.value * 0.5f).coerceAtLeast(12f).sp) }
+                 if (showTranslation) line.translation()?.let { Text(it, color = Color.White.copy(.7f), fontSize = 15.sp) }
+             }
+@@ -253,7 +254,7 @@
+                 shape = ContinuousRoundedRectangle(30.dp),
+             ) {
+                 Column(Modifier.padding(horizontal = 22.dp, vertical = 28.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+-                    Text(it.content(), fontSize = mainLyricSize, lineHeight = 39.sp, fontWeight = FontWeight.Black)
++                    Text(it.content(), fontSize = mainLyricSize, lineHeight = 39.sp, fontWeight = FontWeight.Black, fontFamily = SfProDisplay)
+                     if (showRomanization) it.phonetic()?.let { text -> Text(text, color = Color(0xFFFFD4E2), fontSize = (mainLyricSize.value * 0.5f).coerceAtLeast(12f).sp) }
+                     if (showTranslation) it.translation()?.let { text -> Text(text, color = Color.White.copy(.72f), fontSize = 15.sp) }
+                 }
+@@ -310,7 +311,7 @@
+                 horizontalAlignment = Alignment.CenterHorizontally,
+                 verticalArrangement = Arrangement.spacedBy(8.dp),
+             ) {
+-                Text(it.content(), textAlign = TextAlign.Center, fontSize = mainLyricSize, lineHeight = 36.sp, fontWeight = FontWeight.Bold, color = Color.White)
++                Text(it.content(), textAlign = TextAlign.Center, fontSize = mainLyricSize, lineHeight = 36.sp, fontWeight = FontWeight.Bold, color = Color.White, fontFamily = SfProDisplay)
+                 if (showRomanization) it.phonetic()?.let { text -> Text(text, color = Color(0xFF87E8FF), fontSize = (mainLyricSize.value * 0.5f).coerceAtLeast(12f).sp, textAlign = TextAlign.Center) }
+                 if (showTranslation) it.translation()?.let { text -> Text(text, color = Color.White.copy(.68f), fontSize = 15.sp, textAlign = TextAlign.Center) }
+             }
+--- a/app/src/main/java/com/ljyh/mei/ui/screen/account/ListeningStatsScreen.kt
++++ b/app/src/main/java/com/ljyh/mei/ui/screen/account/ListeningStatsScreen.kt
+@@ -1,5 +1,6 @@
+ package com.ljyh.mei.ui.screen.account
+ 
++import com.ljyh.mei.ui.theme.SfProDisplay
+ import io.github.neoruaa.glasmio.core.swipeBackExcluded
+ import androidx.compose.foundation.Canvas
+ import androidx.compose.foundation.clickable
+@@ -240,7 +241,7 @@
+             Column(Modifier.padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                 Text(stringResource(R.string.listening_stats_duration), color = colors.secondaryContent,
+                     style = MaterialTheme.typography.bodyMedium)
+-                Text(listeningDuration(report.totalMinutes), fontSize = 32.sp, lineHeight = 40.sp, fontWeight = FontWeight.Bold)
++                Text(listeningDuration(report.totalMinutes), fontSize = 32.sp, lineHeight = 40.sp, fontWeight = FontWeight.Bold, fontFamily = SfProDisplay)
+                 Text(stringResource(R.string.listening_stats_days, report.listenedDays), color = colors.secondaryContent,
+                     style = MaterialTheme.typography.bodyMedium)
+             }
+--- a/app/src/main/java/com/ljyh/mei/ui/screen/artist/ArtistScreen.kt
++++ b/app/src/main/java/com/ljyh/mei/ui/screen/artist/ArtistScreen.kt
+@@ -1,5 +1,6 @@
+ package com.ljyh.mei.ui.screen.artist
+ 
++import com.ljyh.mei.ui.theme.withIosOpticalSize
+ import com.ljyh.mei.ui.component.item.trackPressViewport
+ import com.ljyh.mei.ui.component.home.homeArtworkBorder
+ import com.ljyh.mei.ui.component.item.FixedCardCaption
+@@ -923,7 +924,7 @@
+         ) {
+             Text(
+                 title,
+-                style = if (landscape) MaterialTheme.typography.titleMedium.copy(fontSize = 20.sp, lineHeight = 24.sp)
++                style = if (landscape) MaterialTheme.typography.titleMedium.copy(fontSize = 20.sp, lineHeight = 24.sp).withIosOpticalSize()
+                     else MaterialTheme.typography.titleMedium,
+                 fontWeight = FontWeight.Bold,
+             )
+--- a/app/src/main/java/com/ljyh/mei/ui/screen/playlist/component/PlaylistHeader.kt
++++ b/app/src/main/java/com/ljyh/mei/ui/screen/playlist/component/PlaylistHeader.kt
+@@ -1,5 +1,6 @@
+ package com.ljyh.mei.ui.screen.playlist.component
+ 
++import com.ljyh.mei.ui.theme.withIosOpticalSize
+ import com.ljyh.mei.ui.component.home.homeArtworkBorder
+ import androidx.compose.foundation.background
+ import androidx.compose.foundation.clickable
+@@ -111,7 +112,7 @@
+     val canScrollActions = horizontal || allowActionScroll
+     val preferredPlayWidth = if (horizontal) 180.dp else 148.dp
+     val playLabel = stringResource(R.string.pip_play)
+-    val playTextStyle = if (horizontal) IosTypography.headline.copy(fontSize = 20.sp, lineHeight = 24.sp)
++    val playTextStyle = if (horizontal) IosTypography.headline.copy(fontSize = 20.sp, lineHeight = 24.sp).withIosOpticalSize()
+         else IosTypography.headline
+     val playIconSize = if (horizontal) 18.dp else 16.dp
+     val playIconSpacing = 6.dp
+--- a/app/src/main/java/com/ljyh/mei/ui/screen/source/SourceBrowseScreen.kt
++++ b/app/src/main/java/com/ljyh/mei/ui/screen/source/SourceBrowseScreen.kt
+@@ -1,5 +1,6 @@
+ package com.ljyh.mei.ui.screen.source
+ 
++import com.ljyh.mei.ui.theme.SfProDisplay
+ import com.ljyh.mei.ui.component.item.trackPressViewport
+ import com.ljyh.mei.ui.component.home.homeArtworkBorder
+ import android.graphics.RenderEffect as AndroidRenderEffect
+@@ -417,6 +418,7 @@
+             color = MaterialTheme.colorScheme.onBackground,
+             fontWeight = FontWeight.Bold,
+             fontSize = 20.sp,
++            fontFamily = SfProDisplay,
+             maxLines = 1,
+             overflow = TextOverflow.Ellipsis,
+         )
+--- a/README.md
++++ b/README.md
+@@ -75,9 +75,10 @@
+ - [MeloX](https://github.com/youshen2/MeloX) 的相关参考代码遵循其项目的 GPLv3 条款；
+ - [Glasmio](https://github.com/NEORUAA/Glasmio) 遵循 Apache License 2.0，其保留的第三方代码来源与署名见 [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES)；
+ - [amll-ttml-db](https://github.com/Steve-xmh/amll-ttml-db) 与 [accompanist-lyrics-ui](https://github.com/6xingyv/accompanist-lyrics-ui) 遵循各自仓库公布的许可证和署名要求；
+-- BeatNet 模型、音频指纹运行时、ONNX Runtime、PV Tool 衍生内容及其它随项目分发的组件，遵循其各自的许可证、版权声明和再分发限制。
++- BeatNet 模型、音频指纹运行时、ONNX Runtime、PV Tool 衍生内容及其它随项目分发的组件，遵循其各自的许可证、版权声明和再分发限制；
++- 字体：`res/font/sf_pro.ttf`（SF Pro）与 `res/font/pingfang_sc_*.ttf`（PingFang SC）为 Apple 的专有字体，版权归 Apple 所有，**不随本项目的 GPLv3 授权**，仅限本地个人构建使用；公开发布前必须删除或替换为可再分发的字体。
+ 
+-完整的来源、版权归属、许可证链接和特殊再分发要求请阅读 [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES)。其中 `res/font/sf_pro.ttf` 仅作为个人项目资源使用；请勿从构建产物中单独提取或再分发，公开发布构建版本前请重新核对 Apple 的字体许可条款。
++完整的来源、版权归属、许可证链接和特殊再分发要求请阅读 [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES)。其中 `res/font/sf_pro.ttf` 与 `res/font/pingfang_sc_*.ttf` 仅作为个人项目资源使用；请勿从构建产物中单独提取或再分发，公开发布构建版本前请重新核对 Apple 的字体许可条款。
+ 
+ ## 软件界面预览
+ 
+@@ -148,6 +149,12 @@
+ 
+ 本项目仅用于学习、研究和个人使用。使用本项目访问网易云音乐服务时，请遵守当地法律法规、音乐服务条款及相关版权要求。项目维护者不对第三方服务的可用性、账号状态或音乐内容承担责任。
+ 
++**关于字体：** 为还原 iOS 排版，本项目在 `app/src/main/res/font/` 中内置了 Apple 的 **SF Pro**（来自 Apple 官方 SF Pro 下载包）和 **PingFang SC**（由 `PingFang.ttc` 拆分）。这两套字体均为 Apple 的专有字体，版权归 Apple 所有，**不随本项目源码的 GPLv3 许可一同授权**，仅限在本地个人构建中使用。请勿将包含上述字体的源码包或安装包公开发布、再分发或用于商业用途；如需公开发布构建版本，请先删除这些字体文件，替换为你拥有合法授权的字体（例如 SIL OFL 授权的 Noto Sans SC / 思源黑体）。
 +
-+es/font/noto_sans_sc.ttf is Noto Sans SC (variable), Copyright 2014-2021 Adobe
-+(https://www.adobe.com/), with Reserved Font Name 'Source'. It is distributed under
-+the SIL Open Font License, Version 1.1 and is bundled so CJK text can be rendered
-+with an open, PingFang-like humanist design instead of the OEM system font.
++本项目与 Apple 不存在任何隶属、授权或赞助关系。Apple、Apple Music、iOS、SF Pro、PingFang 等名称与商标归 Apple Inc. 所有。本项目不提供任何音乐资源，音乐内容及相关版权归各自权利人所有。
 +
-+License: https://scripts.sil.org/OFL
-+Full text: licenses/OFL-1.1-Noto-Sans-SC.txt
-+Source: https://github.com/googlefonts/noto-cjk
---- /dev/null
-+++ b/licenses/OFL-1.1-Noto-Sans-SC.txt
-@@ -0,0 +1,93 @@
-+Copyright 2014-2021 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source'
++使用本项目所构建软件产生的一切后果（包括但不限于账号异常、数据丢失、设备故障或法律风险）由使用者自行承担，项目维护者不承担任何责任。
 +
-+This Font Software is licensed under the SIL Open Font License, Version 1.1.
-+This license is copied below, and is also available with a FAQ at:
-+https://scripts.sil.org/OFL
+ 如果你发现侵权内容、许可证遗漏或不准确的第三方声明，欢迎通过 [Issues](https://github.com/NEORUAA/MeiloX/issues) 联系维护者。
+ 
+ <div align="center">
+--- a/README_en-US.md
++++ b/README_en-US.md
+@@ -77,7 +77,7 @@
+ - [amll-ttml-db](https://github.com/Steve-xmh/amll-ttml-db) and [accompanist-lyrics-ui](https://github.com/6xingyv/accompanist-lyrics-ui) follow the licenses and attribution requirements published in their respective repositories;
+ - The BeatNet model, audio fingerprint runtime, ONNX Runtime, PV Tool-derived content, and other distributed components are subject to their respective licenses, copyright notices, and redistribution restrictions.
+ 
+-See [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES) for complete source, copyright, license, and redistribution details. The `res/font/sf_pro.ttf` font is used solely as a personal project resource. Do not extract or redistribute it separately from build artifacts, and review Apple's font license terms before publicly releasing a build.
++See [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES) for complete source, copyright, license, and redistribution details. The `res/font/sf_pro.ttf` (SF Pro) and `res/font/pingfang_sc_*.ttf` (PingFang SC) fonts are Apple proprietary and used solely as personal project resources; they are not covered by this project's GPLv3 license. Do not extract or redistribute them separately from build artifacts, and replace them with licensed-able fonts before publicly releasing a build.
+ 
+ ## Screenshots
+ 
+@@ -147,6 +147,12 @@
+ 
+ This project is intended for learning, research, and personal use only. When using it to access NetEase Cloud Music, comply with local laws, the music service's terms, and applicable copyright requirements. The maintainers are not responsible for third-party service availability, account status, or music content.
+ 
++**About the fonts:** to match iOS typography, this project bundles Apple's **SF Pro** (from Apple's official SF Pro download) and **PingFang SC** (split out of `PingFang.ttc`) under `app/src/main/res/font/`. Both are proprietary Apple fonts; all rights belong to Apple and they are **not** covered by this project's GPLv3 license. They are included for local, personal builds only. Do not publish, redistribute, or commercially use source archives or APKs that contain them; before any public release, delete these font files and substitute fonts you are licensed to redistribute (for example Noto Sans SC / Source Han Sans under the SIL OFL).
 +
++This project is not affiliated with, authorized by, or sponsored by Apple. Apple, Apple Music, iOS, SF Pro, and PingFang are trademarks of Apple Inc. No music content is distributed with this project; all rights remain with their respective owners.
 +
-+-----------------------------------------------------------
-+SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
-+-----------------------------------------------------------
++Any consequence of using software built from this project (including but not limited to account issues, data loss, device malfunction, or legal risk) is borne solely by the user; the maintainers accept no liability.
 +
-+PREAMBLE
-+The goals of the Open Font License (OFL) are to stimulate worldwide
-+development of collaborative font projects, to support the font creation
-+efforts of academic and linguistic communities, and to provide a free and
-+open framework in which fonts may be shared and improved in partnership
-+with others.
+ If you find infringing content, missing license information, or inaccurate third-party notices, please contact the maintainers through [Issues](https://github.com/NEORUAA/MeiloX/issues).
+ 
+ <div align="center">
+--- a/README_ja-JP.md
++++ b/README_ja-JP.md
+@@ -77,7 +77,7 @@
+ - [amll-ttml-db](https://github.com/Steve-xmh/amll-ttml-db) と [accompanist-lyrics-ui](https://github.com/6xingyv/accompanist-lyrics-ui) は、それぞれのリポジトリで公表されているライセンスと帰属要件に従います
+ - BeatNet モデル、音声フィンガープリントランタイム、ONNX Runtime、PV Tool の派生コンテンツ、その他プロジェクトと共に配布されるコンポーネントは、それぞれのライセンス、著作権表示、再配布制限に従います
+ 
+-完全な出典、著作権の帰属、ライセンスへのリンク、特別な再配布要件については [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES) をお読みください。なお `res/font/sf_pro.ttf` は個人プロジェクトのリソースとしてのみ使用しています。ビルド成果物から単独で抽出したり、再配布したりしないでください。ビルド版を公開する前に、Apple のフォントライセンス条項を再確認してください。
++完全な出典、著作権の帰属、ライセンスへのリンク、特別な再配布要件については [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES) をお読みください。なお `res/font/sf_pro.ttf`（SF Pro）と `res/font/pingfang_sc_*.ttf`（PingFang SC）は Apple の専有フォントであり、本プロジェクトの GPLv3 ライセンスの対象外です。個人プロジェクトのリソースとしてのみ使用しています。ビルド成果物から単独で抽出したり、再配布したりしないでください。公開ビルドの前に、再配布可能なフォントへ置き換えてください。
+ 
+ ## 画面プレビュー
+ 
+@@ -145,8 +145,13 @@
+ 
+ ## 免責事項
+ 
++本プロジェクトは、学習と研究および個人的利用を目的としています。本プロジェクトを使用して NetEase Cloud Music のサービスにアクセスする際は、現地の法令と当該音楽サービスの利用規約、関連する著作権要件を遵守してください。プロジェクトの管理者は、サードパーティーサービスの利用、アカウントの状態、音楽コンテンツについて一切の責任を負いません。
+ 
+-本プロジェクトは、学習と研究および個人的利用を目的としています。本プロジェクトを使用して、NetEase Cloud Music のサービスにアクセスする際は、現地の法令と当該音楽サービスの利用規約、関連する著作権要件を遵守してください。プロジェクトの管理者は、サードパーティーサービスの利用とアカウントの状態および音楽コンテンツの利用に関しての一切の責任を負いません。
++**フォントについて：** iOS の組版を再現するため、本プロジェクトは `app/src/main/res/font/` に Apple の **SF Pro**（Apple 公式の SF Pro 配布パッケージより）と **PingFang SC**（`PingFang.ttc` から抽出）を同梱しています。いずれも Apple の専有フォントであり、著作権は Apple に帰属します。本プロジェクトの GPLv3 ライセンスの対象では**ありません**。ローカルでの個人的なビルドにのみ使用してください。これらのフォントを含むソースアーカイブや APK を公開・再配布・商業利用しないでください。公開ビルドを行う場合は、これらのフォントファイルを削除し、再配布が許諾されたフォント（SIL OFL の Noto Sans SC / 源ノ角ゴシックなど）に置き換えてください。
 +
-+The OFL allows the licensed fonts to be used, studied, modified and
-+redistributed freely as long as they are not sold by themselves. The
-+fonts, including any derivative works, can be bundled, embedded, 
-+redistributed and/or sold with any software provided that any reserved
-+names are not used by derivative works. The fonts and derivatives,
-+however, cannot be released under any other type of license. The
-+requirement for fonts to remain under this license does not apply
-+to any document created using the fonts or their derivatives.
++本プロジェクトは Apple と提携・承認・スポンサー関係にありません。Apple、Apple Music、iOS、SF Pro、PingFang は Apple Inc. の商標です。本プロジェクトは音楽コンテンツを提供せず、その権利は各権利者に帰属します。
 +
-+DEFINITIONS
-+"Font Software" refers to the set of files released by the Copyright
-+Holder(s) under this license and clearly marked as such. This may
-+include source files, build scripts and documentation.
-+
-+"Reserved Font Name" refers to any names specified as such after the
-+copyright statement(s).
-+
-+"Original Version" refers to the collection of Font Software components as
-+distributed by the Copyright Holder(s).
-+
-+"Modified Version" refers to any derivative made by adding to, deleting,
-+or substituting -- in part or in whole -- any of the components of the
-+Original Version, by changing formats or by porting the Font Software to a
-+new environment.
-+
-+"Author" refers to any designer, engineer, programmer, technical
-+writer or other person who contributed to the Font Software.
-+
-+PERMISSION & CONDITIONS
-+Permission is hereby granted, free of charge, to any person obtaining
-+a copy of the Font Software, to use, study, copy, merge, embed, modify,
-+redistribute, and sell modified and unmodified copies of the Font
-+Software, subject to the following conditions:
-+
-+1) Neither the Font Software nor any of its individual components,
-+in Original or Modified Versions, may be sold by itself.
-+
-+2) Original or Modified Versions of the Font Software may be bundled,
-+redistributed and/or sold with any software, provided that each copy
-+contains the above copyright notice and this license. These can be
-+included either as stand-alone text files, human-readable headers or
-+in the appropriate machine-readable metadata fields within text or
-+binary files as long as those fields can be easily viewed by the user.
-+
-+3) No Modified Version of the Font Software may use the Reserved Font
-+Name(s) unless explicit written permission is granted by the corresponding
-+Copyright Holder. This restriction only applies to the primary font name as
-+presented to the users.
-+
-+4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font
-+Software shall not be used to promote, endorse or advertise any
-+Modified Version, except to acknowledge the contribution(s) of the
-+Copyright Holder(s) and the Author(s) or with their explicit written
-+permission.
-+
-+5) The Font Software, modified or unmodified, in part or in whole,
-+must be distributed entirely under this license, and must not be
-+distributed under any other license. The requirement for fonts to
-+remain under this license does not apply to any document created
-+using the Font Software.
-+
-+TERMINATION
-+This license becomes null and void if any of the above conditions are
-+not met.
-+
-+DISCLAIMER
-+THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF
-+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT
-+OF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL THE
-+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
-+INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
-+DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-+FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
-+OTHER DEALINGS IN THE FONT SOFTWARE.
++本プロジェクトからビルドしたソフトウェアの使用によって生じたいかなる結果（アカウントの問題、データ損失、端末の故障、法的リスクを含みますがこれらに限りません）も利用者の責任であり、管理者は一切の責任を負いません。
+ 
+ 権利侵害のコンテンツ、ライセンスの記載漏れ、不正確な第三者に関する記述を発見した場合は [Issues](https://github.com/NEORUAA/MeiloX/issues) からメンテナにご連絡ください。
+ 

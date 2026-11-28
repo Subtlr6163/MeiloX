@@ -182,14 +182,8 @@ glyphs used by MeloX. It must not be extracted or redistributed separately,
 and public distribution of builds requires a fresh review of Apple's font
 license terms. Apple retains all rights in SF Pro.
 
-Noto Sans SC
-------------
-
-es/font/noto_sans_sc.ttf is Noto Sans SC (variable), Copyright 2014-2021 Adobe
-(https://www.adobe.com/), with Reserved Font Name 'Source'. It is distributed under
-the SIL Open Font License, Version 1.1 and is bundled so CJK text can be rendered
-with an open, PingFang-like humanist design instead of the OEM system font.
-
-License: https://scripts.sil.org/OFL
-Full text: licenses/OFL-1.1-Noto-Sans-SC.txt
-Source: https://github.com/googlefonts/noto-cjk
+PingFang SC (personal builds only)
+----------------------------------
+`res/font/pingfang_sc_*.ttf` are extracted from Apple's PingFang.ttc so Chinese text renders
+with the same family iOS uses. PingFang is Apple proprietary: these files are for private,
+personal builds only and must be removed or replaced before any public distribution.

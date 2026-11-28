@@ -55,7 +55,9 @@ val AccentColorKey = longPreferencesKey("accentColor")
 /** 0 keeps each iOS text style's own Apple tracking; any other value overrides all styles. */
 const val DefaultInterfaceLetterSpacing = 0f
 const val MaxInterfaceLetterSpacing = 1.4f
-val InterfaceLetterSpacingKey = floatPreferencesKey("interfaceLetterSpacing")
+// v2: the setting used to be a flat override whose default was 0.4. A stored 0.4 would keep
+// every style looser than iOS, so the key is bumped to drop those stale values once.
+val InterfaceLetterSpacingKey = floatPreferencesKey("interfaceLetterSpacingV2")
 val PlayerActionKey = stringPreferencesKey("playerBottomAction")
 
 val NormalLyricTextSizeKey = stringPreferencesKey("lyricTextSize")

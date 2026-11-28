@@ -1,4 +1,4 @@
-# MeiloX 完整源码（iOS 字体修正版）
+﻿# MeiloX 完整源码（iOS 字体修正版）
 
 这个压缩包里是**可以直接编译的完整工程**，不是补丁：
 
@@ -81,10 +81,18 @@ $bt = "C:\Android\sdk\build-tools\37.0.0"
 |---|---|
 | `app/src/main/java/com/ljyh/mei/ui/theme/Type.kt` | SF Pro 拆成 Text(opsz 17)/Display(opsz 28) 两套光学尺寸；字重轴改用 300/400/510/590/700；每个 Material role 写入 Apple 的逐级字距；新增 Noto Sans SC 作为中文字体回退 |
 | `app/src/main/java/com/ljyh/mei/ui/theme/Theme.kt` | 字距为 0 时不再全局覆盖，交回各样式自己的 Apple 字距 |
-| `app/src/main/java/com/ljyh/mei/constants/PreferenceKeys.kt` | `DefaultInterfaceLetterSpacing` 0.4 → 0（0 = 跟随 iOS） |
+| `app/src/main/java/com/ljyh/mei/constants/PreferenceKeys.kt` | `DefaultInterfaceLetterSpacing` 0.4 → 0（0 = 跟随 iOS）；字距偏好改用 `interfaceLetterSpacingV2` 键，清掉历史遗留的 0.4 |
 | `app/src/main/java/com/ljyh/mei/ui/screen/setting/AppearanceSettings.kt` | 字距滑杆为 0 时显示“iOS 默认” |
 | `app/src/main/res/values*/strings.xml` | 新增 `appearance_letter_spacing_ios` 文案（en / zh / zh-rTW / ja） |
-| `app/src/main/res/font/noto_sans_sc.ttf` | 新增：Noto Sans SC 可变字体（SIL OFL 1.1） |
-| `THIRD_PARTY_NOTICES`、`licenses/OFL-1.1-Noto-Sans-SC.txt` | 新增字体来源与许可证声明 |
+| `app/src/main/res/font/sf_pro.ttf` | 换成 Apple 官网 SF-Pro.dmg 里的 22.2d2e1（21,440,708 字节） |
+| `app/src/main/res/font/pingfang_sc_*.ttf` | 新增：从 `PingFang.ttc` 拆出的 SC Regular / Medium / Semibold 三个字重，作为中文字体回退（**仅限个人使用，不可公开分发**） |
+| `THIRD_PARTY_NOTICES` | 新增 PingFang 与 SF Pro 的个人使用声明 |
+
 
 `typography-ios-look.patch` 也留在工程根目录，想对照上游看 diff 可以直接用。
+
+## 使用限制与免责声明
+
+本工程在 `app/src/main/res/font/` 内置了 Apple 的 **SF Pro** 和 **PingFang SC**。这两套字体是 Apple 的专有字体，**不随本项目的 GPLv3 授权**，仅限本地个人构建使用，请勿公开分发包含它们的源码包或安装包；公开发布前请删除并替换为可再分发的字体（例如 SIL OFL 的 Noto Sans SC / 思源黑体）。
+
+本项目与 Apple 无任何隶属或授权关系；Apple、Apple Music、iOS、SF Pro、PingFang 为其商标。本工程仅供学习研究，使用产生的一切后果由使用者自行承担。

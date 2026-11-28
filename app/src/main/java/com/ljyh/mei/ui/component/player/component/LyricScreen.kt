@@ -96,6 +96,7 @@ import com.ljyh.mei.ui.component.sheet.LocalPlayerSheet
 import com.ljyh.mei.ui.component.utils.LifecycleStartedEffect
 import com.ljyh.mei.ui.model.LyricData
 import com.ljyh.mei.ui.model.LyricSource
+import com.ljyh.mei.ui.theme.withIosOpticalSize
 import com.ljyh.mei.utils.lyric.lyricStorageKey
 import com.ljyh.mei.utils.rememberEnumPreference
 import com.ljyh.mei.utils.rememberPreference
@@ -170,12 +171,12 @@ fun LyricScreen(
         fontSize = normalLyricTextSize.text.coerceIn(16, 48).sp,
         fontWeight = if (normalLyricTextBold) FontWeight.Bold else FontWeight.Normal,
         textMotion = TextMotion.Animated,
-    )
+    ).withIosOpticalSize()
     val translationTextStyle = LocalTextStyle.current.copy(
         fontSize = translationLyricTextSize.text.coerceIn(16, 36).sp,
         fontWeight = if (translationLyricTextBold) FontWeight.Bold else FontWeight.Normal,
         textMotion = TextMotion.Animated,
-    )
+    ).withIosOpticalSize()
     val textMeasurer = rememberTextMeasurer()
     val density = LocalDensity.current
     val mainLyricAnchor = mainLyricAnchorFraction ?: if (centerMainLyric) 0.5f else null

@@ -104,8 +104,8 @@ android {
             .get()
         minSdk = 31
         targetSdk = 37
-        versionCode = 16
-        versionName = "1.55.1"
+        versionCode = 17
+        versionName = "1.56"
         buildConfigField("long", "BUILD_NUMBER", "${buildNumber}L")
         buildConfigField("String", "BUILD_COMMIT_SHA", "\"$buildCommitSha\"")
         buildConfigField("boolean", "BUILD_SOURCE_DIRTY", buildSourceDirty.toString())
